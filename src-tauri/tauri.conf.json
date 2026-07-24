@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Monet",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "identifier": "io.github.zenolab124.monet",
   "build": {
     "frontendDist": "../dist",

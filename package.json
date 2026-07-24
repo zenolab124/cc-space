@@ -1,6 +1,6 @@
 {
   "name": "monet-tauri",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "private": true,
   "description": "Monet — Mission Control for Claude Code",
   "type": "module",
