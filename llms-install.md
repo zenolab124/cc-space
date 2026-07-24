@@ -87,3 +87,5 @@ Match `locale` to the language the user converses with you in.
 | MCP registration | `~/.claude/settings.json` | adds a `monet` entry under `mcpServers` |
 
 Uninstalling (`brew uninstall --cask monet` or deleting the app) never touches Claude Code data.
+
+If something goes wrong during or after installation, switch to [llms-troubleshoot.md](llms-troubleshoot.md) — self-diagnosis steps and how to file a well-formed bug report.

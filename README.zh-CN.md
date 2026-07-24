@@ -170,6 +170,8 @@ Monet 完全离线运行。无遥测、无账号、无网络请求（除非你�
 
 ## 常见问题
 
+> 🤖 遇到问题？把 [`llms-troubleshoot.md`](llms-troubleshoot.md) 丢给你的 AI——它能自诊常见故障；确认是 bug 的话，还会带上完整诊断数据帮你提 issue。
+
 **Monet 会取代 Claude Code CLI 吗？**
 不会——它是 CLI 的伴侣。干活的是 CLI，Monet 给你眼睛和双手。两边启动的会话互相可见。
 

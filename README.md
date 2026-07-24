@@ -167,6 +167,8 @@ Monet is fully offline. No telemetry, no accounts, no network calls (except when
 
 ## FAQ
 
+> 🤖 Something broken? Point your AI at [`llms-troubleshoot.md`](llms-troubleshoot.md) — it can self-diagnose common issues and, if it's a real bug, file a well-formed issue for you.
+
 **Does Monet replace the Claude Code CLI?**
 No — it's a companion. The CLI does the work; Monet gives you eyes and hands over it. Sessions started in either place show up in both.
 
