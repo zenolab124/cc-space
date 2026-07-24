@@ -183,6 +183,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_projects,
+            commands::get_app_setting,
+            commands::set_app_setting,
             commands::get_session_records,
             commands::get_session_summary,
             commands::get_perf_stats,

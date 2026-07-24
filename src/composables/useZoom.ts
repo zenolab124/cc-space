@@ -1,9 +1,11 @@
 import { ref } from 'vue'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { readMigratedStorage } from '../utils/storageMigrate'
+import { bridgeSetting, writeSetting } from '../utils/settingBridge'
 
 const STORAGE_KEY = 'monet-zoom'
 const LEGACY_STORAGE_KEY = 'cc-space-zoom' // 旧 key,一次性迁移读取用
+const SETTING_KEY = 'zoomFactor' // ~/.monet/settings.json 权威键
 const DEFAULT_ZOOM = 1
 const MIN_ZOOM = 0.7
 const MAX_ZOOM = 1.5
@@ -31,8 +33,18 @@ async function setZoom(factor: number) {
   const clamped = clamp(factor)
   zoomLevel.value = clamped
   localStorage.setItem(STORAGE_KEY, String(clamped))
+  writeSetting(SETTING_KEY, clamped)
   await applyZoom(clamped)
 }
+
+// settings.json 为权威源:文件有值以文件为准,无值则上迁镜像现值
+bridgeSetting({
+  key: SETTING_KEY,
+  uplift: () => (localStorage.getItem(STORAGE_KEY) !== null ? zoomLevel.value : undefined),
+  apply: v => {
+    if (typeof v === 'number' && Number.isFinite(v) && clamp(v) !== zoomLevel.value) void setZoom(v)
+  },
+})
 
 export function useZoom() {
   return {

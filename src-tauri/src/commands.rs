@@ -1285,3 +1285,15 @@ pub async fn git_worktree_snapshot(cwd: String) -> Result<GitWorktreeSnapshot, S
     }
     Ok(GitWorktreeSnapshot { is_repo: true, entries, truncated })
 }
+
+/// 读取 ~/.monet/settings.json 单个顶层键（UI 偏好收编：theme/locale/zoomFactor 等）
+#[tauri::command]
+pub fn get_app_setting(key: String) -> Option<serde_json::Value> {
+    crate::config::read_app_setting(&key)
+}
+
+/// 写入 ~/.monet/settings.json 单个顶层键；value 为 null 时删除该键
+#[tauri::command]
+pub fn set_app_setting(key: String, value: serde_json::Value) {
+    crate::config::write_app_setting(&key, value);
+}

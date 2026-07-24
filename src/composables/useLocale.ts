@@ -4,9 +4,11 @@ import { setLocale, registerLocale, builtinLocales } from '../locales'
 import type { MessageSchema } from '../locales'
 import zhCN from '../locales/zh-CN.json'
 import { readMigratedStorage } from '../utils/storageMigrate'
+import { bridgeSetting, writeSetting } from '../utils/settingBridge'
 
 const STORAGE_KEY = 'monet-locale'
 const LEGACY_STORAGE_KEY = 'cc-space-locale' // 旧 key(更名前),一次性迁移读取用
+const SETTING_KEY = 'locale' // ~/.monet/settings.json 权威键
 
 function getStored(): string {
   return readMigratedStorage(STORAGE_KEY, LEGACY_STORAGE_KEY) || 'zh-CN'
@@ -58,8 +60,18 @@ function init() {
 
 watch(locale, (code) => {
   localStorage.setItem(STORAGE_KEY, code)
+  writeSetting(SETTING_KEY, code)
   setLocale(code)
   invoke('set_agent_locale', { locale: code }).catch(() => {})
+})
+
+// settings.json 为权威源:文件有值以文件为准,无值则上迁镜像现值
+bridgeSetting({
+  key: SETTING_KEY,
+  uplift: () => localStorage.getItem(STORAGE_KEY) ?? undefined,
+  apply: v => {
+    if (typeof v === 'string' && v && v !== locale.value) locale.value = v
+  },
 })
 
 function switchLocale(code: string) {

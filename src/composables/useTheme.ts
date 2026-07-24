@@ -4,9 +4,11 @@ import { isWindows } from './usePlatform'
 import i18n from '../locales'
 import { THEMES, getTheme, type ThemeMeta } from './themeRegistry'
 import { readMigratedStorage } from '../utils/storageMigrate'
+import { bridgeSetting, writeSetting } from '../utils/settingBridge'
 
 const STORAGE_KEY = 'monet-theme'
 const LEGACY_STORAGE_KEY = 'cc-space-theme' // 旧 key,一次性迁移读取用
+const SETTING_KEY = 'theme' // ~/.monet/settings.json 权威键
 
 interface ThemeConfig {
   version: 2
@@ -14,26 +16,41 @@ interface ThemeConfig {
   darkTheme: string
 }
 
+/** 解析主题值:兼容 'system'/'light'/'dark' 简写与 v2 对象(含 glass 降级、非法 id 兜底) */
+function parseThemeValue(v: unknown): ThemeConfig | null {
+  if (v === 'system') return { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
+  if (v === 'light') return { version: 2, lightTheme: 'paper', darkTheme: 'paper' }
+  if (v === 'dark') return { version: 2, lightTheme: 'ink', darkTheme: 'ink' }
+  if (typeof v === 'object' && v !== null && (v as { version?: unknown }).version === 2) {
+    const o = v as { lightTheme?: unknown; darkTheme?: unknown }
+    const norm = (id: unknown, fallback: string) => {
+      if (id === 'glass') return fallback
+      return typeof id === 'string' ? getTheme(id).id : fallback
+    }
+    return { version: 2, lightTheme: norm(o.lightTheme, 'paper'), darkTheme: norm(o.darkTheme, 'ink') }
+  }
+  return null
+}
+
 function loadConfig(): ThemeConfig {
   const raw = readMigratedStorage(STORAGE_KEY, LEGACY_STORAGE_KEY)
   if (!raw) return { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
-
-  if (raw === 'system') return { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
-  if (raw === 'light') return { version: 2, lightTheme: 'paper', darkTheme: 'paper' }
-  if (raw === 'dark') return { version: 2, lightTheme: 'ink', darkTheme: 'ink' }
-
-  try {
-    const parsed = JSON.parse(raw)
-    if (parsed.version === 2) {
-      if (parsed.lightTheme === 'glass') parsed.lightTheme = 'paper'
-      if (parsed.darkTheme === 'glass') parsed.darkTheme = 'ink'
-      return parsed
-    }
-  } catch {}
-  return { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
+  let value: unknown = raw
+  try { value = JSON.parse(raw) } catch {}
+  return parseThemeValue(value) ?? { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
 }
 
 const config = ref<ThemeConfig>(loadConfig())
+
+// settings.json 为权威源:文件有值以文件为准,无值则上迁镜像现值
+bridgeSetting({
+  key: SETTING_KEY,
+  uplift: () => (localStorage.getItem(STORAGE_KEY) !== null ? config.value : undefined),
+  apply: v => {
+    const parsed = parseThemeValue(v)
+    if (parsed && JSON.stringify(parsed) !== JSON.stringify(config.value)) config.value = parsed
+  },
+})
 
 const prefersDark = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
@@ -86,6 +103,9 @@ watch([config, prefersDark], () => {
   applyTheme(initialized)
   initialized = true
 }, { immediate: true, deep: true })
+
+// 双写权威源(单独 watch:prefersDark 变化不触发文件写)
+watch(config, v => writeSetting(SETTING_KEY, v), { deep: true })
 
 function setLightTheme(themeId: string) {
   config.value = { ...config.value, lightTheme: themeId }
