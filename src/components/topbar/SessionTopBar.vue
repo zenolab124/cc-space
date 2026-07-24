@@ -378,13 +378,29 @@ function onPermissionModeChange(mode: PermissionMode) {
               <span>{{ $t('topbar.tokenTotal') }}</span>
               <span>{{ formatTokens(totalTokens.input_tokens + totalTokens.output_tokens + totalTokens.cache_read_input_tokens + totalTokens.cache_creation_input_tokens) }}</span>
             </div>
-            <div
-              v-if="subagentTokens.input_tokens + subagentTokens.output_tokens + subagentTokens.cache_read_input_tokens + subagentTokens.cache_creation_input_tokens > 0"
-              class="flex items-center justify-between"
-            >
-              <span>{{ $t('topbar.tokenSubagents') }}</span>
-              <span>{{ formatTokens(subagentTokens.input_tokens + subagentTokens.output_tokens + subagentTokens.cache_read_input_tokens + subagentTokens.cache_creation_input_tokens) }}</span>
-            </div>
+            <!-- 子 Agent/工作流分项(合计已含,仅拆帐展示) -->
+            <template v-if="subagentTokens.input_tokens + subagentTokens.output_tokens + subagentTokens.cache_read_input_tokens + subagentTokens.cache_creation_input_tokens > 0">
+              <div class="flex items-center justify-between pt-1 border-t border-border/50 font-medium text-foreground">
+                <span>{{ $t('topbar.tokenSubagents') }}</span>
+                <span>{{ formatTokens(subagentTokens.input_tokens + subagentTokens.output_tokens + subagentTokens.cache_read_input_tokens + subagentTokens.cache_creation_input_tokens) }}</span>
+              </div>
+              <div class="flex items-center justify-between pl-2">
+                <span>input_tokens</span>
+                <span>{{ formatTokens(subagentTokens.input_tokens) }}</span>
+              </div>
+              <div class="flex items-center justify-between pl-2">
+                <span>output_tokens</span>
+                <span>{{ formatTokens(subagentTokens.output_tokens) }}</span>
+              </div>
+              <div class="flex items-center justify-between pl-2">
+                <span>cache_creation</span>
+                <span>{{ formatTokens(subagentTokens.cache_creation_input_tokens) }}</span>
+              </div>
+              <div class="flex items-center justify-between pl-2">
+                <span>cache_read</span>
+                <span>{{ formatTokens(subagentTokens.cache_read_input_tokens) }}</span>
+              </div>
+            </template>
           </div>
         </div>
 
