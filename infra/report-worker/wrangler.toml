@@ -1,0 +1,9 @@
+name = "monet-report"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+[vars]
+REPO = "zenolab124/monet"
+
+# Secrets (set via `wrangler secret put`, never in this file):
+#   GITHUB_TOKEN — fine-grained PAT, this repo only, permission: Issues read/write

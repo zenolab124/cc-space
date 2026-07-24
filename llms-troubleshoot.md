@@ -49,16 +49,27 @@ If self-diagnosis says "this is a software defect", file an issue — you can pr
 
 **3. Confirm with the user.** Show them the final issue title and body and get an explicit OK — you are publishing on their behalf.
 
-**4. Submit.** Preferred, with GitHub CLI:
+**4. Submit** — pick the first path that works. Structure the report body after the repo's bug template either way: Monet version / macOS version / CLI version / What happened / Steps to reproduce / Expected behavior / Logs.
+
+**Path A — GitHub CLI** (`gh auth status` succeeds). The issue belongs to the user's account, so they get reply notifications:
 
 ```bash
 gh issue create --repo zenolab124/monet --label bug \
   --title "<area>: <one-line symptom>" --body "<report>"
 ```
 
-Structure the body after the repo's bug template: Monet version / macOS version / CLI version / What happened / Steps to reproduce / Expected behavior / Logs. End with a line `— Filed via AI diagnostics (llms-troubleshoot.md)` so maintainers know the context.
+End the body with `— Filed via AI diagnostics (llms-troubleshoot.md)`.
 
-Without `gh`: open a prefilled form for the user —
-`https://github.com/zenolab124/monet/issues/new?template=bug_report.yml` — and hand them the collected values to paste.
+**Path B — anonymous endpoint** (no GitHub account or login needed). Monet runs a small open-source relay ([infra/report-worker](infra/report-worker/)) that files the issue for you:
+
+```bash
+curl -s -X POST https://monet-report.zenolab124.workers.dev/report \
+  -H "Content-Type: application/json" \
+  -d '{"title": "<area>: <one-line symptom>", "body": "<report>", "contact": "<optional>"}'
+```
+
+The response contains the created issue URL — give it to the user. Caveats to tell them first: the report becomes a **public GitHub issue verbatim** (redaction matters even more), and anonymous reports can't be followed up — offer to include a GitHub username or email in `contact` (entirely optional). Limits: one report per 10 minutes, body ≤ 20 000 chars.
+
+**Path C — manual fallback**: open `https://github.com/zenolab124/monet/issues/new?template=bug_report.yml` for the user and hand them the collected values to paste.
 
 For feature ideas rather than defects, use the feature request template instead; no diagnostics needed.
