@@ -2,6 +2,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import i18n from '../locales'
 import { evictSessionTransients } from './useStreaming'
+import { useRunners } from './useRunners'
 import { readMigratedStorage } from '../utils/storageMigrate'
 
 /**
@@ -663,6 +664,8 @@ function teardownSession(sessionId: string) {
   const stillReferenced = state.value.tabs.some(t => t.sessionIds.includes(sessionId))
   if (!stillReferenced) {
     invoke('close_session', { sessionId }).catch(() => {})
+    // 会话彻底离开工作台 = 关闭语义:其挂载的运行命令一并停止(切走/收起不触发)
+    useRunners().stopAllForSession(sessionId).catch(() => {})
     evictSessionTransients(sessionId)
   }
 }
