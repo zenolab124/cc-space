@@ -380,13 +380,6 @@ provide('runnerAppendToInput', (text: string) => {
   })
 })
 
-// 会话切换时设置 runner 项目上下文 + 增量水合
-watch(() => currentSession.value?.summary?.id, (sid) => {
-  const cwd = currentSession.value?.summary?.cwd
-  setRunnerProject(cwd ?? null)
-  if (sid) loadRunners(sid)
-}, { immediate: true })
-
 // 悬浮面板 ref + 点击外部关闭
 const runnerFloatRef = ref<HTMLElement>()
 const runnerToggleBtnRef = ref<HTMLElement>()
@@ -398,10 +391,41 @@ function onRunnerClickOutside(e: MouseEvent) {
   if (runnerFloatRef.value?.contains(target)) return
   if (textareaRef.value?.contains(target)) return
   if (runnerToggleBtnRef.value?.contains(target)) return
+  // 面板跟随会话列：点击落在其他列/其他区域不影响本列面板，仅点击本列内空白才收起
+  if (!detailRootRef.value?.contains(target)) return
   closeRunnerPanel()
 }
 onMounted(() => document.addEventListener('mousedown', onRunnerClickOutside))
 onUnmounted(() => document.removeEventListener('mousedown', onRunnerClickOutside))
+
+// 悬浮面板：列容器内 absolute 定位——面板不越列界无裁剪风险，
+// 滚动/列宽变化天然跟随，零 JS 定位。高度按列高比例记忆（默认 40%），底边拖拽可调
+const RUNNER_FLOAT_HEIGHT_KEY = 'monet-runner-float-height'
+const runnerFloatHeightRatio = ref(
+  Math.min(Math.max(Number(localStorage.getItem(RUNNER_FLOAT_HEIGHT_KEY)) || 0.4, 0.15), 0.85),
+)
+
+function onRunnerResizeStart(e: MouseEvent) {
+  e.preventDefault()
+  const col = detailRootRef.value
+  if (!col) return
+  const colH = col.clientHeight || 1
+  const startY = e.clientY
+  const startRatio = runnerFloatHeightRatio.value
+  function onMove(ev: MouseEvent) {
+    runnerFloatHeightRatio.value = Math.min(
+      Math.max(startRatio + (ev.clientY - startY) / colH, 0.15),
+      0.85,
+    )
+  }
+  function onUp() {
+    localStorage.setItem(RUNNER_FLOAT_HEIGHT_KEY, String(runnerFloatHeightRatio.value))
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 
 // 悬浮面板 Esc 关闭（document 级监听，div 不可聚焦无法捕获 keydown）
 function onRunnerEscape(e: KeyboardEvent) {
@@ -752,6 +776,14 @@ const currentSession = computed<{ summary: SessionSummary; projectId: string } |
   if (cwd) return { summary: draftSummary(sid, cwd), projectId: cwdToProjectId(cwd) }
   return null
 })
+
+// 会话切换时设置 runner 项目上下文 + 增量水合
+// （immediate watch 会在注册当下同步执行 getter，必须位于 currentSession 定义之后）
+watch(() => currentSession.value?.summary?.id, (sid) => {
+  const cwd = currentSession.value?.summary?.cwd
+  setRunnerProject(cwd ?? null)
+  if (sid) loadRunners(sid)
+}, { immediate: true })
 
 /** 分叉垫底激活:草稿未落盘且有分叉意图(此时历史区显示的是源会话垫底数据);
  *  落盘后 drafts/forkIntents 随 pruneDrafts 收割,标注自动消失 */
@@ -2289,7 +2321,7 @@ async function onReload() {
     <p class="text-muted-foreground text-sm">{{ mode === 'workbench' ? $t('session.notExist') : $t('archive.selectSession') }}</p>
   </div>
 
-  <div v-else ref="detailRootRef" class="h-full flex min-h-0">
+  <div v-else ref="detailRootRef" class="h-full flex min-h-0 relative">
     <!-- 主内容区 -->
     <div class="flex-1 min-w-0 flex flex-col">
     <!-- 会话顶栏(单行极简:标题由列头/列表承担,不重复显示) -->
@@ -2847,14 +2879,13 @@ async function onReload() {
         @toggle-pin="toggleRunnerPin"
       />
     </div>
-  </div>
 
-  <!-- Runner 悬浮面板（Teleport 到 body 避免 overflow 裁剪） -->
-  <Teleport to="body">
+    <!-- Runner 悬浮面板：列内 absolute，随列滚动/缩放天然跟随 -->
     <div
       v-if="runnerFloatOpen && !runnerPinned"
       ref="runnerFloatRef"
       class="runner-float"
+      :style="{ height: `${runnerFloatHeightRatio * 100}%` }"
     >
       <RunnerPanel
         mode="float"
@@ -2864,8 +2895,10 @@ async function onReload() {
         @close="closeRunnerPanel"
         @toggle-pin="toggleRunnerPin"
       />
+      <div class="runner-float-resize" @mousedown="onRunnerResizeStart" />
     </div>
-  </Teleport>
+  </div>
+
 </template>
 
 <style scoped>
@@ -2927,20 +2960,30 @@ async function onReload() {
   100% { background-color: transparent; }
 }
 /* Runner 悬浮面板 */
+/* 定位由 placeRunnerFloat 动态计算（锚定本会话列，随列走），此处只留外观 */
+.runner-float-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 7px;
+  cursor: ns-resize;
+}
+.runner-float-resize:hover {
+  background: linear-gradient(to bottom, transparent 2px, var(--border) 3px, var(--border) 4px, transparent 5px);
+}
 .runner-float {
-  position: fixed;
-  top: 80px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(640px, calc(100vw - 120px));
-  height: 62vh;
+  position: absolute;
+  top: 44px;
+  left: 12px;
+  right: 12px;
+  min-height: 200px;
   background: var(--popover);
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: var(--shadow-paper-lifted);
-  z-index: 50;
+  z-index: 30;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 </style>

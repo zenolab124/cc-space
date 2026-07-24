@@ -120,6 +120,8 @@ async function spawnRunner(
   sourceCommandId?: string,
 ): Promise<RunnerSnapshot> {
   const snap = await invoke<RunnerSnapshot>('runner_spawn', { sessionId, cmd, cwd, alias, env, sourceCommandId })
+  // 对账兜底：秒崩类终态事件若丢失，2s 后拉真实状态纠偏
+  setTimeout(() => loadRunners(sessionId), 2000)
   // 立即插入到列表
   const list = runners.value.get(sessionId) ?? []
   const idx = list.findIndex(r => r.id === snap.id)
@@ -134,11 +136,26 @@ async function spawnRunner(
 /** 停止跑单进程 */
 async function stopRunner(runnerId: string, graceful = true): Promise<void> {
   await invoke<void>('runner_stop', { runnerId, graceful })
+  // 操作后对账：终态事件若丢失（HMR/监听断），UI 不至于永久停在旧状态
+  reconcileBySessionOf(runnerId)
+}
+
+/** 由 runner id 反查归属会话并拉取真实状态对账；查不到则全量对账 */
+function reconcileBySessionOf(runnerId: string) {
+  const delay = 3500 // graceful stop 有 TERM→3s→KILL 链，等终态落定后再对账
+  for (const [sid, list] of runners.value) {
+    if (list.some(r => r.id === runnerId)) {
+      setTimeout(() => loadRunners(sid), delay)
+      return
+    }
+  }
+  setTimeout(() => loadRunners(), delay)
 }
 
 /** 重启跑单进程 */
 async function restartRunner(runnerId: string): Promise<RunnerSnapshot> {
   const snap = await invoke<RunnerSnapshot>('runner_restart', { runnerId })
+  reconcileBySessionOf(runnerId)
   // 更新列表中的快照
   for (const [sid, list] of runners.value) {
     const idx = list.findIndex(r => r.id === runnerId)
