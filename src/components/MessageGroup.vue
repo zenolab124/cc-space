@@ -23,6 +23,8 @@ const props = defineProps<{
   gi: number
   dayLabel?: string | null
   timeLabel?: string | null
+  /** 自绘吸顶层正在展示本组用户消息:文档流原件隐形但占位,避免临界滚动区双显 */
+  hideUser?: boolean
   footerAt?: number | null
   footer?: { text: string; doneFull: string } | null
   channelMarksByUuid: Map<string | null, ChannelMark[]>
@@ -39,11 +41,10 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
 
 <template>
   <!-- 跨天分隔:这轮起进入新的一天(首组标会话起始日) -->
-  <div v-if="dayLabel" class="channel-mark">
-    <div class="flex-1 h-px bg-border" />
-    <span class="i-carbon-calendar w-3 h-3" />
-    <span>{{ dayLabel }}</span>
-    <div class="flex-1 h-px bg-border" />
+  <div v-if="dayLabel" class="day-divider">
+    <div class="day-line day-line-l" />
+    <span class="day-text">{{ dayLabel }}</span>
+    <div class="day-line day-line-r" />
   </div>
   <!-- 用户消息:有 AI 回复时吸顶,无回复的短轮次不启用(减少 sticky 元素数量) -->
   <!-- /model 切换成功(stdout 事实源):渲染成与渠道切换同款的配置分界横线 -->
@@ -70,7 +71,10 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
   <!-- 正常用户消息(全空白内容不渲染空卡壳) -->
   <div
     v-else-if="group.user && group.user.type === 'user' && userHasVisibleContent(group.user)"
-    :class="group.responses.some(r => r.type === 'assistant') ? 'user-msg-sticky' : ''"
+    :class="[
+      group.responses.some(r => r.type === 'assistant') ? 'user-msg-sticky' : '',
+      hideUser ? 'user-msg-ghost' : '',
+    ]"
   >
     <div class="flex gap-3">
       <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
@@ -150,3 +154,26 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
     </div>
   </template>
 </template>
+
+<style scoped>
+/* 跨天分隔:两侧向中心渐显的细线 + 居中淡字,轻于消息内容不抢视线 */
+.day-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 2px;
+  font-size: 10px;
+  user-select: none;
+}
+.day-text {
+  color: color-mix(in oklch, var(--muted-foreground) 72%, transparent);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.day-line { flex: 1; height: 1px; }
+.day-line-l { background: linear-gradient(to right, transparent, var(--border)); }
+.day-line-r { background: linear-gradient(to left, transparent, var(--border)); }
+
+/* 吸顶层接管展示时文档流原件隐形占位 */
+.user-msg-ghost { visibility: hidden; }
+</style>

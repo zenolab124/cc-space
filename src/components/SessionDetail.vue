@@ -310,16 +310,14 @@ const runnerDockOpen = ref(false)
 // 悬浮形态开关
 const runnerFloatOpen = ref(false)
 
-/** 切换 runner 面板：根据 pin 状态决定形态 */
+/** 切换 runner 面板：当前哪种形态开着就关哪种，全关时默认开悬浮 */
 function toggleRunnerPanel() {
-  if (runnerPinned.value) {
-    runnerDockOpen.value = !runnerDockOpen.value
-    if (runnerDockOpen.value) {
-      ledgerPanelOpen.value = false
-      if (asyncSidebarOpen.value) closeAsyncPanel()
-    }
+  if (runnerDockOpen.value) {
+    runnerDockOpen.value = false
+  } else if (runnerFloatOpen.value) {
+    runnerFloatOpen.value = false
   } else {
-    runnerFloatOpen.value = !runnerFloatOpen.value
+    runnerFloatOpen.value = true
   }
   // 面板打开时增量水合
   const sid = currentSession.value?.summary?.id
@@ -333,18 +331,23 @@ function closeRunnerPanel() {
   runnerFloatOpen.value = false
 }
 
+/** 钉住 = 悬浮面板常驻原位：点外/Esc 不再收起，仅显式点关闭按钮可关 */
 function toggleRunnerPin() {
   runnerPinned.value = !runnerPinned.value
-  if (runnerPinned.value) {
+}
+
+/** 侧边栏 = 悬浮 ↔ 停靠手风琴切换（与账本/异步侧栏互斥） */
+function toggleRunnerDock() {
+  if (runnerDockOpen.value) {
+    // 停靠→悬浮
+    runnerDockOpen.value = false
+    runnerFloatOpen.value = true
+  } else {
     // 悬浮→停靠
     runnerFloatOpen.value = false
     runnerDockOpen.value = true
     ledgerPanelOpen.value = false
     if (asyncSidebarOpen.value) closeAsyncPanel()
-  } else {
-    // 停靠→悬浮
-    runnerDockOpen.value = false
-    runnerFloatOpen.value = true
   }
 }
 
@@ -435,7 +438,8 @@ function onRunnerEscape(e: KeyboardEvent) {
   closeRunnerPanel()
 }
 watch(runnerFloatOpen, (open) => {
-  if (open && !runnerPinned.value) {
+  // pinned 与否由 handler 内判断（pinned 状态可在面板打开期间切换）
+  if (open) {
     document.addEventListener('keydown', onRunnerEscape)
   } else {
     document.removeEventListener('keydown', onRunnerEscape)
@@ -1768,33 +1772,76 @@ function updateStickyGroup() {
   // 虚拟容器顶在滚动坐标系中的位置(前方有渠道横线等流内元素,起点非 0)
   const vTop = vbox.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
   const rel = sc.scrollTop - vTop
-  if (rel <= 0 || rel >= messageVirtualizer.value.getTotalSize()) { stickyGroupIndex.value = -1; return }
+  if (rel <= 0) { stickyGroupIndex.value = -1; return }
+  // 探针下移 40px:组选择以「视口顶下方正在阅读的内容」为准——
+  // 消除 scrollToIndex 落点 ±几 px 时选中前一组的边界抖动
+  const probe = rel + 40
+  if (probe >= messageVirtualizer.value.getTotalSize()) {
+    // 视口顶进入末组内容区:自绘层统一接管(末组合格吸末组,否则回溯上一条用户指令)
+    stickyGroupIndex.value = messageGroups.value.length - 1
+    return
+  }
   let idx = -1
   for (const it of messageVirtualizer.value.getVirtualItems()) {
-    if (it.start <= rel) idx = it.index
+    if (it.start <= probe) idx = it.index
     else break
   }
   stickyGroupIndex.value = idx
 }
 
-const stickyGroup = computed(() => {
-  const i = stickyGroupIndex.value
-  if (i < 0) return null
-  const g = renderGroups.value[i]
-  if (!g?.user || g.user.type !== 'user') return null
-  // 与原生吸顶同条件:有 AI 回复的正常用户消息才吸
-  if (!g.responses.some(r => r.type === 'assistant')) return null
-  if (modelSwitchName(g.user) || isModelCommandRecord(g.user) || isSystemOnlyUser(g.user)) return null
-  if (!userHasVisibleContent(g.user)) return null
-  return g
-})
+/** 吸顶合格判定:有 AI 回复的正常用户消息(与原生 sticky 同条件) */
+function groupQualifies(g: { user: any; responses: any[] } | null | undefined): boolean {
+  if (!g?.user || g.user.type !== 'user') return false
+  if (!g.responses.some((r: any) => r.type === 'assistant')) return false
+  if (modelSwitchName(g.user) || isModelCommandRecord(g.user) || isSystemOnlyUser(g.user)) return false
+  if (!userHasVisibleContent(g.user)) return false
+  return true
+}
 
-function jumpToStickyGroup() {
-  const i = stickyGroupIndex.value
-  if (i >= 0 && shouldVirtualize.value) {
+// 视口顶部组不合格(后台任务/自发轮无用户消息)时向前回溯最近的合格组:
+// 吸顶语义 = 当前内容隶属于哪条用户指令
+const stickyDisplay = computed(() => {
+  // 索引空间 = messageGroups(含末组):自绘层接管全滚动范围
+  for (let i = stickyGroupIndex.value; i >= 0; i--) {
+    const g = messageGroups.value[i]
+    if (groupQualifies(g)) return { group: g, index: i }
+  }
+  return null
+})
+const stickyGroup = computed(() => stickyDisplay.value?.group ?? null)
+
+function scrollToGroupIndex(i: number) {
+  if (i < 0 || !shouldVirtualize.value) return
+  if (i >= renderGroups.value.length) {
+    // 末组:滚到虚拟容器底部即末组顶
+    const sc = scrollContainer.value
+    const vbox = virtualBoxRef.value
+    if (!sc || !vbox) return
+    const vTop = vbox.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
+    sc.scrollTop = vTop + messageVirtualizer.value.getTotalSize()
+  } else {
     messageVirtualizer.value.scrollToIndex(i, { align: 'start' })
   }
 }
+
+function jumpToStickyGroup() {
+  scrollToGroupIndex(stickyDisplay.value?.index ?? -1)
+}
+
+/** 从 from 沿 dir 方向找最近的合格用户消息组 */
+function findQualifiedGroup(from: number, dir: 1 | -1): number {
+  for (let i = from; i >= 0 && i < messageGroups.value.length; i += dir) {
+    if (groupQualifies(messageGroups.value[i])) return i
+  }
+  return -1
+}
+const stickyPrevIndex = computed(() =>
+  stickyDisplay.value ? findQualifiedGroup(stickyDisplay.value.index - 1, -1) : -1)
+const stickyNextIndex = computed(() =>
+  stickyDisplay.value ? findQualifiedGroup(stickyDisplay.value.index + 1, 1) : -1)
+
+function jumpStickyPrev() { scrollToGroupIndex(stickyPrevIndex.value) }
+function jumpStickyNext() { scrollToGroupIndex(stickyNextIndex.value) }
 
 // 组列表变化(落账/流式收尾)后组高与索引可能位移,DOM 稳定后重算吸顶
 watch(renderGroups, () => nextTick(updateStickyGroup))
@@ -2369,7 +2416,7 @@ async function onReload() {
 
   <div v-else ref="detailRootRef" class="h-full flex min-h-0 relative">
     <!-- 主内容区 -->
-    <div class="flex-1 min-w-0 flex flex-col">
+    <div class="flex-1 min-w-0 flex flex-col relative">
     <!-- 会话顶栏(单行极简:标题由列头/列表承担,不重复显示) -->
     <SessionTopBar
       :session-id="currentSession.summary.id"
@@ -2403,7 +2450,7 @@ async function onReload() {
     >
       <button
         v-if="asyncTasks.length > 0"
-        class="p-1 rounded transition-colors flex items-center gap-1"
+        class="p-1 rounded transition-colors flex items-center gap-0.5"
         :class="asyncSidebarOpen
           ? 'text-claude bg-claude/10'
           : asyncActiveCount > 0
@@ -2417,7 +2464,7 @@ async function onReload() {
       </button>
       <button
         v-if="ledgerEntries.length > 0"
-        class="p-1 rounded transition-colors flex items-center gap-1"
+        class="p-1 rounded transition-colors flex items-center gap-0.5"
         :class="ledgerPanelOpen ? 'text-claude bg-claude/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted'"
         :title="$t('fileLedger.title')"
         @click="toggleLedgerPanel"
@@ -2429,7 +2476,7 @@ async function onReload() {
       <span ref="runnerToggleBtnRef">
         <button
           v-if="interactive"
-          class="p-1 rounded transition-colors flex items-center gap-1"
+          class="p-1 rounded transition-colors flex items-center gap-0.5"
           :class="(runnerDockOpen || runnerFloatOpen)
             ? 'text-claude bg-claude/10'
             : sessionHasCrashed
@@ -2513,7 +2560,22 @@ async function onReload() {
       <div class="flex gap-3">
         <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
         <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
-          <div class="text-xs font-medium mb-1 text-primary">{{ $t('session.you') }}</div>
+          <div class="text-xs font-medium mb-1 text-primary flex items-center gap-0.5">
+            <span>{{ $t('session.you') }}</span>
+            <span class="flex-1" />
+            <button
+              class="sticky-nav-btn"
+              :disabled="stickyPrevIndex < 0"
+              :title="$t('session.stickyPrev')"
+              @click.stop="jumpStickyPrev"
+            ><span class="i-carbon-chevron-up w-3.5 h-3.5" /></button>
+            <button
+              class="sticky-nav-btn"
+              :disabled="stickyNextIndex < 0"
+              :title="$t('session.stickyNext')"
+              @click.stop="jumpStickyNext"
+            ><span class="i-carbon-chevron-down w-3.5 h-3.5" /></button>
+          </div>
           <MsgClamp>
             <UserMsgContent :blocks="contentBlocks(stickyGroup.user as any)" :record-uuid="stickyGroup.user.uuid ?? undefined" />
           </MsgClamp>
@@ -2559,6 +2621,7 @@ async function onReload() {
               :gi="vitem.index"
               :day-label="dayDividers[vitem.index]"
               :time-label="groupTimeLabels[vitem.index]"
+              :hide-user="vitem.index === stickyDisplay?.index"
               :footer-at="groupFooterAt[vitem.index]"
               :footer="groupFooters[vitem.index]"
               :channel-marks-by-uuid="channelMarksByUuid"
@@ -2606,6 +2669,7 @@ async function onReload() {
           <MessageGroup
             :group="lastGroup"
             :gi="lastGroupIndex"
+            :hide-user="shouldVirtualize && stickyDisplay?.index === lastGroupIndex"
             :day-label="dayDividers[lastGroupIndex]"
             :time-label="groupTimeLabels[lastGroupIndex]"
             :footer-at="groupFooterAt[lastGroupIndex]"
@@ -2884,6 +2948,25 @@ async function onReload() {
         {{ workbenchHome ? $t('session.goTo') : $t('session.openInWorkbench') }}
       </button>
     </div>
+    
+    <!-- Runner 悬浮面板：列内 absolute，随列滚动/缩放天然跟随 -->
+    <div
+      v-if="runnerFloatOpen"
+      ref="runnerFloatRef"
+      class="runner-float"
+      :style="{ height: `${runnerFloatHeightRatio * 100}%` }"
+    >
+      <RunnerPanel
+        mode="float"
+        :session-id="currentSession?.summary.id ?? ''"
+        :session-cwd="currentSession?.summary.cwd ?? ''"
+        :project-name="currentSession?.projectId ?? ''"
+        @close="closeRunnerPanel"
+        @toggle-pin="toggleRunnerPin"
+        @toggle-dock="toggleRunnerDock"
+      />
+      <div class="runner-float-resize" @mousedown="onRunnerResizeStart" />
+    </div>
     </div>
     <!-- 异步任务面板：width transition 手风琴展开,列宽同步翻倍,主栏宽度恒定 -->
     <div
@@ -2937,26 +3020,10 @@ async function onReload() {
         :project-name="currentSession?.projectId ?? ''"
         @close="closeRunnerPanel"
         @toggle-pin="toggleRunnerPin"
+        @toggle-dock="toggleRunnerDock"
       />
     </div>
 
-    <!-- Runner 悬浮面板：列内 absolute，随列滚动/缩放天然跟随 -->
-    <div
-      v-if="runnerFloatOpen && !runnerPinned"
-      ref="runnerFloatRef"
-      class="runner-float"
-      :style="{ height: `${runnerFloatHeightRatio * 100}%` }"
-    >
-      <RunnerPanel
-        mode="float"
-        :session-id="currentSession?.summary.id ?? ''"
-        :session-cwd="currentSession?.summary.cwd ?? ''"
-        :project-name="currentSession?.projectId ?? ''"
-        @close="closeRunnerPanel"
-        @toggle-pin="toggleRunnerPin"
-      />
-      <div class="runner-float-resize" @mousedown="onRunnerResizeStart" />
-    </div>
   </div>
 
 </template>
@@ -2996,6 +3063,19 @@ async function onReload() {
   overflow: visible;
   cursor: pointer;
 }
+/* 吸顶头部的上下条导航小按钮 */
+.sticky-nav-btn {
+  border: none;
+  background: none;
+  padding: 1px;
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.sticky-nav-btn:hover:not(:disabled) { color: var(--foreground); background: var(--muted); }
+.sticky-nav-btn:disabled { opacity: 0.3; cursor: default; }
 /* 渠道切换横线:细分隔线 + 居中小字,本地记账的轻量视觉(非消息气泡) */
 .channel-mark {
   display: flex;
