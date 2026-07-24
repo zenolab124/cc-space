@@ -1723,6 +1723,7 @@ function onScroll() {
     scrollRafId = 0
     const el = scrollContainer.value
     if (!el) return
+    updateStickyGroup()
     if (programmaticScroll) {
       lastScrollTop = el.scrollTop
       programmaticScroll = false
@@ -1752,6 +1753,51 @@ function onScroll() {
     }
   })
 }
+
+// --- 虚拟化下的自绘吸顶层 ---
+// 虚拟项容器带 transform,原生 position:sticky 的包含块被劫持而失效(末组独立铺不受影响);
+// 改为滚动时计算视口顶部所在组,在滚动视口顶部渲染该组用户消息的克隆
+const virtualBoxRef = ref<HTMLElement>()
+const stickyGroupIndex = ref(-1)
+
+function updateStickyGroup() {
+  if (!shouldVirtualize.value) { stickyGroupIndex.value = -1; return }
+  const sc = scrollContainer.value
+  const vbox = virtualBoxRef.value
+  if (!sc || !vbox) { stickyGroupIndex.value = -1; return }
+  // 虚拟容器顶在滚动坐标系中的位置(前方有渠道横线等流内元素,起点非 0)
+  const vTop = vbox.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
+  const rel = sc.scrollTop - vTop
+  if (rel <= 0 || rel >= messageVirtualizer.value.getTotalSize()) { stickyGroupIndex.value = -1; return }
+  let idx = -1
+  for (const it of messageVirtualizer.value.getVirtualItems()) {
+    if (it.start <= rel) idx = it.index
+    else break
+  }
+  stickyGroupIndex.value = idx
+}
+
+const stickyGroup = computed(() => {
+  const i = stickyGroupIndex.value
+  if (i < 0) return null
+  const g = renderGroups.value[i]
+  if (!g?.user || g.user.type !== 'user') return null
+  // 与原生吸顶同条件:有 AI 回复的正常用户消息才吸
+  if (!g.responses.some(r => r.type === 'assistant')) return null
+  if (modelSwitchName(g.user) || isModelCommandRecord(g.user) || isSystemOnlyUser(g.user)) return null
+  if (!userHasVisibleContent(g.user)) return null
+  return g
+})
+
+function jumpToStickyGroup() {
+  const i = stickyGroupIndex.value
+  if (i >= 0 && shouldVirtualize.value) {
+    messageVirtualizer.value.scrollToIndex(i, { align: 'start' })
+  }
+}
+
+// 组列表变化(落账/流式收尾)后组高与索引可能位移,DOM 稳定后重算吸顶
+watch(renderGroups, () => nextTick(updateStickyGroup))
 
 /** SessionAnchorNav 点击时的虚拟化前置:让目标组先进虚拟窗口渲染出来,再由 SessionAnchorNav 的 rAF 精调 offsetTop */
 function onAnchorScrollToIndex(index: number) {
@@ -2462,6 +2508,19 @@ async function onReload() {
       @wheel.passive="onScrollWheel"
       @scroll.passive="onScroll"
     >
+    <!-- 虚拟化下的自绘吸顶:原生 sticky 被虚拟项 transform 劫持,此层吸在滚动视口顶,内容为视口顶部所在组的用户消息克隆;点击回跳该组 -->
+    <div v-if="stickyGroup?.user" class="sticky-user-overlay" :title="$t('session.stickyJumpHint')" @click="jumpToStickyGroup">
+      <div class="flex gap-3">
+        <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
+        <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
+          <div class="text-xs font-medium mb-1 text-primary">{{ $t('session.you') }}</div>
+          <MsgClamp>
+            <UserMsgContent :blocks="contentBlocks(stickyGroup.user as any)" :record-uuid="stickyGroup.user.uuid ?? undefined" />
+          </MsgClamp>
+        </div>
+      </div>
+    </div>
+
     <!-- 内容包裹层:所有增高源(打字机/晚到turn/落账替换/图片/cv解冻/横幅)都反映为它的高度变化,
          contentRO 观察它实现水平触发的滚动跟随 -->
     <div ref="scrollContentEl" class="space-y-4 pb-2 relative">
@@ -2483,6 +2542,7 @@ async function onReload() {
              - shouldVirtualize=false 时全部走"末组独立铺"路径,把 renderGroups 当作"上方历史组"照铺(渲染上等价原全铺) -->
         <div
           v-if="shouldVirtualize"
+          ref="virtualBoxRef"
           :style="{ height: messageVirtualizer.getTotalSize() + 'px', position: 'relative', width: '100%' }"
         >
           <div
@@ -2926,6 +2986,15 @@ async function onReload() {
   position: sticky;
   top: 0;
   z-index: 10;
+}
+/* 虚拟化下的自绘吸顶层:零高 sticky 悬于内容之上,内容由 stickyGroup 动态填充 */
+.sticky-user-overlay {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: 0;
+  overflow: visible;
+  cursor: pointer;
 }
 /* 渠道切换横线:细分隔线 + 居中小字,本地记账的轻量视觉(非消息气泡) */
 .channel-mark {

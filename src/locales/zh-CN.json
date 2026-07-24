@@ -184,6 +184,7 @@
     "draftGuide": "新会话 — 输入第一条消息开始对话",
     "noRecords": "无对话记录",
     "you": "你",
+    "stickyJumpHint": "点击回到这条消息",
     "claude": "Claude",
     "thinking": "思考中...",
     "sending": "正在发送...",

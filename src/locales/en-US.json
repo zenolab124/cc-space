@@ -184,6 +184,7 @@
     "draftGuide": "New session — type your first message to start",
     "noRecords": "No conversation records",
     "you": "You",
+    "stickyJumpHint": "Click to jump back to this message",
     "claude": "Claude",
     "thinking": "Thinking...",
     "sending": "Sending...",
