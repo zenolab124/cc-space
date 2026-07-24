@@ -18,11 +18,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-/** 截断命令文本用于 chip 显示 */
-function truncCmd(cmd: string): string {
-  return cmd.length > 24 ? cmd.slice(0, 24) : cmd
-}
-
 /** 状态点样式映射 */
 function statusDotClass(status: RunnerStatus): string {
   switch (status) {
@@ -38,7 +33,7 @@ function statusDotClass(status: RunnerStatus): string {
 
 /** 运行中 chip 的 tooltip */
 function chipTitle(runner: RunnerSnapshot): string {
-  const parts = [runner.cmd]
+  const parts = [runner.alias ? `${runner.alias} · ${runner.cmd}` : runner.cmd]
   if (runner.status === 'exited' && runner.exitCode != null) parts.push(`exit ${runner.exitCode}`)
   if (runner.status === 'crashed' && runner.exitCode != null) parts.push(`exit ${runner.exitCode}`)
   return parts.join(' · ')
@@ -46,7 +41,7 @@ function chipTitle(runner: RunnerSnapshot): string {
 
 /** 候选 chip 的 tooltip */
 function ghostTitle(cmd: RunnerCommand): string {
-  const parts = [cmd.cmd]
+  const parts = [cmd.alias ? `${cmd.alias} · ${cmd.cmd}` : cmd.cmd]
   if (cmd.note) parts.push(cmd.note)
   parts.push(t('runner.clickToLaunch'))
   return parts.join(' · ')
@@ -65,7 +60,7 @@ function ghostTitle(cmd: RunnerCommand): string {
       @click="emit('select', runner.id)"
     >
       <span class="status-dot" :class="statusDotClass(runner.status)" />
-      <span class="truncate max-w-24">{{ runner.alias || truncCmd(runner.cmd) }}</span>
+      <span class="truncate max-w-72">{{ runner.cmd }}</span>
       <!-- 悬停操作：运行中/启动中显示停止，崩溃/退出显示重启 -->
       <button
         v-if="runner.status === 'running' || runner.status === 'starting'"
@@ -99,7 +94,7 @@ function ghostTitle(cmd: RunnerCommand): string {
       <span class="src-icon" :class="cmd.source === 'agent' ? 'text-primary' : ''">
         {{ cmd.source === 'agent' ? '✦' : '↺' }}
       </span>
-      <span class="truncate max-w-24">{{ cmd.alias || truncCmd(cmd.cmd) }}</span>
+      <span class="truncate max-w-72">{{ cmd.cmd }}</span>
       <button
         class="chip-act group-hover:inline-flex"
         :title="t('runner.removeCommand')"

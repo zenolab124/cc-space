@@ -468,6 +468,9 @@ fn do_spawn(
         .args(&argv[1..])
         .current_dir(cwd)
         .env("PATH", crate::path_env::enhanced_path())
+        // pipe 下子进程探测不到 TTY 会关闭彩色输出，强制着色（用户 env_override 可覆盖）
+        .env("FORCE_COLOR", "1")
+        .env("CLICOLOR_FORCE", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

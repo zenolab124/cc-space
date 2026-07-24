@@ -23,11 +23,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-/** 截断命令文本 */
-function truncCmd(cmd: string, max: number): string {
-  return cmd.length > max ? cmd.slice(0, max) : cmd
-}
-
 /** 判断是否处于活跃状态 */
 function isActive(status: RunnerStatus): boolean {
   return status === 'running' || status === 'starting'
@@ -62,7 +57,7 @@ function dotClass(status: RunnerStatus): string {
         @click="emit('select', runner.id)"
       >
         <span class="status-dot" :class="dotClass(runner.status)" />
-        <span class="run-alias">{{ runner.alias || truncCmd(runner.cmd, 16) }}</span>
+        <span class="run-alias truncate">{{ runner.alias || runner.cmd }}</span>
         <span class="run-cmd">{{ runner.cmd }}</span>
         <!-- 运行时长（活跃态）或退出码 -->
         <span v-if="isActive(runner.status)" class="run-time">

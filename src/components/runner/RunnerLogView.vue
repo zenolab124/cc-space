@@ -300,6 +300,8 @@ function onStop() {
 .log-line { white-space: pre-wrap; word-break: break-all; }
 .log-ts { color: var(--muted-foreground); opacity: 0.55; font-size: 9.5px; margin-right: 8px; }
 .log-line.stderr .log-ts { color: var(--ansi-red); opacity: 0.7; }
+/* stderr 行淡红底：无 ANSI 的输出也能一眼分辨错误流 */
+.log-line.stderr { background: color-mix(in oklch, var(--ansi-red) 7%, transparent); }
 
 .log-foot {
   display: flex; align-items: center; gap: 6px; padding: 4px 12px;

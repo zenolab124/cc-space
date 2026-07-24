@@ -24,6 +24,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   togglePin: []
+  toggleDock: []
 }>()
 
 const { t } = useI18n()
@@ -172,20 +173,32 @@ const isEmpty = computed(() => sessionRunners.value.length === 0 && sessionComma
       </span>
       <span class="flex-1" />
       <button
-        class="rp-btn rp-btn-primary"
+        class="rp-icon-btn rp-icon-new"
+        :title="t('runner.newRunner')"
         @click="dialogVisible = true"
       >
-        {{ t('runner.newRunnerBtn') }}
+        <span class="i-carbon-add w-3.5 h-3.5" />
       </button>
       <button
-        class="rp-btn"
-        :class="{ 'rp-btn-pinned': runnerPinned }"
+        v-if="mode === 'float'"
+        class="rp-icon-btn"
+        :class="{ active: runnerPinned }"
         :title="runnerPinned ? t('runner.unpinTitle') : t('runner.pinTitle')"
         @click="emit('togglePin')"
       >
-        ◨ {{ runnerPinned ? t('runner.unpin') : t('runner.pin') }}
+        <span :class="runnerPinned ? 'i-carbon-pin-filled' : 'i-carbon-pin'" class="w-3.5 h-3.5" />
       </button>
-      <button class="rp-close" @click="emit('close')">✕</button>
+      <button
+        class="rp-icon-btn"
+        :class="{ active: mode === 'dock' }"
+        :title="mode === 'float' ? t('runner.toDockTitle') : t('runner.toFloatTitle')"
+        @click="emit('toggleDock')"
+      >
+        <span class="i-carbon-open-panel-right w-3.5 h-3.5" />
+      </button>
+      <button class="rp-icon-btn" :title="t('runner.close')" @click="emit('close')">
+        <span class="i-carbon-close w-3.5 h-3.5" />
+      </button>
     </div>
 
     <!-- 空态 -->
@@ -266,34 +279,24 @@ const isEmpty = computed(() => sessionRunners.value.length === 0 && sessionComma
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.rp-btn {
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--card);
-  color: var(--muted-foreground);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.rp-btn:hover { color: var(--foreground); box-shadow: var(--shadow-paper); }
-.rp-btn-primary { border-color: var(--primary); color: var(--primary); }
-.rp-btn-pinned {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-foreground);
-}
-.rp-close {
+/* 头部图标按钮：与会话顶栏工具按钮同风格 */
+.rp-icon-btn {
+  padding: 4px;
   border: none;
   background: none;
+  border-radius: var(--radius);
   color: var(--muted-foreground);
   cursor: pointer;
-  font-size: 13px;
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.15s, background-color 0.15s;
 }
-.rp-close:hover { color: var(--foreground); }
+.rp-icon-btn:hover { color: var(--foreground); background: var(--muted); }
+.rp-icon-btn.active {
+  color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 10%, transparent);
+}
+.rp-icon-new:hover { color: var(--primary); }
 
 /* 空态 */
 .empty-body {
