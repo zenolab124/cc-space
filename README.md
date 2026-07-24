@@ -115,6 +115,12 @@ xattr -cr /Applications/Monet.app
 
 After that, updates install silently in-app — no warnings again.
 
+**🤖 Or let your AI do it**: point your AI agent (Claude Code, Cursor, …) at [`llms-install.md`](llms-install.md) and it can explain Monet, install it, and pre-configure language/theme/zoom for you:
+
+```
+Read https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md and install Monet for me.
+```
+
 ## Build from Source
 
 ### Prerequisites

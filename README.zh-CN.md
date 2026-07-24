@@ -118,6 +118,12 @@ xattr -cr /Applications/Monet.app
 
 之后的版本更新由应用内静默完成，不再有任何提示。
 
+**🤖 或者交给你的 AI**：把 [`llms-install.md`](llms-install.md) 丢给你的 AI（Claude Code、Cursor 等），它能向你介绍 Monet、完成安装，并预先配好语言/主题/缩放：
+
+```
+读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md 并帮我安装 Monet。
+```
+
 ## 从源码构建
 
 ### 前置条件
