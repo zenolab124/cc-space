@@ -1,6 +1,6 @@
 # Monet — AI Troubleshooting & Bug Reporting Guide
 
-> This document is written for AI agents diagnosing Monet problems on behalf of a user. Work through **Self-diagnosis** first; only file a bug if the problem survives it. Installation and configuration are covered in [llms-install.md](llms-install.md).
+> This document is written for AI agents diagnosing Monet problems on behalf of a user. Work through **Self-diagnosis** first; only file a bug if the problem survives it. Installation and configuration are covered in [llms-install.md](llms-install.md). (中文版：[llms-troubleshoot.zh-CN.md](llms-troubleshoot.zh-CN.md))
 
 ## Diagnostic basics
 

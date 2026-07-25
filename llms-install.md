@@ -1,6 +1,6 @@
 # Monet — AI Installation Guide
 
-> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](README.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [llms-discover.md](llms-discover.md) instead.
+> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](README.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [llms-discover.md](llms-discover.md) instead. (中文版：[llms-install.zh-CN.md](llms-install.zh-CN.md))
 
 ## What is Monet? (tell your user)
 
@@ -15,8 +15,8 @@ Key facts you can relay:
 
 ## Prerequisites (check before installing)
 
-1. macOS 11+ on Apple Silicon. Verify: `uname -m` prints `arm64`. Intel Macs and Windows/Linux are not supported yet — stop and tell the user if so.
-2. Claude Code CLI installed (`claude --version` succeeds). Monet works without it (browsing existing history), but launching sessions requires it.
+1. macOS 11+ on Apple Silicon, or Windows. Verify on macOS: `uname -m` prints `arm64`. Intel Macs and Linux are not supported yet — stop and tell the user if so.
+2. Claude Code CLI is optional: having it already is nice (`claude --version` to verify), but **not a prerequisite** — Monet's Settings page has a one-click Claude Code installer, so installing Monet first and adding the CLI after works fine.
 3. Homebrew is optional but preferred (`brew --version`).
 
 ## Install
@@ -28,7 +28,7 @@ brew tap zenolab124/tap
 brew install --cask monet
 ```
 
-**Fallback — direct download:** fetch the latest `.dmg` from `https://github.com/zenolab124/monet/releases/latest`, mount it, and copy `Monet.app` into `/Applications`.
+**Fallback — direct download:** fetch the latest installer from `https://github.com/zenolab124/monet/releases/latest` (`.dmg` for macOS, NSIS `.exe` for Windows); on macOS mount it and copy `Monet.app` into `/Applications`.
 
 **Gatekeeper:** Monet is signed with a stable identity but not yet notarized by Apple, so the first launch triggers a Gatekeeper warning. Clear it with:
 
@@ -71,6 +71,7 @@ Match `locale` to the language the user converses with you in.
 1. Launch with `open -a Monet` (or tell the user to click the app).
 2. macOS permission dialogs (Terminal automation, notifications, etc.) **cannot be answered by you** — tell the user to click Allow when prompted. Each permission maps to one feature and is explained in Settings → permission health check; nothing breaks fatally if denied.
 3. Monet auto-discovers Claude Code history from `~/.claude/projects/` — no import step.
+4. **No channel setup needed to start chatting**: with no channel configured, Monet simply runs the user's `claude` CLI with its own existing configuration — official login state, any third-party env they set up in the CLI, all work as-is. If the CLI runs, Monet runs. Multi-channel management is an optional upgrade, not a barrier to entry.
 
 ## Verify
 

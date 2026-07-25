@@ -1,11 +1,17 @@
 # Monet
 
-> Free, open-source macOS desktop app that turns Claude Code session history into a browsable, searchable, interactive workspace — parallel-agent workbench, session archive, scheduled routines. Read-only over Claude Code's files, fully offline. A companion to the Claude Code CLI.
+> Free, open-source desktop app (macOS Apple Silicon + Windows) that turns Claude Code session history into a browsable, searchable, interactive workspace — parallel-agent workbench, session archive, scheduled routines. Read-only over Claude Code's files, fully offline. A companion to the Claude Code CLI.
 
-Docs for AI agents, by user journey stage:
+Docs for AI agents, by user journey stage. Each doc exists in English and Chinese with **equivalent content** — read the ONE matching your user's language, not both:
 
-- [llms-discover.md](https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.md): user hasn't installed Monet — understand the product, assess fit against the user's actual Claude Code usage, give a personalized recommendation
-- [llms-install.md](https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md): install via Homebrew or dmg, handle Gatekeeper, pre-configure language/theme/zoom in ~/.monet/settings.json before first launch
-- [llms-troubleshoot.md](https://raw.githubusercontent.com/zenolab124/monet/main/llms-troubleshoot.md): self-diagnose common issues; file a well-formed bug via gh or the anonymous report endpoint
+- Discover (user hasn't installed — understand the product, assess fit against their actual Claude Code usage, give a personalized recommendation):
+  EN https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.md
+  中文 https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.zh-CN.md
+- Install (Homebrew or installer, Gatekeeper handling, pre-configure language/theme/zoom in ~/.monet/settings.json before first launch):
+  EN https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md
+  中文 https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.zh-CN.md
+- Troubleshoot (self-diagnose common issues; file a well-formed bug via gh or the anonymous report endpoint):
+  EN https://raw.githubusercontent.com/zenolab124/monet/main/llms-troubleshoot.md
+  中文 https://raw.githubusercontent.com/zenolab124/monet/main/llms-troubleshoot.zh-CN.md
 
-Human-facing: [README](https://github.com/zenolab124/monet)
+Human-facing: https://github.com/zenolab124/monet (README.md / README.zh-CN.md)
