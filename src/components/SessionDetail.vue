@@ -1762,6 +1762,7 @@ function onScroll() {
 // 虚拟项容器带 transform,原生 position:sticky 的包含块被劫持而失效(末组独立铺不受影响);
 // 改为滚动时计算视口顶部所在组,在滚动视口顶部渲染该组用户消息的克隆
 const virtualBoxRef = ref<HTMLElement>()
+const pendingStickyRef = ref<HTMLElement>()
 const stickyGroupIndex = ref(-1)
 
 function updateStickyGroup() {
@@ -1769,6 +1770,14 @@ function updateStickyGroup() {
   const sc = scrollContainer.value
   const vbox = virtualBoxRef.value
   if (!sc || !vbox) { stickyGroupIndex.value = -1; return }
+  // 流式 pending 条自带原生 sticky(在虚拟容器外,不受 transform 劫持):
+  // 探针进入流式区即让位,由 pending 条接管吸顶,自绘层不再回溯末组盖在其上
+  const pel = pendingStickyRef.value
+  if (pel) {
+    const scTop = sc.getBoundingClientRect().top
+    const pTop = pel.getBoundingClientRect().top - scTop + sc.scrollTop
+    if (sc.scrollTop + 40 >= pTop) { stickyGroupIndex.value = -1; return }
+  }
   // 虚拟容器顶在滚动坐标系中的位置(前方有渠道横线等流内元素,起点非 0)
   const vTop = vbox.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
   const rel = sc.scrollTop - vTop
@@ -2521,7 +2530,7 @@ async function onReload() {
          默认滚底藏走);发出首条消息即隐,落盘收割后 forkBadgeSource 自然为 null -->
     <div
       v-if="forkBadgeSource && !stream.streaming && !stream.pendingUserMessage"
-      class="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5
+      class="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5
              px-2.5 py-1 rounded-full border border-border bg-popover/70 backdrop-blur-md
              shadow-paper text-[11px] text-muted-foreground whitespace-nowrap"
     >
@@ -2534,7 +2543,7 @@ async function onReload() {
     <Transition name="banner-float">
       <div
         v-if="interactive && featureBannerShown && effectiveSessionId"
-        class="absolute top-2 left-4 right-4 z-20 pointer-events-none"
+        class="absolute top-2 left-4 right-4 z-30 pointer-events-none"
       >
         <div class="pointer-events-auto shadow-paper-lifted rounded-md bg-popover/40 backdrop-blur-md border border-border">
           <SessionBanner
@@ -2699,7 +2708,7 @@ async function onReload() {
       <!-- 流式区:pendingUserMessage + streamingTurns(横幅已移出文档流,悬浮层见上方) -->
       <div v-if="stream.pendingUserMessage || stream.pendingImages?.length || stream.streamingTurns.length || (stream.streaming && stream.streamingTurns.length === 0)" class="space-y-4">
         <!-- 落账接管即让位:pendingLandedUuid 非 null 时历史条与气泡同帧原子切换,无双显无空窗 -->
-        <div v-if="(stream.pendingUserMessage || stream.pendingImages?.length) && !pendingLandedUuid" class="user-msg-sticky">
+        <div v-if="(stream.pendingUserMessage || stream.pendingImages?.length) && !pendingLandedUuid" ref="pendingStickyRef" class="user-msg-sticky">
           <div class="flex gap-3">
             <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
             <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
