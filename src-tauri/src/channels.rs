@@ -19,8 +19,16 @@ use serde_json::{json, Map, Value};
 use crate::config;
 use crate::proc_ext::HideConsole;
 
-/// 保留 id:语义为「官方/零注入」。参与链排序,不对应 channels/ 下的文件
+/// 保留 id:语义为「跟随 CLI/零注入」。参与链排序,不对应 channels/ 下的文件
 pub const OFFICIAL_ID: &str = "official";
+
+/// 保留 id:语义为「官方直连」——合成压制 settings 挤掉 CLI 配置里的第三方
+/// 认证/路由键,强制走 Anthropic 官方端点 + OAuth 登录态。无渠道文件。
+/// 与 OFFICIAL_ID(零注入直通,CLI 配置什么样就什么样)语义互补。
+pub const OFFICIAL_DIRECT_ID: &str = "official-direct";
+
+/// 官方直连的强制端点(实测:空串 token 被 CLI 视为未设,回落 OAuth)
+const OFFICIAL_BASE_URL: &str = "https://api.anthropic.com";
 
 /// Apple Foundation Models 虚拟渠道 id
 pub const APPLE_FM_ID: &str = "apple-fm";
@@ -109,8 +117,8 @@ pub fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 {
         return Err("渠道 ID 须为 1-64 个字符".to_string());
     }
-    if id == OFFICIAL_ID {
-        return Err("official 为保留 ID".to_string());
+    if id == OFFICIAL_ID || id == OFFICIAL_DIRECT_ID {
+        return Err(format!("{} 为保留 ID", id));
     }
     if !id
         .chars()
@@ -334,6 +342,15 @@ fn resolve_channel_credentials(channel_id: &str, settings: &AppSettings, model_o
             agent_model: None,
         });
     }
+    // 官方直连:同走官方 CLI 直调,spawn 时额外注入压制 settings(见 agent.rs)
+    if channel_id == OFFICIAL_DIRECT_ID {
+        return Some(AgentChannelCredentials {
+            id: OFFICIAL_DIRECT_ID.to_string(), is_official: true,
+            base_url: None, token: None,
+            protocol: "anthropic".to_string(),
+            agent_model: None,
+        });
+    }
     if channel_id == APPLE_FM_ID {
         let agent_model = model_override.or_else(|| meta.and_then(|m| m.agent_model.clone()));
         return Some(AgentChannelCredentials {
@@ -418,6 +435,25 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             name: meta.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "Official".to_string()),
             note: meta.note.clone().filter(|s| !s.is_empty()),
             base_url: None,
+            auth_token_masked: None,
+            extra_env_keys: vec![],
+            valid: true,
+            enabled: meta.is_enabled(),
+            protocol: "anthropic".to_string(),
+            scope: "full".to_string(),
+            agent_model: None,
+            available_models: vec![],
+            model_env: BTreeMap::new(),
+            default_model: meta.default_model.clone().filter(|s| !s.is_empty()),
+            default_effort: meta.default_effort.clone().filter(|s| !s.is_empty()),
+        };
+    }
+    if id == OFFICIAL_DIRECT_ID {
+        return ChannelView {
+            id: OFFICIAL_DIRECT_ID.to_string(),
+            name: meta.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "Official Direct".to_string()),
+            note: meta.note.clone().filter(|s| !s.is_empty()),
+            base_url: Some(OFFICIAL_BASE_URL.to_string()),
             auth_token_masked: None,
             extra_env_keys: vec![],
             valid: true,
@@ -549,6 +585,10 @@ pub fn list_channels() -> ChannelListResult {
     // Official always first
     let official_meta = settings.channels.get(OFFICIAL_ID).cloned().unwrap_or_default();
     channels.push(build_channel_view(OFFICIAL_ID, &official_meta));
+
+    // Official-direct second(虚拟渠道:强制官方,无文件)
+    let od_meta = settings.channels.get(OFFICIAL_DIRECT_ID).cloned().unwrap_or_default();
+    channels.push(build_channel_view(OFFICIAL_DIRECT_ID, &od_meta));
 
     // Apple FM if registered
     if settings.channels.contains_key(APPLE_FM_ID) {
@@ -746,6 +786,43 @@ pub fn set_default_session_channel(id: Option<String>) -> Result<(), String> {
     save_app_settings(&settings)
 }
 
+/// 官方直连的压制 settings 文件(固定路径,内容无敏感信息,幂等重写)。
+/// 供 Agent CLI 直调等无 per-session 注入机制的 spawn 场景复用;
+/// 会话 spawn 走 prepare_injection 的 per-session 合成,不用此文件
+pub fn official_direct_settings_path() -> Result<PathBuf, String> {
+    fs::create_dir_all(runtime_dir()).map_err(|e| e.to_string())?;
+    let path = runtime_dir().join("official-direct.json");
+    let mut env = serde_json::Map::new();
+    env.insert("ANTHROPIC_BASE_URL".into(), json!(OFFICIAL_BASE_URL));
+    env.insert("ANTHROPIC_AUTH_TOKEN".into(), json!(""));
+    for key in DEFENSE_ENV_KEYS {
+        env.insert(key.to_string(), json!(""));
+    }
+    write_json_0600(&path, &json!({ "env": env }))?;
+    Ok(path)
+}
+
+/// 「跟随 CLI」当前实际指向:读 CLI user 级 settings 的 env 段(只读,不追 project/local 覆盖——
+/// 副文案提示性质,取 user 级已覆盖绝大多数第三方配置场景)
+#[tauri::command]
+pub fn get_cli_env_target() -> Value {
+    let host = fs::read_to_string(crate::config::claude_root().join("settings.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| {
+            let url = v.get("env")?.get("ANTHROPIC_BASE_URL")?.as_str()?;
+            if url.is_empty() {
+                return None;
+            }
+            let stripped = url
+                .strip_prefix("https://")
+                .or_else(|| url.strip_prefix("http://"))
+                .unwrap_or(url);
+            Some(stripped.split('/').next().unwrap_or(stripped).to_string())
+        });
+    json!({ "kind": if host.is_some() { "third-party" } else { "official" }, "host": host })
+}
+
 #[tauri::command]
 pub fn set_default_agent_model(channel: Option<String>, model: Option<String>) -> Result<(), String> {
     let mut settings = load_app_settings();
@@ -862,6 +939,9 @@ pub fn prepare_injection(
     }
 
     let mut root: Value = match channel_id {
+        // 官方直连:无渠道文件,合成压制 settings——显式官方端点 + 下方防御清扫
+        // 挤掉 CLI 用户配置里的第三方认证/路由键(空串 token 实测被 CLI 视为未设,回落 OAuth)
+        Some(OFFICIAL_DIRECT_ID) => json!({ "env": { "ANTHROPIC_BASE_URL": OFFICIAL_BASE_URL } }),
         Some(id) => {
             validate_id(id)?;
             let text = fs::read_to_string(channel_file_path(id))

@@ -246,6 +246,7 @@ pub fn run() {
             cli_env::claude_env_install,
             cli_env::claude_env_diagnose,
             channels::list_channels,
+            channels::get_cli_env_target,
             channels::save_channel,
             channels::set_official_defaults,
             channels::delete_channel,

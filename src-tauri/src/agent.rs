@@ -45,7 +45,7 @@ struct AgentProcess {
     session_id: Option<String>,
 }
 
-fn spawn_agent_with(model: &str, effort: &str) -> Result<AgentProcess, String> {
+fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<AgentProcess, String> {
     let (executable, prefix_args) = find_claude();
     eprintln!("[agent-service] spawn: executable={} prefix_args={:?} model={} effort={}", executable, prefix_args, model, effort);
     let mut args = prefix_args;
@@ -80,6 +80,11 @@ fn spawn_agent_with(model: &str, effort: &str) -> Result<AgentProcess, String> {
          5. Output in the language specified by 输出语言 in the prompt.".to_string(),
         "--verbose".to_string(),
     ]);
+    // 官方直连:注入压制 settings,挤掉 CLI 用户配置里的第三方认证/路由键
+    if official_direct {
+        let path = crate::channels::official_direct_settings_path()?;
+        args.extend(["--settings".to_string(), path.to_string_lossy().into_owned()]);
+    }
 
     eprintln!("[agent-service] args: {:?}", args);
 
@@ -162,7 +167,7 @@ pub(crate) fn request_blocking_pub(prompt: &str) -> Result<String, String> {
 fn call_channel(cred: &crate::channels::AgentChannelCredentials, prompt: &str, model: &str, max_tokens: u32) -> Result<AgentCallResult, CliCallError> {
     let channel_id = cred.id.clone();
     if cred.is_official {
-        let r = request_blocking(prompt)?;
+        let r = request_blocking(prompt, cred.id == crate::channels::OFFICIAL_DIRECT_ID)?;
         Ok(AgentCallResult {
             text: r.text,
             channel_id,
@@ -201,7 +206,7 @@ fn request_with_fallback(prompt: &str, model: &str, max_tokens: u32) -> Result<A
         let effective_model = cred.agent_model.as_deref().unwrap_or(model);
         return call_channel(&cred, prompt, effective_model, max_tokens);
     }
-    let r = request_blocking(prompt)?;
+    let r = request_blocking(prompt, false)?;
     Ok(AgentCallResult {
         text: r.text,
         channel_id: "official".to_string(),
@@ -240,7 +245,7 @@ fn request_for_agent_inner(prompt: &str, agent_key: &str) -> Result<AgentCallRes
             }
         }
     }
-    let r = request_blocking(prompt)?;
+    let r = request_blocking(prompt, false)?;
     Ok(AgentCallResult {
         text: r.text,
         channel_id: "official(fallback)".to_string(),
@@ -250,15 +255,15 @@ fn request_for_agent_inner(prompt: &str, agent_key: &str) -> Result<AgentCallRes
     })
 }
 
-fn request_blocking(prompt: &str) -> Result<CliCallResult, CliCallError> {
-    request_blocking_with(prompt, "haiku", "low")
+fn request_blocking(prompt: &str, official_direct: bool) -> Result<CliCallResult, CliCallError> {
+    request_blocking_with(prompt, "haiku", "low", official_direct)
 }
 
-fn request_blocking_with(prompt: &str, model: &str, effort: &str) -> Result<CliCallResult, CliCallError> {
+fn request_blocking_with(prompt: &str, model: &str, effort: &str, official_direct: bool) -> Result<CliCallResult, CliCallError> {
     let preview: String = prompt.chars().take(40).collect();
     eprintln!("[agent-service] request(oneshot): prompt={}... model={}", preview, model);
     // spawn 失败：进程未启动，无落盘，From<String> 置 session_id None
-    let mut agent = spawn_agent_with(model, effort)?;
+    let mut agent = spawn_agent_with(model, effort, official_direct)?;
     let session_id = agent.session_id.clone();
     let result = send_and_collect(&mut agent, prompt);
     let _ = agent.child.kill();
@@ -543,7 +548,7 @@ pub fn extract_search_terms(question: &str, model: &str, effort: &str) -> Result
 /// 智能搜索专用：官方 CLI 直调 + 记账（与 request_for_agent 的渠道链路口径对齐）
 fn request_logged(feature: &str, prompt: &str, model: &str, effort: &str) -> Result<CliCallResult, String> {
     let start = std::time::Instant::now();
-    let result = request_blocking_with(prompt, model, effort);
+    let result = request_blocking_with(prompt, model, effort, false);
     let duration_ms = start.elapsed().as_millis() as u64;
     match &result {
         Ok(r) => record_log(feature, "official", model, duration_ms, r.usage.as_ref(), true, None, r.session_id.as_deref()),

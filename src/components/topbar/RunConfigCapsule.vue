@@ -7,6 +7,7 @@ import {
   useChannels,
   refreshChannels,
   OFFICIAL_CHANNEL_ID,
+  OFFICIAL_DIRECT_CHANNEL_ID,
 } from '@/composables/useChannels'
 import { useModelOptions } from '@/composables/useModelOptions'
 import { useCliDefaults, refreshCliDefaults } from '@/composables/useCliDefaults'
@@ -109,9 +110,10 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
 const channelOptions = computed(() => {
   const result: { id: string; name: string }[] = [
     { id: OFFICIAL_CHANNEL_ID, name: t('topbar.channelOfficial') },
+    { id: OFFICIAL_DIRECT_CHANNEL_ID, name: t('topbar.channelOfficialDirect') },
   ]
   for (const ch of channels.value) {
-    if (ch.id !== OFFICIAL_CHANNEL_ID && ch.enabled && ch.scope !== 'agent-only') {
+    if (ch.id !== OFFICIAL_CHANNEL_ID && ch.id !== OFFICIAL_DIRECT_CHANNEL_ID && ch.enabled && ch.scope !== 'agent-only') {
       result.push({ id: ch.id, name: ch.name })
     }
   }

@@ -33,6 +33,8 @@ interface ChannelListResult {
 }
 
 export const OFFICIAL_CHANNEL_ID = 'official'
+/** 官方直连:压制 CLI 配置中的第三方键,强制 Anthropic 官方 + OAuth(虚拟渠道,无文件) */
+export const OFFICIAL_DIRECT_CHANNEL_ID = 'official-direct'
 
 const channels = ref<ChannelInfo[]>([])
 const defaultSessionChannel = ref<string | null>(null)
@@ -53,7 +55,17 @@ export async function refreshChannels(): Promise<void> {
 
 export function channelDisplayName(id: string | null): string {
   if (!id || id === OFFICIAL_CHANNEL_ID) return i18n.global.t('channel.official')
+  if (id === OFFICIAL_DIRECT_CHANNEL_ID) return i18n.global.t('channel.officialDirect')
   return channels.value.find(c => c.id === id)?.name ?? id
+}
+
+/** 「跟随 CLI」当前实际指向(副文案用):official = CLI 走官方登录;third-party 附 host */
+export const cliEnvTarget = ref<{ kind: 'official' | 'third-party'; host: string | null }>({ kind: 'official', host: null })
+
+export async function refreshCliEnvTarget(): Promise<void> {
+  try {
+    cliEnvTarget.value = await invoke<{ kind: 'official' | 'third-party'; host: string | null }>('get_cli_env_target')
+  } catch { /* 探测失败保留旧值,副文案提示性质 */ }
 }
 
 export function resolveChannel(selected: string | null): string | null {
@@ -231,7 +243,10 @@ async function probeChannel(id: string, draft?: ProbeDraft): Promise<ProbeResult
 }
 
 async function probeAllChannels(): Promise<void> {
-  const ids = channels.value.map(c => c.id)
+  // 内置虚拟渠道(official/official-direct)无文件无探测目标,跳过
+  const ids = channels.value
+    .filter(c => c.id !== OFFICIAL_CHANNEL_ID && c.id !== OFFICIAL_DIRECT_CHANNEL_ID)
+    .map(c => c.id)
   await Promise.allSettled(ids.map(id => probeChannel(id)))
 }
 

@@ -15,7 +15,7 @@ import {
   valueHasOneM,
   hasAnyMapping,
 } from '@/utils/modelEnv'
-import { useChannels, OFFICIAL_CHANNEL_ID } from '@/composables/useChannels'
+import { useChannels, OFFICIAL_CHANNEL_ID, OFFICIAL_DIRECT_CHANNEL_ID } from '@/composables/useChannels'
 
 const EXTENDED_CONTEXT = 1_000_000
 
@@ -40,7 +40,7 @@ export function useModelOptions(channelId: Ref<string | null>): {
   const { channels } = useChannels()
 
   const isOfficial = computed(
-    () => !channelId.value || channelId.value === OFFICIAL_CHANNEL_ID,
+    () => !channelId.value || channelId.value === OFFICIAL_CHANNEL_ID || channelId.value === OFFICIAL_DIRECT_CHANNEL_ID,
   )
 
   /** 当前渠道对象(第三方) */

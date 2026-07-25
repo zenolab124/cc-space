@@ -7,7 +7,10 @@ import {
   useChannels,
   refreshChannels,
   OFFICIAL_CHANNEL_ID,
+  OFFICIAL_DIRECT_CHANNEL_ID,
   APPLE_FM_CHANNEL_ID,
+  cliEnvTarget,
+  refreshCliEnvTarget,
   type ChannelInfo,
   type CcSwitchProvider,
 } from '@/composables/useChannels'
@@ -443,7 +446,7 @@ async function removeWakeAuthorization() {
 
 
 
-onMounted(() => { refreshChannels(); loadAgentToggles(); loadAgentSessionPersist(); loadAgentPreferences(); loadWakePolicy(); loadWidgetConfig(); loadTrayTitleConfig(); loadMcpStatus(); getVersion().then(v => appVersion.value = v) })
+onMounted(() => { refreshChannels(); refreshCliEnvTarget(); loadAgentToggles(); loadAgentSessionPersist(); loadAgentPreferences(); loadWakePolicy(); loadWidgetConfig(); loadTrayTitleConfig(); loadMcpStatus(); getVersion().then(v => appVersion.value = v) })
 
 watch(activeSection, (s) => {
   if (s === 'settings') {
@@ -480,8 +483,17 @@ watch(defaultAgentChannel, (v) => { agentChannelId.value = v ?? OFFICIAL_CHANNEL
 
 const hasAppleFm = computed(() => channels.value.some(c => c.id === APPLE_FM_CHANNEL_ID))
 const agentChannelCards = computed(() =>
-  channels.value.filter(c => c.id !== OFFICIAL_CHANNEL_ID && c.id !== APPLE_FM_CHANNEL_ID && c.enabled)
+  // 内置渠道(跟随 CLI/官方)在模板里硬编码为前两条,此处只列用户渠道
+  channels.value.filter(c => c.id !== OFFICIAL_CHANNEL_ID && c.id !== OFFICIAL_DIRECT_CHANNEL_ID && c.id !== APPLE_FM_CHANNEL_ID && c.enabled)
 )
+
+/** 内置虚拟渠道(无文件):不给编辑/删除/探测按钮 */
+const isBuiltinChannel = (id: string) => id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID
+/** 内置渠道显示名走 i18n(Rust 侧默认名为英文) */
+const builtinChannelName = (ch: ChannelInfo) =>
+  ch.id === OFFICIAL_CHANNEL_ID ? t('channel.official')
+  : ch.id === OFFICIAL_DIRECT_CHANNEL_ID ? t('channel.officialDirect')
+  : ch.name
 const isAppleFmAgent = computed(() => agentChannelId.value === APPLE_FM_CHANNEL_ID)
 
 function toggleAppleFmAgent() {
@@ -507,7 +519,7 @@ const agentModelOptions = () => {
     opts.push({ channel: OFFICIAL_CHANNEL_ID, channelName: 'Official', model: m })
   }
   for (const ch of channels.value) {
-    if (!ch.enabled || ch.id === OFFICIAL_CHANNEL_ID) continue
+    if (!ch.enabled || ch.id === OFFICIAL_CHANNEL_ID || ch.id === OFFICIAL_DIRECT_CHANNEL_ID) continue
     const models = new Set([...ch.availableModels, ...(ch.agentModel ? [ch.agentModel] : [])])
     for (const m of models) {
       opts.push({ channel: ch.id, channelName: ch.name, model: m })
@@ -712,21 +724,26 @@ function onSaved() {
                 >
                   <div class="chain-content">
                     <div class="chain-row-1">
-                      <span class="truncate font-medium text-xs">{{ ch.name }}</span>
+                      <span class="truncate font-medium text-xs">{{ builtinChannelName(ch) }}</span>
+                      <span v-if="isBuiltinChannel(ch.id)" class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t(ch.id === OFFICIAL_CHANNEL_ID ? 'channel.followCliHint' : 'channel.officialDirectHint')">
+                        <span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" />
+                      </span>
                       <div class="chain-actions">
                         <button :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
-                        <template v-if="ch.id !== OFFICIAL_CHANNEL_ID">
+                        <template v-if="!isBuiltinChannel(ch.id)">
                           <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                           <button class="icon-btn icon-btn-sm icon-btn-ghost icon-btn-danger" v-tooltip="$t('common.delete')" @click.stop="onDelete(ch)"><span class="i-carbon-trash-can w-3 h-3" /></button>
                         </template>
-                        <button v-else class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.officialDefaults.edit')" @click.stop="editingOfficial = ch"><span class="i-carbon-edit w-3 h-3" /></button>
+                        <button v-else-if="ch.id === OFFICIAL_CHANNEL_ID" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.officialDefaults.edit')" @click.stop="editingOfficial = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                       </div>
                     </div>
                     <div class="chain-row-2">
                       <template v-if="ch.id !== OFFICIAL_CHANNEL_ID">
                         <span v-if="ch.baseUrl" class="font-mono truncate">{{ ch.baseUrl }}</span>
                       </template>
-                      <span v-else class="text-muted-foreground/60 italic">OAuth</span>
+                      <span v-else class="text-muted-foreground/60 italic">
+                        {{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}
+                      </span>
                       <span v-if="ch.defaultModel" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultModelLabel')">{{ ch.defaultModel }}</span>
                       <span v-if="ch.defaultEffort" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultEffortLabel')">{{ ch.defaultEffort }}</span>
                       <span v-if="ch.agentModel" class="chain-model-tag">{{ ch.agentModel }}</span>
@@ -738,7 +755,7 @@ function onSaved() {
                           <span v-else-if="!probeResults[ch.id].online">{{ probeResults[ch.id].status === 'auth_error' ? '401' : probeResults[ch.id].status }}</span>
                           <span v-if="probeResults[ch.id].latencyMs" class="text-muted-foreground/50">{{ probeResults[ch.id].latencyMs }}ms</span>
                         </template>
-                        <button v-if="ch.id !== OFFICIAL_CHANNEL_ID" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
+                        <button v-if="!isBuiltinChannel(ch.id)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
                       </span>
                     </div>
                   </div>
@@ -750,7 +767,7 @@ function onSaved() {
             <div>
               <div class="chain-title">{{ $t('settings.defaultAgentChannel') }}</div>
               <div class="chain-list">
-                <!-- Official -->
+                <!-- 跟随 CLI -->
                 <div
                   class="chain-item"
                   :class="{ 'chain-item-active': agentChannelId === OFFICIAL_CHANNEL_ID }"
@@ -758,7 +775,25 @@ function onSaved() {
                 >
                   <div class="chain-content">
                     <div class="chain-row-1">
-                      <span class="truncate font-medium text-xs">Official</span>
+                      <span class="truncate font-medium text-xs">{{ $t('channel.official') }}</span>
+                      <span class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t('channel.followCliHint')"><span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" /></span>
+                    </div>
+                    <div class="chain-row-2">
+                      <span class="text-muted-foreground/60 italic">{{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}</span>
+                      <span class="chain-model-tag">haiku</span>
+                    </div>
+                  </div>
+                </div>
+                <!-- 官方(直连) -->
+                <div
+                  class="chain-item"
+                  :class="{ 'chain-item-active': agentChannelId === OFFICIAL_DIRECT_CHANNEL_ID }"
+                  @click="onAgentChannelChange(OFFICIAL_DIRECT_CHANNEL_ID)"
+                >
+                  <div class="chain-content">
+                    <div class="chain-row-1">
+                      <span class="truncate font-medium text-xs">{{ $t('channel.officialDirect') }}</span>
+                      <span class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t('channel.officialDirectHint')"><span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" /></span>
                     </div>
                     <div class="chain-row-2">
                       <span class="text-muted-foreground/60 italic">OAuth</span>

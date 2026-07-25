@@ -192,7 +192,7 @@
     "sending": "正在发送...",
     "backToBottom": "回到底部",
     "channelSwitchedDefault": "已切回默认渠道",
-    "channelSwitchedOfficial": "已切换至官方渠道",
+    "channelSwitchedOfficial": "已切换至跟随 CLI",
     "channelSwitched": "已切换至「{name}」渠道",
     "modelSwitchMark": "模型切换至 {name}",
     "newSessionTitle": "新会话",
@@ -952,7 +952,7 @@
     }
   },
   "topbar": {
-    "channelOfficial": "官方",
+    "channelOfficial": "跟随 CLI",
     "channelTitle": "渠道:{name}",
     "channelLabel": "渠道",
     "manageChannels": "管理渠道…",
@@ -1018,7 +1018,8 @@
     "roleOpus": "Opus · 最新",
     "roleSonnet": "Sonnet · 最新",
     "roleHaiku": "Haiku · 最新",
-    "roleTier": "{role} 级"
+    "roleTier": "{role} 级",
+    "channelOfficialDirect": "官方"
   },
   "slash": {
     "title": "斜杠命令",
@@ -1073,7 +1074,11 @@
     "terminalTitle": "需要交互式终端，选中后在 Terminal 中打开执行"
   },
   "channel": {
-    "official": "官方"
+    "official": "跟随 CLI",
+    "officialDirect": "官方",
+    "followCliHint": "使用 claude CLI 自身的配置——官方登录或你在 CLI 里配的第三方,CLI 什么样就什么样",
+    "officialDirectHint": "无视 CLI 配置中的第三方设置,强制直连 Anthropic 官方(使用 CLI 的登录态)",
+    "cliTargetOfficial": "→ 官方登录 (OAuth)"
   },
   "theme": {
     "paper": "Paper · 纸",

@@ -192,7 +192,7 @@
     "sending": "Sending...",
     "backToBottom": "Back to bottom",
     "channelSwitchedDefault": "Switched back to default channel",
-    "channelSwitchedOfficial": "Switched to official channel",
+    "channelSwitchedOfficial": "Switched to Follow CLI",
     "channelSwitched": "Switched to \"{name}\" channel",
     "modelSwitchMark": "Model switched to {name}",
     "newSessionTitle": "New Session",
@@ -952,7 +952,7 @@
     }
   },
   "topbar": {
-    "channelOfficial": "Official",
+    "channelOfficial": "Follow CLI",
     "channelTitle": "Channel: {name}",
     "channelLabel": "Channel",
     "manageChannels": "Manage channels…",
@@ -1018,7 +1018,8 @@
     "roleOpus": "Opus · Latest",
     "roleSonnet": "Sonnet · Latest",
     "roleHaiku": "Haiku · Latest",
-    "roleTier": "{role}-tier"
+    "roleTier": "{role}-tier",
+    "channelOfficialDirect": "Official"
   },
   "slash": {
     "title": "Slash Commands",
@@ -1073,7 +1074,11 @@
     "terminalTitle": "Requires an interactive terminal; opens in Terminal when selected"
   },
   "channel": {
-    "official": "Official"
+    "official": "Follow CLI",
+    "officialDirect": "Official",
+    "followCliHint": "Uses the claude CLI's own configuration — official login or any third-party env you set up in the CLI, as-is",
+    "officialDirectHint": "Ignores third-party settings in the CLI config and connects straight to Anthropic official (using the CLI's login state)",
+    "cliTargetOfficial": "→ official login (OAuth)"
   },
   "theme": {
     "paper": "Paper",
