@@ -20,6 +20,8 @@ const {
   filterType,
   selectedFile,
   healthIssueCount,
+  loading,
+  refresh,
 } = useMemory()
 
 const emit = defineEmits<{
@@ -64,6 +66,14 @@ function typeClass(type: MemoryType): string {
     <!-- 列表头 -->
     <div class="list-head">
       <h2 class="list-title">{{ t('memory.title') }}</h2>
+      <button
+        class="head-refresh"
+        :disabled="loading"
+        :title="t('common.refresh')"
+        @click="refresh"
+      >
+        <span class="i-carbon-renew w-3 h-3" :class="{ 'animate-spin': loading }" />
+      </button>
     </div>
 
     <!-- 项目下拉 -->
@@ -142,22 +152,53 @@ function typeClass(type: MemoryType): string {
 </template>
 
 <style scoped>
+/* 列本身不滚：头部固定，只有 .entry-list 与体检面板各自滚动。
+   曾经外层 overflow-y:auto + 内层 flex:1（min-height 默认 auto 不收缩）
+   两层打架 —— 内层滚动永不生效、整列跟着滚，且外层滚动条使
+   .proj-select 的 calc(100%) 算错宽度，与列表项右边距对不齐 */
 .memory-list-col {
   width: 300px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 .list-head {
   padding: 12px 14px 8px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .list-title {
   font-size: 13px;
   font-weight: 600;
 }
+.head-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.head-refresh:hover:not(:disabled) {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.head-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* 宽度交给 flex stretch（cross axis）自然填满，不写 calc(100%)——
+   后者不扣滚动条宽度，滚动条一出现就与列表项右边距错位 */
 .proj-select {
   font-size: 11px;
   padding: 4px 8px;
@@ -166,13 +207,15 @@ function typeClass(type: MemoryType): string {
   background: var(--card);
   color: var(--foreground);
   margin: 10px 14px 0;
-  width: calc(100% - 28px);
+  min-width: 0;
+  flex-shrink: 0;
 }
 .chip-row {
   display: flex;
   gap: 4px;
   padding: 8px 14px;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .chip {
   font-size: 10px;
@@ -196,6 +239,14 @@ function typeClass(type: MemoryType): string {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+}
+/* 体检面板自身无高度约束，问题多时会把列表挤没 —— 限高自滚，
+   保证记忆列表始终占住至少一半 */
+:slotted(.health-panel) {
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
 }
 .badge-health {
   font-size: 9.5px;
@@ -221,6 +272,7 @@ function typeClass(type: MemoryType): string {
 }
 .entry-list {
   flex: 1;
+  min-height: 0; /* flex item 默认 min-height:auto 不收缩，滚动区必须显式归零 */
   overflow-y: auto;
 }
 .fitem {

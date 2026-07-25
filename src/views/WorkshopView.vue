@@ -26,7 +26,7 @@ const { t } = useI18n()
 const { activeSection } = useUiState()
 const { assets, loading, error, ensureLoaded, refresh, retry, probeStates, probeMcpServers } = useWorkshop()
 const { hooksCount, ensureLoaded: ensureHooksLoaded } = useHooks()
-const { memoryCount, ensureLoaded: ensureMemoryLoaded } = useMemory()
+const { memoryCount, ensureLoaded: ensureMemoryLoaded, ensureFresh: refreshMemory } = useMemory()
 
 /** 域内当前类别 */
 const category = ref<WorkshopCategory>('skills')
@@ -133,6 +133,11 @@ watch(activeSection, (s) => {
 // 每次进入 MCP 子页重新探活
 watch([activeSection, category], ([s, c]) => {
   if (s === 'workshop' && c === 'mcp') probeMcpServers()
+})
+
+// 每次进入记忆子页重扫（覆盖「切走再切回工坊」——此时 MemoryPane 不重新 mount）
+watch([activeSection, category], ([s, c]) => {
+  if (s === 'workshop' && c === 'memory') refreshMemory()
 })
 
 // 数据到达后若停留在 MCP 子页，补发探活

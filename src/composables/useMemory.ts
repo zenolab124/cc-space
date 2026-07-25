@@ -40,6 +40,11 @@ async function load() {
       const sorted = [...overview.value.projects].sort((a, b) => b.lastModified - a.lastModified)
       selectedProjectDir.value = sorted[0].projectDir
     }
+    // 重扫后选中项可能已在外部被删除/改名 —— 清掉，否则详情区留着幽灵内容
+    if (selectedFile.value && !currentProject.value?.entries.some(e => e.file === selectedFile.value)) {
+      selectedFile.value = null
+      detail.value = null
+    }
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -50,6 +55,17 @@ async function load() {
 function ensureLoaded() {
   if (loadedOnce) return
   loadedOnce = true
+  load()
+}
+
+/**
+ * 进入记忆子页时调用：每次都重扫。
+ * 记忆是外部可变数据（CLI 写、用户手改、其他项目的会话写），
+ * 一次性快照必然陈旧；记忆库通常百来个小文件，全扫走 spawn_blocking 仅数十毫秒。
+ */
+function ensureFresh() {
+  loadedOnce = true
+  if (loading.value) return
   load()
 }
 
@@ -240,6 +256,7 @@ export function useMemory() {
     healthIssueCount,
     // 动作
     ensureLoaded,
+    ensureFresh,
     refresh,
     loadDetail,
     saveMemory,

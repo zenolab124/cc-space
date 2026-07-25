@@ -15,11 +15,12 @@ import MemoryDeleteDialog from './memory/MemoryDeleteDialog.vue'
  */
 
 const { t } = useI18n()
-const { loading, error, overview, refresh, ensureLoaded } = useMemory()
+const { loading, error, overview, refresh, ensureFresh } = useMemory()
 
-// 数据惰性加载（useMemory 不自动加载，避免常驻 mount 把 IO 提前到启动期）
+// 每次挂载（= 每次切进记忆子页）重扫，外部改动即时可见。
+// 仍不在 useMemory 里自动加载——避免六视图常驻 mount 把 IO 提前到启动期
 onMounted(() => {
-  ensureLoaded()
+  ensureFresh()
 })
 
 // 体检面板展开/收起
