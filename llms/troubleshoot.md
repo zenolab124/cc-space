@@ -1,6 +1,6 @@
 # Monet — AI Troubleshooting & Bug Reporting Guide
 
-> This document is written for AI agents diagnosing Monet problems on behalf of a user. Work through **Self-diagnosis** first; only file a bug if the problem survives it. Installation and configuration are covered in [llms-install.md](llms-install.md). (中文版：[llms-troubleshoot.zh-CN.md](llms-troubleshoot.zh-CN.md))
+> This document is written for AI agents diagnosing Monet problems on behalf of a user. Work through **Self-diagnosis** first; only file a bug if the problem survives it. Installation and configuration are covered in [install.md](install.md). (中文版：[troubleshoot.zh-CN.md](troubleshoot.zh-CN.md))
 
 ## Diagnostic basics
 
@@ -23,7 +23,7 @@ Log locations (all under `~/.monet/`):
 
 **App blocked at launch ("damaged" / unidentified developer).** Gatekeeper reaction to a signed-but-not-notarized app. Fix: `xattr -cr /Applications/Monet.app`, then reopen. One-time; in-app updates are silent afterwards.
 
-**No sessions / projects visible.** Monet reads `~/.claude/projects/` by default. Check the directory exists and has content. If the user relocated Claude Code data (`CLAUDE_CONFIG_DIR`), set `claudeRoot` in `~/.monet/settings.json` (see llms-install.md) and restart. An empty archive on a machine that never ran Claude Code is normal.
+**No sessions / projects visible.** Monet reads `~/.claude/projects/` by default. Check the directory exists and has content. If the user relocated Claude Code data (`CLAUDE_CONFIG_DIR`), set `claudeRoot` in `~/.monet/settings.json` (see install.md) and restart. An empty archive on a machine that never ran Claude Code is normal.
 
 **Menu bar icon missing.** Check `launchctl list | grep io.github.zenolab124.monet.tray`. Restart the app (the tray is re-registered on launch). Inspect `~/.monet/tray.log` for errors.
 
@@ -58,9 +58,9 @@ gh issue create --repo zenolab124/monet --label bug \
   --title "<area>: <one-line symptom>" --body "<report>"
 ```
 
-End the body with `— Filed via AI diagnostics (llms-troubleshoot.md)`.
+End the body with `— Filed via AI diagnostics (llms/troubleshoot.md)`.
 
-**Path B — anonymous endpoint** (no GitHub account or login needed). Monet runs a small open-source relay ([infra/report-worker](infra/report-worker/)) that files the issue for you:
+**Path B — anonymous endpoint** (no GitHub account or login needed). Monet runs a small open-source relay ([infra/report-worker](../infra/report-worker/)) that files the issue for you:
 
 ```bash
 curl -s -X POST https://monet-report.zenolab124.workers.dev/report \

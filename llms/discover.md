@@ -1,6 +1,6 @@
 # Monet — AI Discovery Guide
 
-> This document is written for AI agents whose user is deciding whether to install Monet. Your job is not to recite features — it is: understand the product → look at how your user actually uses Claude Code → deliver a judgment **tailored to them**. If they decide to install, switch to [llms-install.md](llms-install.md). (中文版：[llms-discover.zh-CN.md](llms-discover.zh-CN.md))
+> This document is written for AI agents whose user is deciding whether to install Monet. Your job is not to recite features — it is: understand the product → look at how your user actually uses Claude Code → deliver a judgment **tailored to them**. If they decide to install, switch to [install.md](install.md). (中文版：[discover.zh-CN.md](discover.zh-CN.md))
 
 ## 1. Your task
 
@@ -11,7 +11,7 @@ The user handed you this document because they want four things:
 3. **Costs and risks**: does it cost money, does it touch their data, does it uninstall cleanly — verify for them, don't parrot the pitch;
 4. **A clear recommendation**: install, skip, or wait — with two or three sentences of reasoning.
 
-After the verdict, ask one question: "Want me to install it for you right now?" — a yes means switch to llms-install.md and continue.
+After the verdict, ask one question: "Want me to install it for you right now?" — a yes means switch to install.md and continue.
 
 ## 2. What Monet is
 
@@ -250,7 +250,7 @@ The user's biggest unspoken worry: this software reads all my session data. You 
 3. **Costs and risks**: free and open source, read-only architecture (with your verification findings), platform support (macOS Apple Silicon + Windows)
 4. **Clear recommendation**: install / skip / wait, with two or three sentences of reasoning
 5. **Visuals**: point them to the README (github.com/zenolab124/monet) for interface screenshots
-6. **Closing question**: "Want me to install it for you right now?" — yes → read llms-install.md and proceed
+6. **Closing question**: "Want me to install it for you right now?" — yes → read install.md and proceed
 
 ## 7. Quick FAQ
 
@@ -260,4 +260,4 @@ The user's biggest unspoken worry: this software reads all my session data. You 
 - **Windows/Linux?** Windows is supported (NSIS installer ships with every release); Linux not yet
 - **Do I have to enable the AI features?** All of them can be turned off — with them off, it's a pure read-only viewer
 - **Anything to configure after install?** No. With no channel configured, Monet runs your `claude` CLI with its own existing config — if the CLI runs, Monet runs; multi-channel is an upgrade, not a barrier
-- **What if something breaks after install?** There's a troubleshooting doc written for AI agents (llms-troubleshoot.md): you can self-diagnose and fix for the user; if it's a real bug you can file it for them — no GitHub account needed, the project runs an anonymous report channel
+- **What if something breaks after install?** There's a troubleshooting doc written for AI agents (troubleshoot.md): you can self-diagnose and fix for the user; if it's a real bug you can file it for them — no GitHub account needed, the project runs an anonymous report channel

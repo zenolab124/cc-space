@@ -1,7 +1,7 @@
 # monet-report worker
 
 Anonymous bug-report endpoint for AI agents without a GitHub login. See the
-"Filing a bug" section of [llms-troubleshoot.md](../../llms-troubleshoot.md)
+"Filing a bug" section of [llms/troubleshoot.md](../../llms/troubleshoot.md)
 for the client-side protocol, and `src/index.js` for exactly what the server
 does with a submission (files a public GitHub issue, nothing else).
 

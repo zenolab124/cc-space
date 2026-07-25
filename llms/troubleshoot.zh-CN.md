@@ -1,6 +1,6 @@
 # Monet — AI 排障与提报指南
 
-> 本文档写给替用户诊断 Monet 问题的 AI agent。先走**自诊断**；问题扛过了自诊再提 bug。安装与配置见 [llms-install.zh-CN.md](llms-install.zh-CN.md)。（English: [llms-troubleshoot.md](llms-troubleshoot.md)）
+> 本文档写给替用户诊断 Monet 问题的 AI agent。先走**自诊断**；问题扛过了自诊再提 bug。安装与配置见 [install.zh-CN.md](install.zh-CN.md)。（English: [troubleshoot.md](troubleshoot.md)）
 
 ## 诊断基础
 
@@ -23,7 +23,7 @@
 
 **启动被拦（「已损坏」/ 无法验证开发者）。** Gatekeeper 对已签名未公证 app 的反应。修复：`xattr -cr /Applications/Monet.app` 后重开。一次性操作；之后应用内更新静默完成。
 
-**看不到会话 / 项目。** Monet 默认读 `~/.claude/projects/`。确认目录存在且有内容。用户若迁移过 Claude Code 数据（`CLAUDE_CONFIG_DIR`），在 `~/.monet/settings.json` 设置 `claudeRoot`（见 llms-install.zh-CN.md）后重启。从没跑过 Claude Code 的机器上档案馆是空的——正常。
+**看不到会话 / 项目。** Monet 默认读 `~/.claude/projects/`。确认目录存在且有内容。用户若迁移过 Claude Code 数据（`CLAUDE_CONFIG_DIR`），在 `~/.monet/settings.json` 设置 `claudeRoot`（见 install.zh-CN.md）后重启。从没跑过 Claude Code 的机器上档案馆是空的——正常。
 
 **菜单栏图标不见了。** 查 `launchctl list | grep io.github.zenolab124.monet.tray`。重启 app（启动时会重新注册 tray）。查 `~/.monet/tray.log` 找报错。
 
@@ -58,9 +58,9 @@ gh issue create --repo zenolab124/monet --label bug \
   --title "<模块>: <一句话症状>" --body "<报告>"
 ```
 
-正文末尾加一行 `— Filed via AI diagnostics (llms-troubleshoot.md)`。
+正文末尾加一行 `— Filed via AI diagnostics (llms/troubleshoot.md)`。
 
-**通道 B——匿名端点**（无需 GitHub 账号与登录）。Monet 运行一个小型开源中继（[infra/report-worker](infra/report-worker/)）替你创建 issue：
+**通道 B——匿名端点**（无需 GitHub 账号与登录）。Monet 运行一个小型开源中继（[infra/report-worker](../infra/report-worker/)）替你创建 issue：
 
 ```bash
 curl -s -X POST https://monet-report.zenolab124.workers.dev/report \

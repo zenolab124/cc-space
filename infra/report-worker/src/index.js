@@ -2,7 +2,7 @@
  * Monet anonymous bug-report endpoint (Cloudflare Worker).
  *
  * Accepts POST /report from AI agents that have no GitHub login (see
- * llms-troubleshoot.md), and files a GitHub issue on the Monet repo using a
+ * llms/troubleshoot.md), and files a GitHub issue on the Monet repo using a
  * server-held fine-grained PAT (Issues read/write on this repo only).
  *
  * Abuse controls: honeypot field, size caps, per-IP cooldown via the Cache
@@ -57,7 +57,7 @@ export default {
       '',
       '---',
       contact && `Contact (voluntary): ${contact}`,
-      '— Filed anonymously via AI diagnostics ([llms-troubleshoot.md](../blob/main/llms-troubleshoot.md))',
+      '— Filed anonymously via AI diagnostics ([llms/troubleshoot.md](../blob/main/llms/troubleshoot.md))',
     ].filter(Boolean).join('\n')
 
     const gh = await fetch(`https://api.github.com/repos/${env.REPO}/issues`, {

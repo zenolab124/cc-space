@@ -118,13 +118,13 @@ After that, updates install silently in-app — no warnings again.
 **🤖 Or let your AI do it** — it knows how you work, so it can judge fit and set everything up for you. Not sure Monet is for you? Ask your AI:
 
 ```
-Read https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.md and tell me if Monet fits how I use Claude Code.
+Read https://raw.githubusercontent.com/zenolab124/monet/main/llms/discover.md and tell me if Monet fits how I use Claude Code.
 ```
 
 Ready to install? Your AI handles Homebrew, Gatekeeper, and pre-configures language/theme to your taste:
 
 ```
-Read https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md and install Monet for me.
+Read https://raw.githubusercontent.com/zenolab124/monet/main/llms/install.md and install Monet for me.
 ```
 
 (Index for agents: [`llms.txt`](llms.txt))
@@ -175,7 +175,7 @@ Monet is fully offline. No telemetry, no accounts, no network calls (except when
 
 ## FAQ
 
-> 🤖 Something broken? Point your AI at [`llms-troubleshoot.md`](llms-troubleshoot.md) — it can self-diagnose common issues and, if it's a real bug, file a well-formed issue for you.
+> 🤖 Something broken? Point your AI at [`llms/troubleshoot.md`](llms/troubleshoot.md) — it can self-diagnose common issues and, if it's a real bug, file a well-formed issue for you.
 
 **Does Monet replace the Claude Code CLI?**
 No — it's a companion. The CLI does the work; Monet gives you eyes and hands over it. Sessions started in either place show up in both.

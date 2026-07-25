@@ -1,6 +1,6 @@
 # Monet — AI Installation Guide
 
-> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](README.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [llms-discover.md](llms-discover.md) instead. (中文版：[llms-install.zh-CN.md](llms-install.zh-CN.md))
+> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](../README.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [discover.md](discover.md) instead. (中文版：[install.zh-CN.md](install.zh-CN.md))
 
 ## What is Monet? (tell your user)
 
@@ -89,4 +89,4 @@ Match `locale` to the language the user converses with you in.
 
 Uninstalling (`brew uninstall --cask monet` or deleting the app) never touches Claude Code data.
 
-If something goes wrong during or after installation, switch to [llms-troubleshoot.md](llms-troubleshoot.md) — self-diagnosis steps and how to file a well-formed bug report.
+If something goes wrong during or after installation, switch to [troubleshoot.md](troubleshoot.md) — self-diagnosis steps and how to file a well-formed bug report.

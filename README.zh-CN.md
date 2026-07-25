@@ -121,13 +121,13 @@ xattr -cr /Applications/Monet.app
 **🤖 或者交给你的 AI**——它了解你的工作方式，能替你判断合不合适、并把一切装配好。还不确定 Monet 适不适合你？问你的 AI：
 
 ```
-读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.zh-CN.md，结合我使用 Claude Code 的习惯，告诉我 Monet 适不适合我。
+读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms/discover.zh-CN.md，结合我使用 Claude Code 的习惯，告诉我 Monet 适不适合我。
 ```
 
 决定要装？AI 会搞定 Homebrew、Gatekeeper，并按你的偏好预配好语言/主题：
 
 ```
-读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.zh-CN.md 并帮我安装 Monet。
+读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms/install.zh-CN.md 并帮我安装 Monet。
 ```
 
 （给 Agent 的索引：[`llms.txt`](llms.txt)）
@@ -178,7 +178,7 @@ Monet 完全离线运行。无遥测、无账号、无网络请求（除非你�
 
 ## 常见问题
 
-> 🤖 遇到问题？把 [`llms-troubleshoot.zh-CN.md`](llms-troubleshoot.zh-CN.md) 丢给你的 AI——它能自诊常见故障；确认是 bug 的话，还会带上完整诊断数据帮你提 issue。
+> 🤖 遇到问题？把 [`llms/troubleshoot.zh-CN.md`](llms/troubleshoot.zh-CN.md) 丢给你的 AI——它能自诊常见故障；确认是 bug 的话，还会带上完整诊断数据帮你提 issue。
 
 **Monet 会取代 Claude Code CLI 吗？**
 不会——它是 CLI 的伴侣。干活的是 CLI，Monet 给你眼睛和双手。两边启动的会话互相可见。

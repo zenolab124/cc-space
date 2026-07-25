@@ -1,6 +1,6 @@
 # Monet — AI 安装指南
 
-> 本文档写给替用户安装 Monet 的 AI agent（Claude Code、Cursor 等）。如果你是人类，[README](README.zh-CN.md) 更友好。如果你的用户还在犹豫要不要装，先读 [llms-discover.zh-CN.md](llms-discover.zh-CN.md)。（English: [llms-install.md](llms-install.md)）
+> 本文档写给替用户安装 Monet 的 AI agent（Claude Code、Cursor 等）。如果你是人类，[README](../README.zh-CN.md) 更友好。如果你的用户还在犹豫要不要装，先读 [discover.zh-CN.md](discover.zh-CN.md)。（English: [install.md](install.md)）
 
 ## Monet 是什么（讲给用户听）
 
@@ -89,4 +89,4 @@ Monet 从 `~/.monet/settings.json` 读取设置。你可以**在 app 首次运�
 
 卸载（`brew uninstall --cask monet` 或删除 app）绝不影响 Claude Code 数据。
 
-安装中或安装后出问题，转 [llms-troubleshoot.zh-CN.md](llms-troubleshoot.zh-CN.md)——自诊步骤与规范提报方法。
+安装中或安装后出问题，转 [troubleshoot.zh-CN.md](troubleshoot.zh-CN.md)——自诊步骤与规范提报方法。
