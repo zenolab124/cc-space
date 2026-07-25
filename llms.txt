@@ -1,0 +1,11 @@
+# Monet
+
+> Free, open-source macOS desktop app that turns Claude Code session history into a browsable, searchable, interactive workspace — parallel-agent workbench, session archive, scheduled routines. Read-only over Claude Code's files, fully offline. A companion to the Claude Code CLI.
+
+Docs for AI agents, by user journey stage:
+
+- [llms-discover.md](https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.md): user hasn't installed Monet — understand the product, assess fit against the user's actual Claude Code usage, give a personalized recommendation
+- [llms-install.md](https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md): install via Homebrew or dmg, handle Gatekeeper, pre-configure language/theme/zoom in ~/.monet/settings.json before first launch
+- [llms-troubleshoot.md](https://raw.githubusercontent.com/zenolab124/monet/main/llms-troubleshoot.md): self-diagnose common issues; file a well-formed bug via gh or the anonymous report endpoint
+
+Human-facing: [README](https://github.com/zenolab124/monet)

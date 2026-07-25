@@ -115,11 +115,19 @@ xattr -cr /Applications/Monet.app
 
 After that, updates install silently in-app — no warnings again.
 
-**🤖 Or let your AI do it**: point your AI agent (Claude Code, Cursor, …) at [`llms-install.md`](llms-install.md) and it can explain Monet, install it, and pre-configure language/theme/zoom for you:
+**🤖 Or let your AI do it** — it knows how you work, so it can judge fit and set everything up for you. Not sure Monet is for you? Ask your AI:
+
+```
+Read https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.md and tell me if Monet fits how I use Claude Code.
+```
+
+Ready to install? Your AI handles Homebrew, Gatekeeper, and pre-configures language/theme to your taste:
 
 ```
 Read https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md and install Monet for me.
 ```
+
+(Index for agents: [`llms.txt`](llms.txt))
 
 ## Build from Source
 

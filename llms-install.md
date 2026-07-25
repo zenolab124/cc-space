@@ -1,6 +1,6 @@
 # Monet — AI Installation Guide
 
-> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](README.md) is friendlier.
+> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](README.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [llms-discover.md](llms-discover.md) instead.
 
 ## What is Monet? (tell your user)
 

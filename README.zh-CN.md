@@ -118,11 +118,19 @@ xattr -cr /Applications/Monet.app
 
 之后的版本更新由应用内静默完成，不再有任何提示。
 
-**🤖 或者交给你的 AI**：把 [`llms-install.md`](llms-install.md) 丢给你的 AI（Claude Code、Cursor 等），它能向你介绍 Monet、完成安装，并预先配好语言/主题/缩放：
+**🤖 或者交给你的 AI**——它了解你的工作方式，能替你判断合不合适、并把一切装配好。还不确定 Monet 适不适合你？问你的 AI：
+
+```
+读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms-discover.md，结合我使用 Claude Code 的习惯，告诉我 Monet 适不适合我。
+```
+
+决定要装？AI 会搞定 Homebrew、Gatekeeper，并按你的偏好预配好语言/主题：
 
 ```
 读取 https://raw.githubusercontent.com/zenolab124/monet/main/llms-install.md 并帮我安装 Monet。
 ```
+
+（给 Agent 的索引：[`llms.txt`](llms.txt)）
 
 ## 从源码构建
 
