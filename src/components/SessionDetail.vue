@@ -1397,9 +1397,9 @@ function fullTime(ts: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(locale.value)
 }
 
-/** 常驻显示用完整时间:年月日时分,不带秒(如 2026/7/6 14:32) */
-function fullStamp(ts: string | null | undefined): string {
-  if (!ts) return ''
+/** 常驻显示用完整时间:年月日时分,不带秒(如 2026/7/6 14:32);兼容 ms 时间戳 */
+function fullStamp(ts: string | number | null | undefined): string {
+  if (ts == null || ts === '') return ''
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return ''
   return d.toLocaleString(locale.value, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -1819,6 +1819,15 @@ const stickyDisplay = computed(() => {
   return null
 })
 const stickyGroup = computed(() => stickyDisplay.value?.group ?? null)
+
+/** 吸顶层的发送时间标注:与文档流原件同源(groupTimeLabels 按组下标) */
+const stickyTimeLabel = computed(() => {
+  const d = stickyDisplay.value
+  return d ? (groupTimeLabels.value[d.index] ?? '') : ''
+})
+
+/** 流式 pending 用户消息的发送时间标注(未落账,用前端发送时刻) */
+const pendingTimeLabel = computed(() => fullStamp(stream.value.pendingSentAt))
 
 function scrollToGroupIndex(i: number) {
   if (i < 0 || !shouldVirtualize.value) return
@@ -2572,6 +2581,10 @@ async function onReload() {
         <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
           <div class="text-xs font-medium mb-1 text-primary flex items-center gap-0.5">
             <span>{{ $t('session.you') }}</span>
+            <span
+              v-if="stickyTimeLabel"
+              class="text-muted-foreground/60 font-normal tabular-nums ml-1.5"
+            >{{ stickyTimeLabel }}</span>
             <span class="flex-1" />
             <button
               class="sticky-nav-btn"
@@ -2705,7 +2718,13 @@ async function onReload() {
           <div class="flex gap-3">
             <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
             <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
-              <div class="text-xs font-medium mb-1 text-primary">{{ $t('session.you') }}</div>
+              <div class="text-xs font-medium mb-1 text-primary flex items-baseline gap-2">
+                <span>{{ $t('session.you') }}</span>
+                <span
+                  v-if="pendingTimeLabel"
+                  class="text-muted-foreground/60 font-normal tabular-nums"
+                >{{ pendingTimeLabel }}</span>
+              </div>
               <MsgClamp>
                 <UserMsgContent :blocks="pendingUserBlocks" />
               </MsgClamp>
