@@ -69,6 +69,10 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 - Permission requests as GUI cards: dangerous commands flagged in red, AI annotates the risk in plain language; `Enter` to allow, `Esc` to deny
 - **Race mode**: broadcast one question to different models/channels, compare answers and cost side by side
 
+<p align="center">
+  <img src=".github/assets/race-mode.webp" alt="Race mode — one question broadcast to four models, thinking and answers compared side by side" width="920">
+</p>
+
 ### Session running — the CLI session, now in a GUI
 
 - True character-level streaming; first-token latency down to the API's first token
@@ -96,11 +100,19 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 - Wakes the machine from sleep, runs, puts it back to sleep; authorize once, silent thereafter
 - Real hooks statistics: configured ≠ working — see which hooks actually ran in the last 7 days
 
+<p align="center">
+  <img src=".github/assets/routines.webp" alt="Scheduled routines — natural-language instructions with cron schedules, run by the OS scheduler" width="920">
+</p>
+
 ### Always-on glances
 
 - Menu-bar quota: session window / weekly window / per-model usage with reset countdown, visible with the app closed
 - Desktop widgets: streaks, token pulse, 28-day heatmap, model mix
 - Cost estimation prices four token classes separately; unknown models are honestly labeled "unpriced" — never guessed
+
+<p align="center">
+  <img src=".github/assets/desktop-widgets.webp" alt="Desktop widgets — streaks, token pulse, 28-day heatmap, model mix, and cost estimation" width="920">
+</p>
 
 ### AI value-add (BYOAI)
 
@@ -112,6 +124,10 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 
 - Paper design language: warm, matte, ink-on-paper; a dark Ink theme included
 - No startup flash, ProMotion high refresh, virtual scrolling for huge sessions — details taken seriously, with a performance HUD (`Cmd+Shift+M`) keeping everything transparent
+
+<p align="center">
+  <img src=".github/assets/permission-checkup-ink.webp" alt="Permission checkup in the dark Ink theme — separate ledgers for the main app and background runner, every grant visible" width="920">
+</p>
 
 ## Install
 
@@ -212,6 +228,11 @@ Possibly. Session parsing and the interface layer are separate, so supporting mo
 - [vue-i18n](https://vue-i18n.intlify.dev/) — internationalization
 - [@dnd-kit/vue](https://dndkit.com/) — drag and drop
 - [Swift WidgetKit](https://developer.apple.com/documentation/widgetkit) — macOS widgets
+
+## Acknowledgments
+
+- Thanks to the [LINUX DO](https://linux.do/) community for the sharing culture and honest feedback
+- Thanks to every early user who filed issues and suggestions
 
 ## License
 

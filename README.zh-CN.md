@@ -69,6 +69,10 @@ Monet 把它们收进一面墙：所有会话可浏览、可搜索、可并行�
 - 权限请求变 GUI 卡片：危险命令红色警示、AI 用人话批注风险，`Enter` 放行 `Esc` 拒绝
 - **赛马模式**：同一个问题广播给不同模型/渠道，答案与成本并排见分晓
 
+<p align="center">
+  <img src=".github/assets/race-mode.webp" alt="赛马模式——同一问题广播给四个模型，思考过程与答案并排对比" width="920">
+</p>
+
 ### 会话运行——CLI 会话开进 GUI
 
 - 字符级真流式，首字延迟缩到 API 首个 token
@@ -96,11 +100,19 @@ Monet 把它们收进一面墙：所有会话可浏览、可搜索、可并行�
 - 睡眠中唤醒执行、跑完自动回睡；一次授权，全程静默
 - Hooks 真实运行统计：配置了 ≠ 在工作，近 7 天每条跑没跑，这里看真相
 
+<p align="center">
+  <img src=".github/assets/routines.webp" alt="定时任务——自然语言指令与 cron 时间计划，系统级调度" width="920">
+</p>
+
 ### 常驻信息面
 
 - 菜单栏实时额度：会话窗口 / 周窗口 / 分模型用量与重置倒计时，主 app 关了照样显示
 - 桌面小组件：连续活跃、token 脉搏、28 天热力图、模型分布
 - 成本估算分四类 token 计价，未知模型如实标「未计价」，绝不瞎猜
+
+<p align="center">
+  <img src=".github/assets/desktop-widgets.webp" alt="桌面小组件——连续活跃、token 脉搏、28 天热力图、模型分布、费用估算" width="920">
+</p>
 
 ### AI 增值（BYOAI）
 
@@ -112,6 +124,10 @@ Monet 把它们收进一面墙：所有会话可浏览、可搜索、可并行�
 
 - Paper 设计语言：暖调、哑光、墨上纸；附 Ink 深色主题
 - 启动无白闪、ProMotion 高刷、大会话虚拟滚动——细节较真，性能 HUD（`Cmd+Shift+M`）全程透明
+
+<p align="center">
+  <img src=".github/assets/permission-checkup-ink.webp" alt="Ink 深色主题下的权限体检——主应用与后台任务两本账，逐项透明" width="920">
+</p>
 
 ## 安装
 
@@ -212,6 +228,11 @@ Windows 已支持（核心功能完整，macOS 系统集成除外）；Linux 暂
 - [vue-i18n](https://vue-i18n.intlify.dev/) — 国际化
 - [@dnd-kit/vue](https://dndkit.com/) — 拖拽
 - [Swift WidgetKit](https://developer.apple.com/documentation/widgetkit) — macOS 小组件
+
+## 致谢
+
+- 感谢 [LINUX DO](https://linux.do/) 社区的分享氛围与真实反馈
+- 感谢所有提交 issue 与建议的早期用户
 
 ## 开源协议
 
