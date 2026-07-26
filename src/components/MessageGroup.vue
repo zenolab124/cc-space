@@ -7,6 +7,7 @@ import MessageBlock from './MessageBlock.vue'
 import SystemEventRow from './SystemEventRow.vue'
 import MsgClamp from './MsgClamp.vue'
 import UserMsgContent from './UserMsgContent.vue'
+import DividerMark from './DividerMark.vue'
 
 // 消息组渲染:一个用户消息 + 后续回复(assistant/system)。抽出后被 SessionDetail 三处调用:
 // (1) 虚拟化 items 循环 (2) shouldVirtualize=false 全铺 v-for (3) 末组豁免独立铺。
@@ -41,22 +42,14 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
 
 <template>
   <!-- 跨天分隔:这轮起进入新的一天(首组标会话起始日) -->
-  <div v-if="dayLabel" class="day-divider">
-    <div class="day-line day-line-l" />
-    <span class="day-text">{{ dayLabel }}</span>
-    <div class="day-line day-line-r" />
-  </div>
+  <DividerMark v-if="dayLabel" :label="dayLabel" class="mt-2 mb-0.5" />
   <!-- 用户消息:有 AI 回复时吸顶,无回复的短轮次不启用(减少 sticky 元素数量) -->
   <!-- /model 切换成功(stdout 事实源):渲染成与渠道切换同款的配置分界横线 -->
-  <div
+  <DividerMark
     v-if="group.user && group.user.type === 'user' && modelSwitchName(group.user)"
-    class="channel-mark"
-  >
-    <div class="flex-1 h-px bg-border" />
-    <span class="i-carbon-model-alt w-3 h-3" />
-    <span>{{ $t('session.modelSwitchMark', { name: modelSwitchName(group.user) }) }}</span>
-    <div class="flex-1 h-px bg-border" />
-  </div>
+    icon="i-carbon-model-alt"
+    :label="$t('session.modelSwitchMark', { name: modelSwitchName(group.user) })"
+  />
   <!-- /model 命令记录本身:静默(事件由上面的 stdout 横线承载;取消选择时无 stdout,不留痕) -->
   <template v-else-if="group.user && group.user.type === 'user' && isModelCommandRecord(group.user)" />
   <!-- 纯系统注入(无真实用户输入):降级为系统注解样式 -->
@@ -93,16 +86,12 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
     </div>
   </div>
   <!-- 渠道切换横线:用户消息锚点 -->
-  <div
+  <DividerMark
     v-for="(m, j) in (group.user?.uuid ? channelMarksByUuid.get(group.user.uuid) ?? [] : [])"
     :key="`channel-mark-${group.user?.uuid}-${j}`"
-    class="channel-mark"
-  >
-    <div class="flex-1 h-px bg-border" />
-    <span class="i-carbon-cloud w-3 h-3" />
-    <span>{{ channelMarkLabel(m) }}</span>
-    <div class="flex-1 h-px bg-border" />
-  </div>
+    icon="i-carbon-cloud"
+    :label="channelMarkLabel(m)"
+  />
   <!-- 回复(AI + system) -->
   <template v-for="(resp, ri) in group.responses" :key="resp.uuid || resp">
     <SystemEventRow v-if="resp.type === 'system'" :record="resp" />
@@ -142,38 +131,16 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
       </div>
     </div>
     <!-- 渠道切换横线:回复消息锚点 -->
-    <div
+    <DividerMark
       v-for="(m, j) in (resp.uuid ? channelMarksByUuid.get(resp.uuid) ?? [] : [])"
       :key="`channel-mark-${resp.uuid}-${j}`"
-      class="channel-mark"
-    >
-      <div class="flex-1 h-px bg-border" />
-      <span class="i-carbon-cloud w-3 h-3" />
-      <span>{{ channelMarkLabel(m) }}</span>
-      <div class="flex-1 h-px bg-border" />
-    </div>
+      icon="i-carbon-cloud"
+      :label="channelMarkLabel(m)"
+    />
   </template>
 </template>
 
 <style scoped>
-/* 跨天分隔:两侧向中心渐显的细线 + 居中淡字,轻于消息内容不抢视线 */
-.day-divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 8px 0 2px;
-  font-size: 10px;
-  user-select: none;
-}
-.day-text {
-  color: color-mix(in oklch, var(--muted-foreground) 72%, transparent);
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
-}
-.day-line { flex: 1; height: 1px; }
-.day-line-l { background: linear-gradient(to right, transparent, var(--border)); }
-.day-line-r { background: linear-gradient(to left, transparent, var(--border)); }
-
 /* 吸顶层接管展示时文档流原件隐形占位 */
 .user-msg-ghost { visibility: hidden; }
 </style>

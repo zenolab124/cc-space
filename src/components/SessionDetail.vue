@@ -43,6 +43,7 @@ import type { SessionRecord, SessionSummary, ContentBlock } from '@/types'
 import MessageBlock from './MessageBlock.vue'
 import MessageGroup from './MessageGroup.vue'
 import SystemEventRow from './SystemEventRow.vue'
+import DividerMark from './DividerMark.vue'
 import SessionTopBar from './topbar/SessionTopBar.vue'
 import SlashCommandPanel from './SlashCommandPanel.vue'
 import SlashHelpCard from './SlashHelpCard.vue'
@@ -2597,16 +2598,12 @@ async function onReload() {
     <div ref="scrollContentEl" class="space-y-4 pb-2 relative">
       <template v-if="!hideHistory">
         <!-- 渠道切换横线:会话起点的切换(本地记账,jsonl 无渠道信息) -->
-        <div
+        <DividerMark
           v-for="(m, j) in channelMarksByUuid.get(null) ?? []"
           :key="`channel-mark-start-${j}`"
-          class="channel-mark"
-        >
-          <div class="flex-1 h-px bg-border" />
-          <span class="i-carbon-cloud w-3 h-3" />
-          <span>{{ channelMarkLabel(m) }}</span>
-          <div class="flex-1 h-px bg-border" />
-        </div>
+          icon="i-carbon-cloud"
+          :label="channelMarkLabel(m)"
+        />
         <!-- 按轮次分组,虚拟化 + 末组豁免:
              - 非末组(0..n-2)进虚拟窗口,tanstack-vue-virtual 按 estimateSize 粗估、measureElement 校正真高;
              - 末组独立铺,保留 anchorRO/contentRO/追随滚动/pinLastGroupBeforeSwap 全套现有语义。
@@ -2693,16 +2690,12 @@ async function onReload() {
           />
         </div>
         <!-- 锚点失效的切换横线兜底:末尾按序渲染,不静默消失 -->
-        <div
+        <DividerMark
           v-for="(m, j) in unanchoredChannelMarks"
           :key="`channel-mark-tail-${j}`"
-          class="channel-mark"
-        >
-          <div class="flex-1 h-px bg-border" />
-          <span class="i-carbon-cloud w-3 h-3" />
-          <span>{{ channelMarkLabel(m) }}</span>
-          <div class="flex-1 h-px bg-border" />
-        </div>
+          icon="i-carbon-cloud"
+          :label="channelMarkLabel(m)"
+        />
       </template>
 
       <!-- 流式区:pendingUserMessage + streamingTurns(横幅已移出文档流,悬浮层见上方) -->
@@ -3085,15 +3078,6 @@ async function onReload() {
 }
 .sticky-nav-btn:hover:not(:disabled) { color: var(--foreground); background: var(--muted); }
 .sticky-nav-btn:disabled { opacity: 0.3; cursor: default; }
-/* 渠道切换横线:细分隔线 + 居中小字,本地记账的轻量视觉(非消息气泡) */
-.channel-mark {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  color: var(--muted-foreground);
-  user-select: none;
-}
 .typing-dot {
   width: 4px;
   height: 4px;

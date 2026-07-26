@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SessionRecord } from '@/types'
+import DividerMark from './DividerMark.vue'
 
 const { t } = useI18n()
 
@@ -25,18 +26,23 @@ const preTokens = computed(() => {
   const v = props.record.compactMetadata?.preTokens
   return typeof v === 'number' ? v : null
 })
+
+/** compact 边界文案：边界标题 + 可选压缩前 token 数 */
+const compactLabel = computed(() => {
+  let label = t('block.compactBoundary')
+  if (preTokens.value) label += t('block.compactTokens', { tokens: Math.round(preTokens.value / 1000) })
+  return label
+})
 </script>
 
 <template>
-  <!-- compact 边界：分隔线形态 -->
-  <div v-if="record.subtype === 'compact_boundary'" class="flex items-center gap-3 my-3 text-xs text-muted-foreground">
-    <div class="flex-1 h-px bg-border" />
-    <span class="flex items-center gap-1.5 shrink-0">
-      <span class="i-carbon-compress w-3.5 h-3.5" />
-      {{ $t('block.compactBoundary') }}<template v-if="preTokens">{{ $t('block.compactTokens', { tokens: Math.round(preTokens / 1000) }) }}</template>
-    </span>
-    <div class="flex-1 h-px bg-border" />
-  </div>
+  <!-- compact 边界：分隔线形态（与渠道/模型切换、跨天分隔同款） -->
+  <DividerMark
+    v-if="record.subtype === 'compact_boundary'"
+    icon="i-carbon-compress"
+    :label="compactLabel"
+    class="my-3"
+  />
 
   <!-- API 错误：红色紧凑提示行（连续重试已在 messages 层折叠为末条） -->
   <div v-else-if="record.subtype === 'api_error'" class="my-2 rounded-md bg-destructive/5 border border-destructive/20 px-3 py-1.5 text-xs flex items-center gap-1.5 flex-wrap">
