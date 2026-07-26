@@ -75,7 +75,7 @@ Monet 从 `~/.monet/settings.json` 读取设置。你可以**在 app 首次运�
 
 ## 验证
 
-- app 在运行：`pgrep -x Monet` 输出 PID。
+- app 在运行：macOS `pgrep -x Monet` / Windows `tasklist | findstr Monet`。
 - 首启后 `~/.monet/` 目录存在。
 - 用户有历史会话的话，档案馆会列出项目。全新机器显示空状态——正常，不是故障。
 

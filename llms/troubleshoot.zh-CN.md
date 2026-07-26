@@ -4,6 +4,8 @@
 
 ## 诊断基础
 
+> 以下命令以 macOS 为主。Windows 上：版本看 设置 → 关于，进程用 `tasklist | findstr Monet`，日志同样在用户目录 `~/.monet/` 下；launchd/tray/唤醒相关条目不适用于 Windows。
+
 | 要什么 | 怎么拿 |
 |--------|--------|
 | Monet 版本 | `defaults read /Applications/Monet.app/Contents/Info.plist CFBundleShortVersionString` |

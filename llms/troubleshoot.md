@@ -4,6 +4,8 @@
 
 ## Diagnostic basics
 
+> Commands below are macOS-first. On Windows: version via Settings → About, processes via `tasklist | findstr Monet`, logs likewise under `~/.monet/` in the user directory; launchd/tray/wake items do not apply to Windows.
+
 | What | How |
 |------|-----|
 | Monet version | `defaults read /Applications/Monet.app/Contents/Info.plist CFBundleShortVersionString` |

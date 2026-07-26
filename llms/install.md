@@ -75,7 +75,7 @@ Match `locale` to the language the user converses with you in.
 
 ## Verify
 
-- The app is running: `pgrep -x Monet` prints a PID.
+- The app is running: macOS `pgrep -x Monet` / Windows `tasklist | findstr Monet`.
 - `~/.monet/` exists after first launch.
 - If the user has prior Claude Code sessions, the archive view lists their projects. A fresh machine shows an empty state — that's normal, not a failure.
 
