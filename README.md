@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS-purple" alt="platform">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-purple" alt="platform">
   <img src="https://img.shields.io/badge/built_with-Tauri_2-24c8db" alt="Tauri">
   <img src="https://img.shields.io/badge/Vue-3.5-42b883" alt="Vue">
   <img src="https://img.shields.io/badge/Rust-stable-e57324" alt="Rust">
@@ -30,7 +30,14 @@
   <a href="#features">Features</a> •
   <a href="#install">Install</a> •
   <a href="#build-from-source">Build</a> •
-  <a href="#data--privacy">Privacy</a>
+  <a href="#data--privacy">Privacy</a> •
+  <a href="#faq">FAQ</a>
+</p>
+
+<p align="center">
+  Don't feel like reading? Hand this line to your AI — it will assess, install, and troubleshoot for you:<br>
+  <code>Read https://raw.githubusercontent.com/zenolab124/monet/main/llms.txt</code><br>
+  <sub>If you are that AI: read the llms.txt above and follow its guidance to serve your user.</sub>
 </p>
 
 <p align="center">
@@ -39,95 +46,95 @@
 
 ## What is Monet?
 
-A desktop app that turns your Claude Code session history into a browsable, searchable, and interactive workspace. Named after [Claude Monet](https://en.wikipedia.org/wiki/Claude_Monet) — yes, that Claude.
+Every conversation you have with Claude Code is scattered across terminal windows — close one and it's gone, run several and you can't keep up, start a long task and all you can do is wait.
 
-Monet **never writes** to Claude Code's JSONL files. All metadata is stored separately in `~/.monet/`.
+Monet gathers them onto one wall: every session browsable, searchable, and commandable in parallel. The CLI does the work; Monet gives you eyes and hands.
 
 ## Why Monet?
 
-- **Mission control, not just a viewer.** Run and monitor multiple agents in parallel — split columns, a live monitor rail, and inline permission approval. Command your agents like a trader watches the market.
-- **Your data stays yours.** Read-only over Claude Code's files by architecture, fully offline, zero telemetry, no accounts. Everything Monet adds lives in its own directory.
-- **It works while you sleep.** Cron routines run through the OS scheduler even when Monet is closed — your Mac can wake itself up, run the task, and go back to sleep.
+**Command your agents like a trader watches the market.** Unlimited parallel session columns spread out horizontally; the monitor rail shows every session's status, output, and token spend at a glance. Approve permissions, answer questions, retry failures — one click on the card. You stop being the person alt-tabbing between terminals and become the one at the command desk.
+
+**A home for multi-channel players.** Official subscription, third-party APIs, self-hosted proxies, local models — each session on its own channel, hot-switchable mid-conversation: a strong model for the hard turn, a cheap channel for the chores. "Follow CLI" and "Official Direct" stand side by side, and the settings page shows exactly where your CLI config points.
+
+**Your data stays yours.** Read-only over Claude Code's session files by architecture — there is no write path in the code, not a toggle. Fully offline, zero telemetry, no accounts; everything Monet adds lives in its own `~/.monet/` directory, so uninstalling leaves your data untouched.
+
+**It works while you sleep.** Scheduled tasks run through the OS scheduler even with Monet closed; your Mac can wake itself on time, run the task, and go back to sleep. System notifications call you back whenever needed — you can walk away, the work doesn't stop.
 
 ## Features
 
-### 🖥 Workbench — parallel agent control
+### Workbench — parallel session command
 
-- Multi-tab workspaces with draggable split columns; 5+ sessions streaming side by side without blocking each other
-- Monitor rail: live status, tail output, and token usage for every session at a glance — approve permissions or retry right from the card
-- **Race mode**: fork a session into parallel lanes, broadcast one prompt to different models/channels, and compare answers and token cost side by side
-- Permission requests as GUI cards: dangerous commands get a red warning, AI annotates the risk in plain language; `Enter` to allow, `Esc` to deny
-- Async task panel for subagents, workflows, and background tasks with live progress
-- Sessions started in your terminal are detected, followed live, and tracked via official CLI hooks (Turn Signal)
+- No cap on column count; when the screen runs out, scroll horizontally — wheel input glides like a native trackpad
+- Monitor rail overviews every session: live status, tail output, token usage; approve/retry/answer right on the card
+- Permission requests as GUI cards: dangerous commands flagged in red, AI annotates the risk in plain language; `Enter` to allow, `Esc` to deny
+- **Race mode**: broadcast one question to different models/channels, compare answers and cost side by side
 
-### 📖 Reading experience
+### Session running — the CLI session, now in a GUI
 
-- True streaming — rendered from the CLI's character-level partial message events, with adaptive typewriter pacing
-- Purpose-built cards for 18+ tool calls: Edit shows red/green diffs, Bash shows commands and exit codes, unknown tools degrade gracefully
-- Inline HTML/SVG rendering in replies — comparison cards, tables, and diagrams instead of walls of text
-- Paste or drag images into the input; thumbnails with a full-screen viewer
-- Thinking blocks with word counts, anchor-dot navigation for long chats, sticky prompt headers, date dividers
+- True character-level streaming; first-token latency down to the API's first token
+- **Hot-switch channel / model / thinking effort mid-session** — no process restart, no lost context
+- File ledger: which files this session touched, every diff, one click back to "why the AI changed it"
+- Runner supervises your dev server: logs right next to the session, errors fed to the AI in one click
+- Sessions running in your terminal are auto-detected and followed live — you can even terminate them from Monet
 
-### 🗄 Archive & search
+### Reading experience — one engine for live and past
 
-- Three-pane read-only browser: projects → sessions → detail; watch a live session without touching it
-- Full-text search across every project in milliseconds, plus an agent-powered semantic mode for fuzzy memories
+- 18+ purpose-built tool-call cards: Edit shows side-by-side red/green diffs, Bash separates command and output, both copyable
+- Inline HTML/SVG rendering in replies: comparison cards, tables, diagrams — no more walls of text
+- Anchor navigation + pinned prompts + back-to-bottom float: glide through sessions hundreds of turns long
+- Per-turn token quadruple and a context-usage bar that warns before overflow — see where the money goes, live
+
+### Archive & search
+
+- Zero import: install and your whole history is there, organized by project
+- Millisecond full-text search; can't recall the keyword? Ask in natural language and AI synthesizes the answer
 - AI-generated titles, tags, and summaries — stored outside the JSONL, of course
 
-### 📋 Transparency
+### Automation
 
-- **File ledger**: exactly which files a session touched, a per-edit diff timeline, and a read-only git snapshot
-- Per-turn token stats, cache hit rate, and a context-window usage bar that warns before you hit the ceiling
+- "Summarize yesterday's sessions every morning at nine" — natural language becomes a scheduled task
+- Wakes the machine from sleep, runs, puts it back to sleep; authorize once, silent thereafter
+- Real hooks statistics: configured ≠ working — see which hooks actually ran in the last 7 days
 
-### ⚙️ Automation & system integration
+### Always-on glances
 
-- Cron routines executed by the OS scheduler (launchd) — they run even when Monet isn't open
-- Wake-from-sleep: schedule overnight runs; one-time authorization, then fully silent
-- Menu bar quota monitor: live session/weekly usage percentages and reset countdown
-- Native WidgetKit desktop widgets: streaks, token pulse, work-rhythm heatmap, model mix, and more
-- Built-in MCP server: search your session history and manage routines from inside any Claude Code CLI session
+- Menu-bar quota: session window / weekly window / per-model usage with reset countdown, visible with the app closed
+- Desktop widgets: streaks, token pulse, 28-day heatmap, model mix
+- Cost estimation prices four token classes separately; unknown models are honestly labeled "unpriced" — never guessed
 
-### 🎨 Craft & customization
+### AI value-add (BYOAI)
 
-- Paper design language — warm, matte, ink-on-paper; a dark Ink theme included
-- 12 built-in languages, and AI can translate the entire UI into any other language you name
-- Channels: official API, self-hosted proxies, OpenAI-protocol endpoints, even Apple's on-device models — switch per session
-- Per-session model, thinking effort, and permission mode, all from a capsule in the session header
+- Monet ships no model and charges nothing for AI — every capability runs on your own channels and quota, each toggleable, fully audited
+- Built-in MCP server: the Claude in your sessions can search your history, create scheduled tasks, and read Runner logs
+- 12 UI languages; name any other language and AI translates the entire interface on the spot
+
+### Craft
+
+- Paper design language: warm, matte, ink-on-paper; a dark Ink theme included
+- No startup flash, ProMotion high refresh, virtual scrolling for huge sessions — details taken seriously, with a performance HUD (`Cmd+Shift+M`) keeping everything transparent
 
 ## Install
 
-**Homebrew**:
+**Homebrew** (macOS):
 
 ```bash
 brew tap zenolab124/tap
 brew install --cask monet
 ```
 
-Or download the latest `.dmg` from [Releases](../../releases).
+Or download from [Releases](../../releases): macOS `.dmg` / Windows installer.
 
-> macOS only for now. Requires macOS 11+ (Apple Silicon).
+> macOS 11+ (Apple Silicon) gets the full experience; Windows covers the core features, with system-level integrations (widgets, menu bar, wake-from-sleep) being macOS-only.
 
-**First launch**: Monet is signed with a stable identity but not yet notarized by Apple, so Gatekeeper will warn on first open. Right-click the app → **Open** (once), or run:
+**First launch (macOS)**: Monet is signed but not yet notarized by Apple, so Gatekeeper warns on first open. Right-click the app → **Open** (once), or run:
 
 ```bash
 xattr -cr /Applications/Monet.app
 ```
 
-After that, updates install silently in-app — no warnings again.
+Updates install silently in-app afterwards.
 
-**🤖 Or let your AI do it** — it knows how you work, so it can judge fit and set everything up for you. Not sure Monet is for you? Ask your AI:
-
-```
-Read https://raw.githubusercontent.com/zenolab124/monet/main/llms/discover.md and tell me if Monet fits how I use Claude Code.
-```
-
-Ready to install? Your AI handles Homebrew, Gatekeeper, and pre-configures language/theme to your taste:
-
-```
-Read https://raw.githubusercontent.com/zenolab124/monet/main/llms/install.md and install Monet for me.
-```
-
-(Index for agents: [`llms.txt`](llms.txt))
+**Works out of the box, zero config**: if your `claude` runs, Monet runs — it uses the CLI's own configuration by default, and your session history is discovered automatically with no import step. CLI not installed yet? The Settings page installs it in one click.
 
 ## Build from Source
 
@@ -171,36 +178,39 @@ Without it, the build falls back to ad-hoc signing — functional, but TCC permi
 | Monet metadata (titles, tags, routines) | `~/.monet/` | Read-write |
 | MCP registration | `~/.claude/settings.json` | Adds `monet` entry under `mcpServers` |
 
-Monet is fully offline. No telemetry, no accounts, no network calls (except when you explicitly use streaming via Claude Code CLI).
+Fully offline, zero telemetry, no accounts. Credential discipline: API tokens never enter command-line arguments, temp files are deleted right after use, and the CLI's OAuth credentials are never refreshed by Monet.
 
 ## FAQ
 
-> 🤖 Something broken? Point your AI at [`llms/troubleshoot.md`](llms/troubleshoot.md) — it can self-diagnose common issues and, if it's a real bug, file a well-formed issue for you.
+> Something broken? Skip the docs — hand this to your AI: `Read https://raw.githubusercontent.com/zenolab124/monet/main/llms.txt and help me troubleshoot Monet`. It can self-diagnose common issues and, if it's a real bug, file a report with diagnostics attached (no GitHub account needed).
 
 **Does Monet replace the Claude Code CLI?**
-No — it's a companion. The CLI does the work; Monet gives you eyes and hands over it. Sessions started in either place show up in both.
+No — it's a companion. The CLI does the work; Monet gives you eyes and hands. Sessions started in either show up in both.
 
 **Is my session data safe?**
-Monet never writes to Claude Code's JSONL files — that's an architectural guarantee, not a setting. Titles, tags, and other extras live in `~/.monet/`. Delete Monet and your Claude Code data is untouched.
+Read-only by architecture, verifiable in the open source. Delete Monet and your Claude Code data is untouched.
+
+**Anything to configure after install?**
+No. If the CLI runs, Monet runs; multi-channel and AI value-add are optional upgrades.
 
 **Why does Gatekeeper warn on first launch?**
-Monet is signed with a stable identity but not yet notarized by Apple. Right-click → Open once (or `xattr -cr /Applications/Monet.app`), and in-app updates are silent afterwards.
+Signed but not yet notarized. Right-click → Open once, and updates are silent afterwards.
 
-**Why does it ask for system permissions?**
-Each permission serves one feature: Terminal automation for "resume in terminal"; accessibility and screen recording are only used when an agent task needs to operate the UI or observe the screen. The Settings page has a permission health-check panel showing exactly what's granted.
+**Windows / Linux?**
+Windows is supported (core features complete, minus macOS system integrations); Linux has no near-term plans.
 
-**What about Windows / Linux?**
-macOS (Apple Silicon) is first. The stack (Tauri + Rust) is cross-platform and Windows support is on the roadmap.
+**Will it support tools beyond Claude Code?**
+Possibly. Session parsing and the interface layer are separate, so supporting more agentic CLIs isn't ruled out — open an issue and vote if you want it.
 
 ## Tech Stack
 
 - [Tauri 2](https://tauri.app/) — Rust backend + system WebView
 - [Vue 3](https://vuejs.org/) + TypeScript + Composition API
-- [UnoCSS](https://unocss.dev/) — Atomic CSS (preset-wind4 + preset-icons)
-- [Shiki](https://shiki.style/) — Syntax highlighting
+- [UnoCSS](https://unocss.dev/) — atomic CSS (preset-wind4 + preset-icons)
+- [Shiki](https://shiki.style/) — syntax highlighting
 - [markdown-it](https://github.com/markdown-it/markdown-it) — Markdown rendering
-- [vue-i18n](https://vue-i18n.intlify.dev/) — i18n
-- [@dnd-kit/vue](https://dndkit.com/) — Drag and drop
+- [vue-i18n](https://vue-i18n.intlify.dev/) — internationalization
+- [@dnd-kit/vue](https://dndkit.com/) — drag and drop
 - [Swift WidgetKit](https://developer.apple.com/documentation/widgetkit) — macOS widgets
 
 ## License
