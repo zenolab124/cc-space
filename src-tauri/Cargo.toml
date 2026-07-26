@@ -79,7 +79,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSString", "NSDictionary", "NSArray", "NSObject",
     "NSAttributedString", "NSEnumerator", "NSRange",
     "NSData", "NSGeometry", "NSDate", "NSRunLoop", "NSThread",
+    "NSTimer", "block2",
 ] }
+block2 = { version = "0.6", default-features = false, features = ["alloc"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSFont", "NSParagraphStyle", "NSText", "NSAttributedString",
     "NSMenu", "NSMenuItem", "NSStatusItem", "NSColor",

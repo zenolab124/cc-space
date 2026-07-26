@@ -24,119 +24,150 @@ fn macos_main() {
     let mtm = MainThreadMarker::new().expect("must run on main thread");
     let ns_app = NSApplication::sharedApplication(mtm);
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    // 完成应用注册握手：裸 NSRunLoop 轮询（无 NSApp.run）场景下的稳态加固
-    ns_app.finishLaunching();
 
     // 原生 NSStatusItem + statusItem.menu：点击与菜单弹出全权交给 AppKit
     // （与主流菜单栏应用同路径）。此前经 tray-icon 的自定义 view 拦截鼠标事件
     // 再 performClick 编程弹出，属模仿 AppKit 私有行为的非标准路径，
     // 在新系统上偶发菜单错位弹到屏幕左上角
     let status_item = create_status_item(mtm);
-    // muda 菜单句柄保活：NSMenu 本体被 statusItem retain，但 Rust 侧句柄
-    // 持有到下一次替换，避免依赖 muda 内部释放语义
-    let mut menu_keeper: Option<muda::Menu> = None;
-    let initial_menu = build_menu(None);
-    apply_menu(&status_item, initial_menu, &mut menu_keeper);
+    // 菜单对象常驻：NSMenu 只创建并挂载一次，此后每次数据刷新原位清空重填内容。
+    // 此前每次刷新都新建 NSMenu 再 setMenu 替换，属非常规用法——主流菜单栏应用的
+    // 菜单对象终身不变；新系统上原生路径仍偶发弹出错位（菜单弹到屏幕左上角），
+    // 收敛掉「statusItem 与菜单的关联被高频重建」这一残余变量
+    let menu = muda::Menu::new();
+    fill_menu(&menu, None);
+    attach_menu(&status_item, &menu);
     set_tooltip(&status_item, "Monet");
 
-    let menu_channel = muda::MenuEvent::receiver();
     let pending: Arc<Mutex<Option<QuotaInfo>>> = Arc::new(Mutex::new(None));
     let fetching = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // 计时一律用墙钟毫秒：Instant 在 macOS 睡眠期间暂停，合盖过夜后
-    // elapsed 仍是睡前值，周期刷新会白等一整个间隔
-    let mut last_refresh_ms = now_ms() - REFRESH_INTERVAL_MS;
-    let mut last_render_ms = now_ms();
-    let mut title_config_mtime = tray_title_mtime();
-    let mut cache_mtime = quota_cache_mtime();
-    // 进程内记住最新一帧数据（含 error 标注），周期重渲染倒计时/数据年龄用
-    let mut last_info: Option<QuotaInfo> = None;
-    let mut in_backoff = quota::backoff_remaining_secs().is_some();
+    let mut state = TrayState {
+        // 计时一律用墙钟毫秒：Instant 在 macOS 睡眠期间暂停，合盖过夜后
+        // elapsed 仍是睡前值，周期刷新会白等一整个间隔
+        last_refresh_ms: now_ms() - REFRESH_INTERVAL_MS,
+        last_render_ms: now_ms(),
+        title_config_mtime: tray_title_mtime(),
+        cache_mtime: quota_cache_mtime(),
+        last_info: None,
+        in_backoff: quota::backoff_remaining_secs().is_some(),
+    };
 
     // 冷启动先用磁盘缓存渲染一帧（含数据年龄行），不等首次 fetch
     if let Some(info) = quota::peek_cached_quota() {
-        apply_to_tray(&status_item, &info, &mut menu_keeper);
-        last_info = Some(info);
+        apply_to_tray(&status_item, &info, &menu);
+        state.last_info = Some(info);
     }
 
-    loop {
-        run_loop_once(1.0);
+    // 周期逻辑挂 NSTimer（default mode），事件循环交给标准 NSApp.run()。
+    // 此前裸 NSRunLoop 每秒轮询（无 NSApp.run）是旧 tray-icon 时代继承的非标准结构，
+    // AppKit 的菜单定位与事件路由假设标准事件循环——与主流菜单栏应用彻底同构。
+    // 菜单打开期间 runloop 在 tracking mode，default-mode timer 不触发，
+    // 重填不会撞上正在显示的菜单
+    let state = std::cell::RefCell::new(state);
+    let tick = block2::RcBlock::new(move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
+        tray_tick(&status_item, &menu, &mut state.borrow_mut(), &pending, &fetching);
+    });
+    let _timer = unsafe {
+        objc2_foundation::NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0, true, &tick)
+    };
+    ns_app.run();
+}
 
-        while let Ok(event) = menu_channel.try_recv() {
-            match event.id.0.as_str() {
-                "show" => open_main_app(),
-                "refresh" => {
-                    // 手动刷新：强制打 API（跳过磁盘 TTL；限流冷却期内 lib 层会拦截）
-                    request_refresh(&pending, &fetching, true);
-                    last_refresh_ms = now_ms();
-                }
-                "quit" => {
-                    unregister_and_exit();
-                }
-                _ => {}
-            }
-        }
+#[cfg(target_os = "macos")]
+struct TrayState {
+    last_refresh_ms: i64,
+    last_render_ms: i64,
+    title_config_mtime: Option<std::time::SystemTime>,
+    cache_mtime: Option<std::time::SystemTime>,
+    /// 进程内记住最新一帧数据（含 error 标注），周期重渲染倒计时/数据年龄用
+    last_info: Option<QuotaInfo>,
+    in_backoff: bool,
+}
 
-        // 主线程消费后台线程的 quota 结果。
-        // 注意不在此处重采 cache_mtime：fetch 在途期间（最长 15s 网络超时）
-        // 主应用可能写盘，现采会把那次写入标记为已消费、吞掉下方 mtime 分支
-        // 用新数据清 error 的机会；tray 自己写盘引发的 mtime 分支多渲染一帧无害
-        if let Ok(mut guard) = pending.try_lock() {
-            if let Some(info) = guard.take() {
-                apply_to_tray(&status_item, &info, &mut menu_keeper);
-                last_info = Some(info);
-                last_render_ms = now_ms();
+/// 每秒 tick：消费菜单事件与后台刷新结果、侦测配置/缓存变化、周期重渲染与周期刷新
+#[cfg(target_os = "macos")]
+fn tray_tick(
+    status_item: &objc2_app_kit::NSStatusItem,
+    menu: &muda::Menu,
+    st: &mut TrayState,
+    pending: &Arc<Mutex<Option<QuotaInfo>>>,
+    fetching: &Arc<std::sync::atomic::AtomicBool>,
+) {
+    while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+        match event.id.0.as_str() {
+            "show" => open_main_app(),
+            "refresh" => {
+                // 手动刷新：强制打 API（跳过磁盘 TTL；限流冷却期内 lib 层会拦截）
+                request_refresh(pending, fetching, true);
+                st.last_refresh_ms = now_ms();
             }
+            "quit" => {
+                unregister_and_exit();
+            }
+            _ => {}
         }
+    }
 
-        // 设置页改了菜单栏标题配置 → mtime 变化 → 用现有数据即时重渲染（不打 API）
-        let mtime = tray_title_mtime();
-        if mtime != title_config_mtime {
-            title_config_mtime = mtime;
-            if let Some(info) = last_info.clone().or_else(quota::peek_cached_quota) {
-                apply_to_tray(&status_item, &info, &mut menu_keeper);
-                last_render_ms = now_ms();
-            }
+    // 主线程消费后台线程的 quota 结果。
+    // 注意不在此处重采 cache_mtime：fetch 在途期间（最长 15s 网络超时）
+    // 主应用可能写盘，现采会把那次写入标记为已消费、吞掉下方 mtime 分支
+    // 用新数据清 error 的机会；tray 自己写盘引发的 mtime 分支多渲染一帧无害
+    if let Ok(mut guard) = pending.try_lock() {
+        if let Some(info) = guard.take() {
+            apply_to_tray(status_item, &info, menu);
+            st.last_info = Some(info);
+            st.last_render_ms = now_ms();
         }
+    }
 
-        // 磁盘缓存更新（主应用或 tray 自己刷新成功）→ mtime 变化 →
-        // peek 按时间戳取内存/磁盘新者 → 采用新数据（同时清掉旧 error 标注）
-        let cm = quota_cache_mtime();
-        if cm != cache_mtime {
-            cache_mtime = cm;
-            if let Some(info) = quota::peek_cached_quota() {
-                apply_to_tray(&status_item, &info, &mut menu_keeper);
-                last_info = Some(info);
-                last_render_ms = now_ms();
-            }
+    // 设置页改了菜单栏标题配置 → mtime 变化 → 用现有数据即时重渲染（不打 API）
+    let mtime = tray_title_mtime();
+    if mtime != st.title_config_mtime {
+        st.title_config_mtime = mtime;
+        if let Some(info) = st.last_info.clone().or_else(quota::peek_cached_quota) {
+            apply_to_tray(status_item, &info, menu);
+            st.last_render_ms = now_ms();
         }
+    }
 
-        // 周期重渲染：重置倒计时、数据年龄、限流剩余时间都是现算的，
-        // 不重建菜单就会停在上一帧（曾因此显示 fetch 时刻算死的倒计时）
-        if now_ms() - last_render_ms >= 30_000 {
-            if let Some(info) = &last_info {
-                apply_to_tray(&status_item, info, &mut menu_keeper);
-            }
-            last_render_ms = now_ms();
+    // 磁盘缓存更新（主应用或 tray 自己刷新成功）→ mtime 变化 →
+    // peek 按时间戳取内存/磁盘新者 → 采用新数据（同时清掉旧 error 标注）
+    let cm = quota_cache_mtime();
+    if cm != st.cache_mtime {
+        st.cache_mtime = cm;
+        if let Some(info) = quota::peek_cached_quota() {
+            apply_to_tray(status_item, &info, menu);
+            st.last_info = Some(info);
+            st.last_render_ms = now_ms();
         }
+    }
 
-        // 限流冷却结束的下降沿：立即补一次刷新，不等下个周期（最多 5 分钟）。
-        // 边沿触发只发生一次，非 429 失败不会走到这里（不写 backoff），无风暴风险
-        let backoff_now = quota::backoff_remaining_secs().is_some();
-        if in_backoff && !backoff_now {
-            if quota::quota_available() {
-                request_refresh(&pending, &fetching, false);
-            }
-            last_refresh_ms = now_ms();
+    // 周期重渲染：重置倒计时、数据年龄、限流剩余时间都是现算的，
+    // 不重建菜单就会停在上一帧（曾因此显示 fetch 时刻算死的倒计时）
+    if now_ms() - st.last_render_ms >= 30_000 {
+        if let Some(info) = &st.last_info {
+            apply_to_tray(status_item, info, menu);
         }
-        in_backoff = backoff_now;
+        st.last_render_ms = now_ms();
+    }
 
-        if now_ms() - last_refresh_ms >= REFRESH_INTERVAL_MS {
-            if quota::quota_available() {
-                // 周期刷新：共享磁盘缓存 TTL（主应用可能刚刷过，省 API 调用）
-                request_refresh(&pending, &fetching, false);
-            }
-            last_refresh_ms = now_ms();
+    // 限流冷却结束的下降沿：立即补一次刷新，不等下个周期（最多 5 分钟）。
+    // 边沿触发只发生一次，非 429 失败不会走到这里（不写 backoff），无风暴风险
+    let backoff_now = quota::backoff_remaining_secs().is_some();
+    if st.in_backoff && !backoff_now {
+        if quota::quota_available() {
+            request_refresh(pending, fetching, false);
         }
+        st.last_refresh_ms = now_ms();
+    }
+    st.in_backoff = backoff_now;
+
+    if now_ms() - st.last_refresh_ms >= REFRESH_INTERVAL_MS {
+        if quota::quota_available() {
+            // 周期刷新：共享磁盘缓存 TTL（主应用可能刚刷过，省 API 调用）
+            request_refresh(pending, fetching, false);
+        }
+        st.last_refresh_ms = now_ms();
     }
 }
 
@@ -210,19 +241,14 @@ fn create_status_item(
     item
 }
 
-/// 挂载新菜单并保活 muda 句柄（旧句柄随赋值 drop，其 NSMenu 由 AppKit 引用计数收尾）
+/// 把常驻菜单挂载到 status item（仅启动时调用一次，此后关联终身不变）
 #[cfg(target_os = "macos")]
-fn apply_menu(
-    status_item: &objc2_app_kit::NSStatusItem,
-    menu: muda::Menu,
-    keeper: &mut Option<muda::Menu>,
-) {
+fn attach_menu(status_item: &objc2_app_kit::NSStatusItem, menu: &muda::Menu) {
     use muda::ContextMenu;
     unsafe {
         let ns_menu = menu.ns_menu().cast::<objc2_app_kit::NSMenu>();
         status_item.setMenu(ns_menu.as_ref());
     }
-    *keeper = Some(menu);
 }
 
 #[cfg(target_os = "macos")]
@@ -244,16 +270,15 @@ fn set_button_title(status_item: &objc2_app_kit::NSStatusItem, title: &str) {
     }
 }
 
-/// 主线程上应用 quota 数据到 tray（重建菜单 + patch 样式 + tooltip + 标题）
+/// 主线程上应用 quota 数据到 tray（原位重填菜单 + patch 样式 + tooltip + 标题）
 #[cfg(target_os = "macos")]
 fn apply_to_tray(
     status_item: &objc2_app_kit::NSStatusItem,
     info: &QuotaInfo,
-    menu_keeper: &mut Option<muda::Menu>,
+    menu: &muda::Menu,
 ) {
-    let menu = build_menu(Some(info));
-    patch_menu_styles(&menu);
-    apply_menu(status_item, menu, menu_keeper);
+    fill_menu(menu, Some(info));
+    patch_menu_styles(menu);
     set_tooltip(status_item, &quota::format_tray_tooltip(info));
     set_button_title(
         status_item,
@@ -261,19 +286,11 @@ fn apply_to_tray(
     );
 }
 
-#[cfg(target_os = "macos")]
-fn run_loop_once(seconds: f64) {
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
-    unsafe {
-        let date = NSDate::dateWithTimeIntervalSinceNow(seconds);
-        let _ = NSRunLoop::currentRunLoop().runMode_beforeDate(NSDefaultRunLoopMode, &date);
-    }
-}
+/// 原位重填常驻菜单：先清空再按当前数据追加，不替换 NSMenu 对象本身
+fn fill_menu(menu: &muda::Menu, info: Option<&QuotaInfo>) {
+    use muda::{MenuItem, PredefinedMenuItem};
 
-fn build_menu(info: Option<&QuotaInfo>) -> muda::Menu {
-    use muda::{Menu, MenuItem, PredefinedMenuItem};
-
-    let menu = Menu::new();
+    while menu.remove_at(0).is_some() {}
     let zh = is_chinese();
 
     if let Some(qi) = info {
@@ -368,8 +385,6 @@ fn build_menu(info: Option<&QuotaInfo>) -> muda::Menu {
     let _ = menu.append(&MenuItem::with_id("refresh", refresh_label, true, None::<muda::accelerator::Accelerator>));
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&MenuItem::with_id("quit", quit_label, true, None::<muda::accelerator::Accelerator>));
-
-    menu
 }
 
 fn open_main_app() {
