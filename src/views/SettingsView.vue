@@ -573,6 +573,7 @@ function onSaved() {
       </button>
       <button :class="['side-item', { active: activeTab === 'system' }]" @click="activeTab = 'system'">
         <span class="i-carbon-settings-adjust w-3.5 h-3.5" />{{ $t('settings.system') }}
+        <span v-if="updateStatus === 'available'" class="side-dot" />
       </button>
     </nav>
 
@@ -1424,6 +1425,15 @@ function onSaved() {
   font-weight: 500;
   background: var(--card);
   box-shadow: var(--shadow-paper);
+}
+/* 更新可用提示点:与 ActivityBar 设置图标的绿点同源状态 */
+.side-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* 内容体：限最大宽度居中，超宽窗口下不再无限拉伸 */
