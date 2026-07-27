@@ -13,6 +13,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
 import { useRunners } from '@/composables/useRunners'
 import RunConfigCapsule from './RunConfigCapsule.vue'
+import PermissionModeDropdown from './PermissionModeDropdown.vue'
 import ContextProgress from './ContextProgress.vue'
 import type { PermissionMode } from '@/composables/useSessionSettings'
 
@@ -290,6 +291,12 @@ function onPermissionModeChange(mode: PermissionMode) {
       @channel-change="onChannelChange"
       @chrome-change="(v: boolean) => emit('chromeChange', v)"
       @extra-args-change="(v: string) => emit('extraArgsChange', v)"
+    />
+
+    <!-- 权限模式 -->
+    <PermissionModeDropdown
+      :current="selectedPermissionMode"
+      @select="onPermissionModeChange"
     />
 
     <!-- token 进度(紧凑形态:条 + 百分比,永不折叠) -->

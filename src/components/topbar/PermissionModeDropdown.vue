@@ -106,7 +106,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
     <button
       ref="buttonRef"
       type="button"
-      class="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-muted
+      class="h-[22px] px-1.5 text-xs rounded-[5px] text-muted-foreground hover:text-foreground hover:bg-muted
              transition-colors flex items-center gap-1 border border-border"
       :title="$t('topbar.permTitle', { name: currentOption.label })"
       aria-haspopup="listbox"
