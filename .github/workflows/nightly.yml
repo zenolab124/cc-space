@@ -161,9 +161,7 @@ jobs:
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "Nightly $VERSION" \
-            --notes "每日构建，含未经验证的改动。仅供在设置中切到 Nightly 通道的用户使用。
-
-提交: ${GITHUB_SHA:0:7}" \
+            --notes "每日构建，含未经验证的改动。仅供在设置中切到 Nightly 通道的用户使用。提交 ${GITHUB_SHA:0:7}" \
             src-tauri/target/release/bundle/dmg/*.dmg \
             src-tauri/target/release/bundle/updater/*.app.tar.gz \
             src-tauri/target/release/bundle/updater/*.sig \
