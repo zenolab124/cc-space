@@ -17,14 +17,30 @@ fn main() {
     println!("cargo:rerun-if-changed=src/native/tcc_check.c");
     println!("cargo:rustc-link-lib=framework=CoreServices");
     println!("cargo:rustc-link-lib=framework=ApplicationServices");
+
+    // 本地网络权限探测：必须走 Network.framework（受本地网络隐私管辖的路径），
+    // 用 blocks + GCD 把异步连接包成同步调用，故为 .m
+    cc::Build::new()
+      .file("src/native/local_network.m")
+      .flag("-fobjc-arc")
+      .compile("monet_local_network");
+    println!("cargo:rerun-if-changed=src/native/local_network.m");
+    println!("cargo:rustc-link-lib=framework=Network");
+
     // rustc-link-lib 只随 lib target 传播；runner bin 不依赖 app lib
     //（避免链入 tauri），需要按 bin 显式补链接参数
     let out_dir = std::env::var("OUT_DIR").unwrap();
-    println!(
-      "cargo:rustc-link-arg-bin=monet-routine-runner={}/libmonet_tcc_check.a",
-      out_dir
-    );
-    for arg in ["-framework", "CoreServices", "-framework", "ApplicationServices"] {
+    for lib in ["libmonet_tcc_check.a", "libmonet_local_network.a"] {
+      println!(
+        "cargo:rustc-link-arg-bin=monet-routine-runner={}/{}",
+        out_dir, lib
+      );
+    }
+    for arg in [
+      "-framework", "CoreServices",
+      "-framework", "ApplicationServices",
+      "-framework", "Network",
+    ] {
       println!("cargo:rustc-link-arg-bin=monet-routine-runner={}", arg);
     }
   }

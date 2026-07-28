@@ -16,6 +16,12 @@ mod native {
         pub fn monet_ax_prompt() -> i32;
         pub fn monet_screen_preflight() -> i32;
         pub fn monet_screen_request() -> i32;
+        /// Network.framework TCP 探测：0=可达 1=静默失败 -1=错误
+        pub fn monet_nw_probe(
+            host: *const std::os::raw::c_char,
+            port: *const std::os::raw::c_char,
+            timeout_ms: i32,
+        ) -> i32;
     }
 }
 
@@ -62,25 +68,93 @@ pub fn prompt_accessibility() -> &'static str {
     status_name(unsafe { native::monet_ax_prompt() })
 }
 
-/// 本地网络权限：Apple 不提供查询 API，加入 mDNS 组播组间接探测。
-/// join_multicast 会触发系统授权弹窗（未授权时）
+#[cfg(target_os = "macos")]
+fn is_private_v4(ip: &str) -> bool {
+    let mut it = ip.split('.');
+    let (Some(a), Some(b)) = (it.next(), it.next()) else {
+        return false;
+    };
+    let (Ok(a), Ok(b)) = (a.parse::<u8>(), b.parse::<u8>()) else {
+        return false;
+    };
+    // 只认 RFC1918，排除 TUN 常用的 198.18/100.64 等运营商/测试段
+    a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168)
+}
+
+/// 局域网探测目标：取物理网卡的默认网关。它必然在局域网内且必然存在，
+/// 不依赖用户配置了什么设备。
+///
+/// 不能用 `route -n get default`：开着 VPN/TUN 时默认路由指向 utunN，
+/// 那条路由没有 gateway 字段，取到的是空值——而"有 TUN"恰恰是本检测最需要
+/// 生效的场景。改从完整路由表里挑第一条网关为 RFC1918 地址的默认路由。
+#[cfg(target_os = "macos")]
+fn default_gateway() -> Option<String> {
+    let out = std::process::Command::new("/usr/sbin/netstat")
+        .args(["-rn", "-f", "inet"])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.split_whitespace().next() == Some("default"))
+        .filter_map(|l| l.split_whitespace().nth(1))
+        .find(|gw| is_private_v4(gw))
+        .map(|s| s.to_string())
+}
+
+/// BSD socket 对照组。收到 RST（ConnectionRefused/Reset）同样算通——
+/// 对端明确拒绝说明包已出网，正是我们要的「链路可达」信号。
+#[cfg(target_os = "macos")]
+fn bsd_reachable(host: &str, port: u16, timeout: std::time::Duration) -> bool {
+    use std::io::ErrorKind;
+    use std::net::{SocketAddr, TcpStream};
+    let Ok(addr) = format!("{}:{}", host, port).parse::<SocketAddr>() else {
+        return false;
+    };
+    match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(_) => true,
+        Err(e) => matches!(
+            e.kind(),
+            ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset
+        ),
+    }
+}
+
+/// 本地网络权限：Apple 不提供查询 API，用双路对照推断。
+///
+/// 旧实现用 UDP 组播（mDNS）+ `send_to` 成败判定，三重不可靠：
+/// ① 走 BSD socket，而本地网络隐私只管辖 Network.framework，测的是永远不出问题的路；
+/// ② 用组播推断单播 TCP，两者判定路径不同；
+/// ③ `send_to` 成败受组播路由状态影响（有 TUN 时尤其不稳），与权限无强相关。
+/// 实测同一时刻它两个方向都会错：主进程报 granted，子进程跑同样逻辑报 denied。
+///
+/// 现在改为对同一目标跑两条路径，用对照消除网络噪声：
+///   NW 通                → granted
+///   NW 不通 + BSD 通     → denied（链路本身没问题，只有受管路径被挡 = 权限）
+///   两条都不通           → unknown（网络/目标问题，无法判定权限）
 #[cfg(target_os = "macos")]
 pub fn check_local_network() -> &'static str {
-    use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-    let sock = match UdpSocket::bind("0.0.0.0:0") {
-        Ok(s) => s,
-        Err(_) => return "unknown",
+    const PORT: u16 = 80;
+    const TIMEOUT_MS: i32 = 1500;
+
+    let Some(gw) = default_gateway() else {
+        return "unknown";
     };
-    let multicast = Ipv4Addr::new(224, 0, 0, 251);
-    sock.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok();
-    if sock.join_multicast_v4(&multicast, &Ipv4Addr::UNSPECIFIED).is_err() {
-        return "denied";
+    let (Ok(host_c), Ok(port_c)) = (
+        std::ffi::CString::new(gw.as_str()),
+        std::ffi::CString::new(PORT.to_string()),
+    ) else {
+        return "unknown";
+    };
+
+    let nw_ok = unsafe { native::monet_nw_probe(host_c.as_ptr(), port_c.as_ptr(), TIMEOUT_MS) } == 0;
+    if nw_ok {
+        return "granted";
     }
-    let target = SocketAddrV4::new(multicast, 5353);
-    let query: [u8; 12] = [0; 12];
-    match sock.send_to(&query, target) {
-        Ok(_) => "granted",
-        Err(_) => "denied",
+    let bsd_ok = bsd_reachable(&gw, PORT, std::time::Duration::from_millis(TIMEOUT_MS as u64));
+    if bsd_ok {
+        "denied"
+    } else {
+        "unknown"
     }
 }
 
