@@ -15,8 +15,11 @@ if (!version || !tarball || !outPath) {
   process.exit(1)
 }
 
+// 默认按正式发版的 v<version> tag 取资产；nightly 走固定的滚动 tag，
+// 经 RELEASE_TAG 覆盖（版本号里已含日期，tag 无需再区分）
+const tag = process.env.RELEASE_TAG || `v${version}`
 const releaseUrl = (file) =>
-  `https://github.com/zenolab124/monet/releases/download/v${version}/${basename(file)}`
+  `https://github.com/zenolab124/monet/releases/download/${tag}/${basename(file)}`
 
 // .sig 内容整体作为 signature 字段(tauri signer sign 的产物,base64 文本)
 const signature = readFileSync(`${tarball}.sig`, 'utf8').trim()

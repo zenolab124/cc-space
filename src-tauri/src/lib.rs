@@ -50,6 +50,7 @@ mod widget;
 /// pub：候选清单+pid+日志回读，MCP bin 经 #[path] 共享
 pub mod runner_store;
 mod runners;
+mod updater;
 
 
 #[cfg(target_os = "macos")]
@@ -72,6 +73,8 @@ pub fn run() {
             image_protocol::handle_request(request, responder);
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // 待安装更新在 check/install 两次 command 调用之间需要留存
+        .manage(updater::PendingUpdate::default())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -310,6 +313,10 @@ pub fn run() {
             widget::update_widget,
             widget::get_widget_config,
             widget::set_widget_config,
+            updater::get_update_channel,
+            updater::set_update_channel,
+            updater::updater_check,
+            updater::updater_install,
             quota::get_quota,
             quota::refresh_quota,
             quota::quota_available,

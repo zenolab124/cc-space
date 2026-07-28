@@ -55,7 +55,15 @@ const { minColumnWidth, setMinColumnWidth } = useWorkbench()
 const { zoomLevel, setZoom, MIN_ZOOM, MAX_ZOOM, STEP } = useZoom()
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
-const { status: updateStatus, newVersion: updateVersion, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall } = useUpdater()
+const { status: updateStatus, newVersion: updateVersion, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
+loadChannel()
+
+// 切通道后立刻查一次：两个通道的版本线不同，不重查用户会以为切换没生效
+async function switchUpdateChannel(next: 'stable' | 'nightly') {
+  if (updateChannel.value === next) return
+  await setChannel(next)
+  await checkForUpdate()
+}
 
 // MCP Server 注册
 const mcpRegistered = ref(false)
@@ -1161,6 +1169,24 @@ function onSaved() {
                     {{ updateStatus === 'checking' ? $t('settings.updateChecking') : $t('settings.updateCheck') }}
                   </button>
                 </template>
+              </div>
+            </div>
+
+            <!-- 更新通道：Nightly 为每日构建，默认永远是稳定版 -->
+            <div class="flex items-center gap-2 mt-2 pt-2 border-t border-border/60">
+              <span class="i-carbon-branch w-3.5 h-3.5 text-muted-foreground" />
+              <span class="text-[11.5px] font-medium">{{ $t('settings.updateChannel') }}</span>
+              <span class="text-[10.5px] text-muted-foreground">{{ $t('settings.updateChannelDesc') }}</span>
+              <div class="ml-auto flex items-center gap-1">
+                <button
+                  v-for="c in (['stable', 'nightly'] as const)"
+                  :key="c"
+                  class="px-2 py-0.5 text-[11px] rounded border transition-colors"
+                  :class="updateChannel === c
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'"
+                  @click="switchUpdateChannel(c)"
+                >{{ $t(`settings.updateChannel_${c}`) }}</button>
               </div>
             </div>
           </div>

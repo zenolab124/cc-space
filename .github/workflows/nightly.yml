@@ -1,0 +1,170 @@
+name: Nightly
+
+# 每日构建，只服务在设置里切到 nightly 通道的用户——默认通道永远是 stable，
+# nightly.json 与 latest.json 严格分开，绝不能让稳定版用户被推预览版。
+#
+# 与 release.yml 的关键差异：
+#   · 版本号在 CI 内临时改，不 commit（pnpm version 那套只服务正式发版）
+#   · 用固定的滚动 tag「nightly」，每次强制覆盖，避免 release 列表被日期 tag 淹掉
+#   · 发 prerelease，产 nightly.json
+#   · 仅 macOS：nightly 主要服务开发者自测，Windows 用户走稳定版
+#
+# 需要的 secrets 与 release.yml 相同：SIGNING_CERT_P12 / SIGNING_CERT_PASSWORD /
+# TAURI_SIGNING_PRIVATE_KEY
+
+on:
+  schedule:
+    - cron: '0 18 * * *' # UTC 18:00 = 北京时间 02:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要历史来判断有无新提交
+
+      # 定时触发时若 24h 内无提交就跳过，避免天天发同一份包
+      - name: Check for new commits
+        id: check
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -z "$(git log --since='24 hours ago' --oneline)" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "24 小时内无新提交，跳过本次 nightly"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        if: steps.check.outputs.skip == 'false'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust
+        if: steps.check.outputs.skip == 'false'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        if: steps.check.outputs.skip == 'false'
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install xcodegen
+        if: steps.check.outputs.skip == 'false'
+        run: brew install xcodegen
+
+      # 版本号取「下一个 patch 的预发布」：1.0.2 → 1.0.3-nightly.20260728。
+      # semver 上它 > 1.0.2 且 < 1.0.3，于是 nightly 用户持续收 nightly，
+      # 而稳定版发 1.0.3 时会自然把他们带回稳定线，无需手动切换。
+      - name: Compute nightly version
+        if: steps.check.outputs.skip == 'false'
+        id: ver
+        run: |
+          set -euo pipefail
+          NEXT=$(node -p "const [a,b,c]=require('./package.json').version.split('.'); \`\${a}.\${b}.\${Number(c)+1}\`")
+          VERSION="${NEXT}-nightly.$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "nightly 版本: $VERSION"
+
+      # 只改工作区不提交：sync-version.sh 负责三处同源 + Cargo.lock 联动 + 防呆校验，
+      # package.json 需单独改（该脚本设计上假定 npm version 已经改过它）
+      - name: Apply version (working tree only)
+        if: steps.check.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json'));
+            p.version = process.env.VERSION;
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+          npm_package_version="$VERSION" bash scripts/sync-version.sh
+
+      - name: Import signing certificate
+        if: steps.check.outputs.skip == 'false'
+        env:
+          CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PASS="ci-$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASS" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASS" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          echo "$CERT_P12" | base64 -d > /tmp/cert.p12
+          security import /tmp/cert.p12 -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k "$KEYCHAIN_PASS" build.keychain
+          security find-certificate -c "Monet Signing" -p build.keychain > /tmp/cert.pem
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
+          rm -f /tmp/cert.p12 /tmp/cert.pem
+
+      - name: Install dependencies
+        if: steps.check.outputs.skip == 'false'
+        run: pnpm install
+
+      - name: Build app
+        if: steps.check.outputs.skip == 'false'
+        run: pnpm tauri build --bundles app
+
+      - name: Bundle tray helper
+        if: steps.check.outputs.skip == 'false'
+        run: bash scripts/bundle-tray.sh
+
+      - name: Build widget, sign, package
+        if: steps.check.outputs.skip == 'false'
+        env:
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+          SIGN_ID: Monet Signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: src-widget/build.sh
+
+      # build.sh 产的 latest.json 里 URL 指向 v<version> tag，对 nightly 是错的；
+      # 这里用滚动 tag 重新生成，并且落到 nightly.json——latest.json 不上传
+      - name: Generate nightly.json
+        if: steps.check.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_TAG: nightly
+        run: |
+          set -euo pipefail
+          TARBALL=$(ls src-tauri/target/release/bundle/updater/*.app.tar.gz)
+          node scripts/create-latest-json.mjs "$VERSION" "$TARBALL" \
+            src-tauri/target/release/bundle/updater/nightly.json
+          cat src-tauri/target/release/bundle/updater/nightly.json
+
+      # 滚动 tag：先连 tag 一起删掉旧的，再在当前 commit 重建
+      - name: Publish rolling nightly release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          gh release create nightly \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Nightly $VERSION" \
+            --notes "每日构建，含未经验证的改动。仅供在设置中切到 Nightly 通道的用户使用。
+
+提交: ${GITHUB_SHA:0:7}" \
+            src-tauri/target/release/bundle/dmg/*.dmg \
+            src-tauri/target/release/bundle/updater/*.app.tar.gz \
+            src-tauri/target/release/bundle/updater/*.sig \
+            src-tauri/target/release/bundle/updater/nightly.json
