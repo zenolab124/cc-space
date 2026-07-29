@@ -219,6 +219,7 @@ pub fn open_privacy_settings(panel: String) -> Result<(), String> {
         "accessibility" => "Privacy_Accessibility",
         "screenRecording" => "Privacy_ScreenCapture",
         "allFiles" => "Privacy_AllFiles",
+        "filesAndFolders" => "Privacy_FilesAndFolders",
         "localNetwork" => "Privacy_LocalNetwork",
         _ => return Err(format!("unknown panel: {}", panel)),
     };

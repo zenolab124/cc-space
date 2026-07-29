@@ -215,6 +215,8 @@
     "killExternalOk": "Terminate",
     "elsewhereConfirm": "This session's history is not in the current project directory (it may have been moved by a worktree). Continuing will start with an empty history; the original conversation will not be affected.",
     "elsewhereOk": "Create New Anyway",
+    "epermHint": "This error is usually caused by macOS folder access permissions: if the project is in Documents / Desktop / Downloads or a synced folder like iCloud, Monet needs access granted in System Settings. Grant it under Privacy & Security → Files and Folders, or grant Full Disk Access to cover everything; alternatively, move the project out of these folders.",
+    "epermOpenSettings": "Open System Settings",
     "terminateExternal": "Terminate",
     "terminating": "Terminating…",
     "autoTurnStopped": "Background turn interrupted",

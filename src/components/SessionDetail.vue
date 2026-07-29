@@ -2787,6 +2787,13 @@ async function onReload() {
 
       <div v-if="stream.streamError" class="px-3 py-2 rounded-md bg-destructive/10 text-destructive text-xs">
         {{ stream.streamError }}
+        <template v-if="stream.streamError.includes('EPERM')">
+          <div class="mt-1.5 text-foreground/80">{{ t('session.epermHint') }}</div>
+          <button
+            class="mt-1.5 px-2 py-1 rounded border border-border text-foreground/90 hover:bg-accent transition-colors"
+            @click="invoke('open_privacy_settings', { panel: 'filesAndFolders' })"
+          >{{ t('session.epermOpenSettings') }}</button>
+        </template>
       </div>
 
       <!-- /help 本地帮助卡片 -->

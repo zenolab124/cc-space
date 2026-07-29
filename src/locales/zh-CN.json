@@ -215,6 +215,8 @@
     "killExternalOk": "终止进程",
     "elsewhereConfirm": "此会话的历史记录不在当前项目目录下（可能已被 worktree 迁走）。继续将以空历史新建会话，原始对话不会受影响。",
     "elsewhereOk": "仍然新建",
+    "epermHint": "此错误通常是 macOS 文件夹访问权限所致：项目位于「文稿 / 桌面 / 下载」或 iCloud 等同步目录时，需要在系统设置中授予 Monet 访问权限。可在「隐私与安全性 → 文件与文件夹」中授权，或授予「完全磁盘访问权限」一步解决；也可以把项目移出这些目录。",
+    "epermOpenSettings": "打开系统设置",
     "terminateExternal": "终止",
     "terminating": "终止中…",
     "autoTurnStopped": "已中断当前后台轮",
