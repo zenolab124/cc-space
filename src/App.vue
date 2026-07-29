@@ -25,7 +25,7 @@ import { useRoutines } from '@/composables/useRoutines'
 import { initRunnerListeners } from '@/composables/useRunners'
 import { initShortcuts } from '@/composables/useShortcuts'
 import { migrateLegacyAppDefaults } from '@/composables/useChannels'
-import { stateWasReset, useWorkbench } from '@/composables/useWorkbench'
+import { stateRepairCount, stateWasReset, useWorkbench } from '@/composables/useWorkbench'
 import { applyZoom, useZoom } from '@/composables/useZoom'
 import { useUpdater } from '@/composables/useUpdater'
 import { DragDropProvider, DragOverlay } from '@dnd-kit/vue'
@@ -163,9 +163,11 @@ onMounted(async () => {
   // 调用前打 boot:projects-start，promise settle 后打 boot:projects-done。
   markBoot('boot:projects-start')
   loadProjects().finally(() => markBoot('boot:projects-done'))
-  // 工作台持久化损坏回退提示(NFR-002)
+  // 工作台持久化损坏回退提示(NFR-002);可局部修复时只提示不重置
   if (stateWasReset) {
     useNotifications().notifyTransient(t('workbench.stateReset'))
+  } else if (stateRepairCount > 0) {
+    useNotifications().notifyTransient(t('workbench.stateRepaired', { count: stateRepairCount }))
   }
   useUpdater().initAutoCheck()
   markBoot('boot:app-ready')

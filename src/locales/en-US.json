@@ -248,6 +248,7 @@
   "workbench": {
     "defaultTabName": "Workbench {seq}",
     "stateReset": "Workbench state has been reset",
+    "stateRepaired": "Repaired {count} workbench state inconsistencies",
     "newTab": "New workbench",
     "rename": "Rename",
     "closeConfirm": "{count} sessions will be removed from workbench",

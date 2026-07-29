@@ -154,7 +154,57 @@ function sanitizeCwd(cwd: string): string {
   return m ? `${m[1]}:\\${m[2].replace(/\//g, '\\')}` : cwd
 }
 
-/** 严格校验反序列化结果,任一处不符即整体作废 */
+/** 本次启动修复的不一致处数(>0 时 App 弹「已修复」提示而非重置) */
+export let stateRepairCount = 0
+
+/** 单 tab 结构校验 + 局部修复:骨架非法返回 null(丢弃该 tab),
+ *  列/lane 引用不一致则剔除该列/lane 并计数——一处孤儿列不应废掉全部工作台(#8) */
+function repairTab(t: WorkbenchTab): WorkbenchTab | null {
+  if (!t || typeof t.id !== 'string' || typeof t.name !== 'string') return null
+  if (!Array.isArray(t.sessionIds) || !Array.isArray(t.columns) || !Array.isArray(t.columnSizes)) return null
+  if (t.sessionIds.some(sid => typeof sid !== 'string')) return null
+
+  // 列骨架非法 → 丢弃单列;列引用的会话不在左列 → 孤儿列,剔除(#7 产生的脏数据)
+  const validColumns = t.columns.filter((c, i) => {
+    const structOk = c && c.type === 'session' && typeof c.id === 'string'
+      && typeof c.sessionId === 'string' && typeof c.openedSeq === 'number'
+    const sizeOk = typeof t.columnSizes[i] === 'number' && Number.isFinite(t.columnSizes[i]) && t.columnSizes[i] >= 0
+    const memberOk = structOk && t.sessionIds.includes(c.sessionId)
+    return structOk && sizeOk && memberOk
+  })
+  if (validColumns.length !== t.columns.length || t.columnSizes.length !== t.columns.length) {
+    stateRepairCount += t.columns.length - validColumns.length || 1
+    t.columnSizes = validColumns.map((c) => {
+      const oi = t.columns.indexOf(c)
+      const s = t.columnSizes[oi]
+      return typeof s === 'number' && Number.isFinite(s) && s >= 0 ? s : 0
+    })
+    t.columns = validColumns
+  }
+
+  if (t.race !== undefined) {
+    if (!t.race || typeof t.race !== 'object' || typeof t.race.cwd !== 'string' || !t.race.cwd
+      || !Array.isArray(t.race.lanes)) {
+      delete t.race
+      stateRepairCount += 1
+    } else {
+      t.race.cwd = sanitizeCwd(t.race.cwd)
+      const validLanes = t.race.lanes.filter(lane =>
+        lane && typeof lane.id === 'string' && typeof lane.sessionId === 'string'
+        && typeof lane.label === 'string'
+        && t.sessionIds.includes(lane.sessionId)
+        && t.columns.some(c => c.sessionId === lane.sessionId))
+      if (validLanes.length !== t.race.lanes.length) {
+        stateRepairCount += t.race.lanes.length - validLanes.length
+        t.race.lanes = validLanes
+      }
+      if (t.race.lanes.length === 0) delete t.race
+    }
+  }
+  return t
+}
+
+/** 反序列化 + 逐 tab 修复:能救则救,全部 tab 均不可救才作废整体(触发重置) */
 function loadState(): WorkbenchState | null {
   try {
     const raw = readMigratedStorage(STORAGE_KEY, LEGACY_STORAGE_KEY)
@@ -163,34 +213,16 @@ function loadState(): WorkbenchState | null {
     if (!parsed || typeof parsed !== 'object') return null
     if (!Array.isArray(parsed.tabs) || parsed.tabs.length < 1) return null
     if (typeof parsed.activeTabId !== 'string') return null
-    for (const t of parsed.tabs) {
-      if (!t || typeof t.id !== 'string' || typeof t.name !== 'string') return null
-      if (!Array.isArray(t.sessionIds) || !Array.isArray(t.columns) || !Array.isArray(t.columnSizes)) return null
-      if (t.columns.length !== t.columnSizes.length) return null
-      for (const sid of t.sessionIds) {
-        if (typeof sid !== 'string') return null
-      }
-      for (const c of t.columns) {
-        if (!c || c.type !== 'session' || typeof c.id !== 'string') return null
-        if (typeof c.sessionId !== 'string' || typeof c.openedSeq !== 'number') return null
-        // 列引用的会话必须在左列中
-        if (!t.sessionIds.includes(c.sessionId)) return null
-      }
-      if (t.columnSizes.some(s => typeof s !== 'number' || !Number.isFinite(s) || s < 0)) return null
-      if (t.race !== undefined) {
-        if (!t.race || typeof t.race !== 'object') return null
-        if (typeof t.race.cwd !== 'string' || !t.race.cwd) return null
-        t.race.cwd = sanitizeCwd(t.race.cwd)
-        if (!Array.isArray(t.race.lanes) || t.race.lanes.length === 0) return null
-        for (const lane of t.race.lanes) {
-          if (!lane || typeof lane.id !== 'string' || typeof lane.sessionId !== 'string') return null
-          if (typeof lane.label !== 'string') return null
-          if (!t.sessionIds.includes(lane.sessionId)) return null
-          if (!t.columns.some(c => c.sessionId === lane.sessionId)) return null
-        }
-      }
+
+    const tabs = (parsed.tabs as WorkbenchTab[]).map(repairTab).filter((t): t is WorkbenchTab => t !== null)
+    if (tabs.length === 0) return null
+    if (tabs.length !== parsed.tabs.length) stateRepairCount += parsed.tabs.length - tabs.length
+
+    let activeTabId = parsed.activeTabId
+    if (!tabs.some(t => t.id === activeTabId)) {
+      activeTabId = tabs[0].id
+      stateRepairCount += 1
     }
-    if (!parsed.tabs.some(t => t.id === parsed.activeTabId)) return null
     // drafts 为 v2.1.x 增量字段:旧数据缺省为 {},值非法则丢弃单条不作废整体
     const drafts: Record<string, string> = {}
     if (parsed.drafts && typeof parsed.drafts === 'object' && !Array.isArray(parsed.drafts)) {
@@ -206,9 +238,9 @@ function loadState(): WorkbenchState | null {
       }
     }
     return {
-      tabs: parsed.tabs as WorkbenchTab[],
-      activeTabId: parsed.activeTabId,
-      tabSeq: typeof parsed.tabSeq === 'number' ? parsed.tabSeq : parsed.tabs.length,
+      tabs,
+      activeTabId,
+      tabSeq: typeof parsed.tabSeq === 'number' ? parsed.tabSeq : tabs.length,
       openSeq: typeof parsed.openSeq === 'number' ? parsed.openSeq : 0,
       drafts,
       forkIntents,
@@ -232,6 +264,13 @@ if (loaded) {
 
 /** 持久化损坏被重置(App 启动后弹瞬态 toast「工作台状态已重置」) */
 export const stateWasReset = !!localStorage.getItem(STORAGE_KEY) && !loaded
+
+// 重置前把原始快照备份留档,给用户/后续版本留恢复可能
+if (stateWasReset) {
+  try {
+    localStorage.setItem(`${STORAGE_KEY}.corrupt-backup`, localStorage.getItem(STORAGE_KEY)!)
+  } catch (_) {}
+}
 
 const state = ref<WorkbenchState>(loaded || createInitialState())
 
@@ -396,22 +435,14 @@ function removeRaceLane(tabId: string, sessionId: string) {
   if (si >= 0) tab.sessionIds.splice(si, 1)
   const ci = tab.columns.findIndex(c => c.sessionId === sessionId)
   if (ci >= 0) {
-    tab.columnSizes[ci] = 0
-    setTimeout(() => {
-      const idx = tab.columns.findIndex(c => c.sessionId === sessionId)
-      if (idx >= 0) {
-        tab.columns.splice(idx, 1)
-        tab.columnSizes.splice(idx, 1)
-      }
-      tab.columnSizes = equalSizes(tab.columns.length)
-      if (tab.race && tab.race.lanes.length <= 1) {
-        delete tab.race
-      }
-    }, COLUMN_ANIM_MS)
-  } else {
-    if (tab.race.lanes.length <= 1) {
-      delete tab.race
-    }
+    // 同步原子移除,理由同 reclaimColumnWidth:延迟 splice 会持久化非法中间态
+    suppressColumnTransition.value = true
+    tab.columns.splice(ci, 1)
+    tab.columnSizes = equalSizes(tab.columns.length)
+    nextTick(() => { suppressColumnTransition.value = false })
+  }
+  if (tab.race.lanes.length <= 1) {
+    delete tab.race
   }
 }
 
@@ -566,35 +597,31 @@ function expandSession(tabId: string, sessionId: string, atIndex?: number): Expa
   return { collapsedSessionIds: [], focusedExisting: false }
 }
 
-const COLUMN_ANIM_MS = 250
 const suppressColumnTransition = ref(false)
 
 /**
- * 移除列并智能回收宽度（带动画）:
- * 先将目标列宽度缩到 0 触发 CSS transition，结束后再 splice 移除。
+ * 移除列并智能回收宽度（同步原子）:
+ * 状态变更必须一步完成——deep watch 随时可能落盘,任何"先改一半、
+ * setTimeout 里补另一半"的写法都会让非法中间态(列引用已不在
+ * sessionIds 的会话)被持久化,启动校验随即判损坏整体重置。
  */
 function reclaimColumnWidth(tab: WorkbenchTab, removedIndex: number) {
-  tab.columnSizes[removedIndex] = 0
+  if (removedIndex < 0 || removedIndex >= tab.columns.length) return
 
-  setTimeout(() => {
-    const currentIdx = tab.columns.findIndex((_, i) => i === removedIndex && tab.columnSizes[i] === 0)
-    if (currentIdx < 0) return
+  suppressColumnTransition.value = true
+  tab.columns.splice(removedIndex, 1)
+  tab.columnSizes.splice(removedIndex, 1)
 
-    suppressColumnTransition.value = true
-    tab.columns.splice(currentIdx, 1)
-    tab.columnSizes.splice(currentIdx, 1)
-
-    if (tab.columnSizes.length > 0) {
-      const totalAfter = tab.columnSizes.reduce((s, w) => s + w, 0)
-      const freeAfter = containerFreeWidth(tab.columnSizes.length)
-      if (totalAfter < freeAfter) {
-        const neighbor = Math.min(currentIdx, tab.columnSizes.length - 1)
-        tab.columnSizes[neighbor] += freeAfter - totalAfter
-      }
+  if (tab.columnSizes.length > 0) {
+    const totalAfter = tab.columnSizes.reduce((s, w) => s + w, 0)
+    const freeAfter = containerFreeWidth(tab.columnSizes.length)
+    if (totalAfter < freeAfter) {
+      const neighbor = Math.min(removedIndex, tab.columnSizes.length - 1)
+      tab.columnSizes[neighbor] += freeAfter - totalAfter
     }
+  }
 
-    nextTick(() => { suppressColumnTransition.value = false })
-  }, COLUMN_ANIM_MS)
+  nextTick(() => { suppressColumnTransition.value = false })
 }
 
 /** 收起列回左列(仍激活,「收起非退出」) */

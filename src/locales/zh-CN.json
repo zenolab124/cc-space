@@ -248,6 +248,7 @@
   "workbench": {
     "defaultTabName": "工作台 {seq}",
     "stateReset": "工作台状态已重置",
+    "stateRepaired": "已修复 {count} 处工作台状态不一致",
     "newTab": "新建工作台",
     "rename": "重命名",
     "closeConfirm": "{count} 个会话将退出工作台",
