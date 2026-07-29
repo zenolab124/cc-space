@@ -495,6 +495,15 @@ const agentChannelCards = computed(() =>
   channels.value.filter(c => c.id !== OFFICIAL_CHANNEL_ID && c.id !== OFFICIAL_DIRECT_CHANNEL_ID && c.id !== APPLE_FM_CHANNEL_ID && c.enabled)
 )
 
+/** Agent 卡片的实际生效模型标签:与 Rust 侧 fallback_agent_model 同序——
+ *  显式 agentModel > 渠道默认模型 > 清单中含 haiku 者 > 清单首项 > haiku 写死值 */
+function agentModelTag(ch: ChannelInfo): string {
+  if (ch.agentModel) return ch.agentModel
+  if (ch.defaultModel) return ch.defaultModel
+  const models = ch.availableModels
+  return models.find(m => m.toLowerCase().includes('haiku')) ?? models[0] ?? 'haiku'
+}
+
 /** 内置虚拟渠道(无文件):不给编辑/删除/探测按钮 */
 const isBuiltinChannel = (id: string) => id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID
 /** 内置渠道显示名走 i18n(Rust 侧默认名为英文) */
@@ -827,7 +836,7 @@ function onSaved() {
                     </div>
                     <div class="chain-row-2">
                       <span v-if="ch.baseUrl" class="font-mono truncate">{{ ch.baseUrl }}</span>
-                      <span class="chain-model-tag">haiku</span>
+                      <span class="chain-model-tag">{{ agentModelTag(ch) }}</span>
                       <span class="ml-auto shrink-0 flex items-center gap-1.5">
                         <template v-if="probing[ch.id]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
                         <template v-else-if="probeResults[ch.id]">
@@ -855,6 +864,14 @@ function onSaved() {
                       <div class="chain-row-2">
                         <span class="text-muted-foreground/60 italic">{{ $t('settings.appleFmLocal') }}</span>
                         <span class="chain-model-tag">system</span>
+                        <span class="ml-auto shrink-0 flex items-center gap-1.5">
+                          <template v-if="probing[APPLE_FM_CHANNEL_ID]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
+                          <template v-else-if="probeResults[APPLE_FM_CHANNEL_ID]">
+                            <span class="inline-block w-1.5 h-1.5 rounded-full" :class="probeResults[APPLE_FM_CHANNEL_ID].online ? 'bg-green-600' : 'bg-destructive'" />
+                            <span v-if="probeResults[APPLE_FM_CHANNEL_ID].latencyMs" class="text-muted-foreground/50">{{ probeResults[APPLE_FM_CHANNEL_ID].latencyMs }}ms</span>
+                          </template>
+                          <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(APPLE_FM_CHANNEL_ID)"><span class="i-carbon-activity w-3 h-3" /></button>
+                        </span>
                       </div>
                     </div>
                   </div>

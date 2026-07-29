@@ -364,12 +364,37 @@ fn resolve_channel_credentials(channel_id: &str, settings: &AppSettings, model_o
     let protocol = meta.map_or("anthropic", |m| m.protocol()).to_string();
     let (base_url, token) = read_channel_credentials(channel_id)?;
     let agent_model = model_override
-        .or_else(|| read_channel_ext(channel_id).and_then(|e| e.agent_model));
+        .or_else(|| read_channel_ext(channel_id).and_then(|e| e.agent_model))
+        .or_else(|| fallback_agent_model(channel_id));
     Some(AgentChannelCredentials {
         id: channel_id.to_string(), is_official: false,
         base_url: Some(base_url), token: Some(token),
         protocol, agent_model,
     })
+}
+
+/// 渠道未显式配置 agent 模型时的兜底:并非所有第三方渠道都提供 Haiku,
+/// 写死 Haiku ID 会在这类渠道上 404。优先渠道默认模型(env.ANTHROPIC_MODEL,
+/// 用户已验证可用),次选模型清单中的轻量款(含 haiku 名者),再次清单首项;
+/// 全无线索则返回 None,由调用方决定最终写死值
+pub(crate) fn fallback_agent_model(channel_id: &str) -> Option<String> {
+    let path = channel_file_path(channel_id);
+    let parsed: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    if let Some(m) = parsed
+        .get("env")
+        .and_then(|e| e.get("ANTHROPIC_MODEL"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(m.to_string());
+    }
+    let models = read_channel_ext(channel_id)?.available_models;
+    models
+        .iter()
+        .find(|m| m.to_lowercase().contains("haiku"))
+        .or_else(|| models.first())
+        .cloned()
 }
 
 pub(crate) fn read_channel_credentials(id: &str) -> Option<(String, String)> {

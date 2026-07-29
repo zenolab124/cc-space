@@ -41,23 +41,25 @@ function onModelEnvUpdate(env: Record<string, string>) {
 
 const isVirtual = computed(() => props.channel?.id === APPLE_FM_CHANNEL_ID)
 
-/** 「获取模型列表」:已保存渠道按 id 走文件;新建未保存渠道用表单值直探(无需先保存) */
+/** 「获取模型列表」:一律用表单当前值直探(新建与编辑同款)。
+ *  编辑态若按 id 走渠道文件,用户改了 baseUrl/token/协议还没保存时,
+ *  探的仍是磁盘旧值——表现为「切换了配置,检测的还是原渠道」 */
 const probeTargetId = computed(() => props.channel?.id ?? id.value)
 const modelMapProbing = computed(() => !!probing.value[probeTargetId.value])
 async function onProbe() {
   const target = probeTargetId.value.trim()
   if (!target) return
-  if (isNew.value) {
-    const url = baseUrl.value.trim().replace(/\/+$/, '')
-    if (!url) {
-      formError.value = t('settings.channelForm.baseUrlError')
-      return
-    }
-    formError.value = null
-    await probeChannel(target, { baseUrl: url, token: authToken.value.trim(), protocol: protocol.value })
+  if (isVirtual.value) {
+    await probeChannel(target)
     return
   }
-  await probeChannel(target)
+  const url = baseUrl.value.trim().replace(/\/+$/, '')
+  if (!url) {
+    formError.value = t('settings.channelForm.baseUrlError')
+    return
+  }
+  formError.value = null
+  await probeChannel(target, { baseUrl: url, token: authToken.value.trim(), protocol: protocol.value })
 }
 
 const modelOptions = computed(() => {
