@@ -90,10 +90,19 @@ const rightZoneWidth = ref(Math.max(minColumnWidth.value, window.innerWidth - 48
 
 export function setRightZoneWidth(w: number) {
   if (w <= 0) return
-  const prev = rightZoneWidth.value
   rightZoneWidth.value = w
-  if (w > prev) redistributeOnGrow()
 }
+
+// 列宽自动放大只跟随窗口变大,不跟随容器变宽:
+// 监控栏折叠等侧栏开合同样会让容器变宽,若据此放大并落盘列宽,
+// 栏展开回来时没有对称的缩回逻辑,列区从此永久溢出。
+// 侧栏开合只改变可视视口,持久化列宽保持不变。
+let lastWindowWidth = window.innerWidth
+window.addEventListener('resize', () => {
+  const w = window.innerWidth
+  if (w > lastWindowWidth) nextTick(redistributeOnGrow)
+  lastWindowWidth = w
+})
 
 function containerFreeWidth(n: number): number {
   return rightZoneWidth.value - COLUMN_GAP * Math.max(0, n - 1) - COLUMN_GAP * 2
