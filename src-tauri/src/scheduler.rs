@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config;
 use crate::routines::RoutineDefinition;
@@ -63,46 +64,220 @@ pub fn runner_binary_path() -> PathBuf {
     config::data_dir().join("bin").join(runner_bin_name())
 }
 
-pub fn install_runner_binary() -> Result<(), String> {
-    if dev_build() {
-        return Ok(());
-    }
-    let target = runner_binary_path();
-    let source = bundled_runner_path();
+pub fn installed_runner_supports_environment_snapshot() -> bool {
+    let path = runner_binary_path();
+    path.exists() && runner_environment_protocol(&path).is_some()
+}
 
+static RUNNER_INSTALL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+pub struct PreparedRunnerInstall {
+    target: PathBuf,
+    source_protocol: Option<String>,
+    tmp: Option<PathBuf>,
+}
+
+impl PreparedRunnerInstall {
+    pub fn commit(mut self) -> Result<(), String> {
+        let Some(source_protocol) = self.source_protocol.as_deref() else {
+            return Ok(());
+        };
+        if let Some(tmp) = self.tmp.take() {
+            if let Err(error) = replace_file(&tmp, &self.target) {
+                self.tmp = Some(tmp);
+                return Err(format!("failed to install prepared runner: {}", error));
+            }
+            #[cfg(unix)]
+            if let Some(parent) = self.target.parent() {
+                std::fs::File::open(parent)
+                    .and_then(|dir| dir.sync_all())
+                    .map_err(|error| format!("failed to sync runner directory: {}", error))?;
+            }
+        }
+
+        if !is_codesigned(&self.target) {
+            return Err(format!(
+                "installed runner signature invalid: {}",
+                self.target.display()
+            ));
+        }
+        if runner_environment_protocol(&self.target).as_deref() != Some(source_protocol) {
+            return Err(format!(
+                "installed runner has an incompatible environment protocol: {}",
+                self.target.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PreparedRunnerInstall {
+    fn drop(&mut self) {
+        if let Some(tmp) = self.tmp.take() {
+            let _ = std::fs::remove_file(tmp);
+        }
+    }
+}
+
+pub fn prepare_runner_binary() -> Result<PreparedRunnerInstall, String> {
+    let target = runner_binary_path();
+    if dev_build() {
+        return Ok(PreparedRunnerInstall {
+            target,
+            source_protocol: None,
+            tmp: None,
+        });
+    }
+    let source = bundled_runner_path();
     if !source.exists() {
-        return Err(format!(
-            "runner binary not found at: {}",
-            source.display()
-        ));
+        return Err(format!("runner binary not found at: {}", source.display()));
     }
 
     if let Some(parent) = target.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create runner directory: {}", error))?;
     }
 
+    let source_protocol = runner_environment_protocol(&source).ok_or_else(|| {
+        "bundled runner does not support routine environment snapshots".to_string()
+    })?;
     let needs_install = if target.exists() {
-        let src_meta = std::fs::metadata(&source).map_err(|e| e.to_string())?;
-        let dst_meta = std::fs::metadata(&target).map_err(|e| e.to_string())?;
-        src_meta.len() != dst_meta.len() || !is_codesigned(&target)
+        runner_environment_protocol(&target).as_deref() != Some(source_protocol.as_str())
+            || !is_codesigned(&target)
     } else {
         true
     };
-
-    if needs_install {
-        std::fs::copy(&source, &target).map_err(|e| {
-            format!("failed to install runner binary: {}", e)
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
-        }
-        #[cfg(target_os = "macos")]
-        crate::signing::sign(&target, "io.github.zenolab124.monet.routine-runner");
+    if !needs_install {
+        return Ok(PreparedRunnerInstall {
+            target,
+            source_protocol: Some(source_protocol),
+            tmp: None,
+        });
     }
 
-    Ok(())
+    let stem = target
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("monet-routine-runner");
+    let extension = target
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{}", value))
+        .unwrap_or_default();
+    let sequence = RUNNER_INSTALL_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let tmp = target.with_file_name(format!(
+        "{}.install-{}-{}{}",
+        stem,
+        std::process::id(),
+        sequence,
+        extension
+    ));
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::copy(&source, &tmp)
+        .map_err(|error| format!("failed to prepare runner binary: {}", error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("failed to set runner permissions: {}", error));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    crate::signing::sign(&tmp, "io.github.zenolab124.monet.routine-runner");
+
+    if !is_codesigned(&tmp)
+        || runner_environment_protocol(&tmp).as_deref() != Some(source_protocol.as_str())
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return Err("prepared runner failed validation".to_string());
+    }
+    if let Err(error) = sync_runner_file(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("failed to sync prepared runner: {}", error));
+    }
+
+    Ok(PreparedRunnerInstall {
+        target,
+        source_protocol: Some(source_protocol),
+        tmp: Some(tmp),
+    })
+}
+
+pub fn disable_runner() -> Result<(), String> {
+    let path = runner_binary_path();
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(&path)
+        .map_err(|error| format!("failed to disable routine runner: {}", error))?;
+    if path.exists() {
+        Err("routine runner remains executable".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn runner_environment_protocol(path: &Path) -> Option<String> {
+    use crate::proc_ext::HideConsole;
+
+    let output = std::process::Command::new(path)
+        .arg("--environment-protocol")
+        .hide_console()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let (protocol, version) = value.split_once(':')?;
+    if protocol == "1" && !version.is_empty() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn sync_runner_file(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?
+        .sync_all()
+}
+
+#[cfg(not(windows))]
+fn sync_runner_file(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, target)
 }
 
 #[cfg(target_os = "macos")]
@@ -288,12 +463,12 @@ mod platform {
     }
 
     pub fn unregister(routine_id: &str) -> Result<(), String> {
+        // 新旧两套前缀都尝试卸载：bootout 各自 plist 后删文件（旧任务照常可删）
         let uid = Command::new("id").arg("-u").output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "501".to_string());
         let domain_target = format!("gui/{}", uid);
 
-        // 新旧两套前缀都尝试卸载：bootout 各自 plist 后删文件（旧任务照常可删）
         for path in [plist_path(routine_id), legacy_plist_path(routine_id)] {
             let _ = Command::new("launchctl")
                 .args(["bootout", &domain_target, &path.to_string_lossy()])
@@ -302,7 +477,6 @@ mod platform {
                 let _ = fs::remove_file(&path);
             }
         }
-
         Ok(())
     }
 

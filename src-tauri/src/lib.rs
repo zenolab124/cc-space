@@ -28,6 +28,8 @@ mod automation;
 mod metadata;
 mod routines;
 pub mod routine_run;
+/// Routine 执行环境快照由主 App 写入、独立 runner 读取
+mod routine_env;
 /// pub：结构定义同时被 monet-mcp / monet-routine-runner 以 #[path] 方式复用
 pub mod routine_types;
 /// pub：搜索引擎同时被 monet-mcp 以 #[path] 方式复用（search_sessions 工具）

@@ -53,6 +53,8 @@ pub struct RoutineRow {
 static ROUTINES: Mutex<Option<Vec<RoutineDefinition>>> = Mutex::new(None);
 /// 运行中任务：id → 开始时刻（RFC3339）
 static RUNNING: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+/// 串行化 runner 协议判断、准备、提交与失败处置，避免同进程入口互相误删。
+static SCHEDULER_ENVIRONMENT: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // File paths
@@ -122,7 +124,63 @@ pub fn invalidate_cache() {
     *guard = None;
 }
 
+fn disable_runner_after_error(error: String, migration: bool) -> String {
+    if !migration {
+        return error;
+    }
+    match scheduler::disable_runner() {
+        Ok(()) => error,
+        Err(disable_error) => format!("{}; {}", error, disable_error),
+    }
+}
+
+pub(crate) fn ensure_scheduler_environment() -> Result<(), String> {
+    if !scheduler::owns_machine_schedule() || scheduler::dev_build() {
+        return Ok(());
+    }
+    let _guard = SCHEDULER_ENVIRONMENT
+        .lock()
+        .map_err(|_| "routine environment lock poisoned".to_string())?;
+    let runner_needs_migration = !scheduler::installed_runner_supports_environment_snapshot();
+    let prepared_runner = scheduler::prepare_runner_binary().map_err(|error| {
+        disable_runner_after_error(error, runner_needs_migration)
+    })?;
+    let claude_config_dir = config::claude_config_dir_env().map(|(_, value)| value);
+    crate::routine_env::prepare_claude_config_dir(
+        config::data_dir(),
+        claude_config_dir.as_deref(),
+        runner_needs_migration,
+        || prepared_runner.commit().map_err(std::io::Error::other),
+        || scheduler::disable_runner().map_err(std::io::Error::other),
+    )
+    .map_err(|error| format!("routine environment preparation failed: {}", error))
+}
+
+fn ensure_wake_scheduler_environment() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    ensure_scheduler_environment()?;
+    Ok(())
+}
+
+fn suspend_machine_schedules_best_effort() {
+    if !scheduler::owns_machine_schedule() || scheduler::dev_build() {
+        return;
+    }
+    let routines_snapshot: Vec<RoutineDefinition> = with_routines(|routines| routines.clone());
+    for routine in &routines_snapshot {
+        if let Err(error) = scheduler::unregister_routine(&routine.id) {
+            log::warn!("failed to suspend routine {}: {}", routine.id, error);
+        }
+    }
+    let _ = scheduler::sync_wake_schedule(&[], "passive");
+}
+
 pub fn sync_scheduler() {
+    if let Err(e) = ensure_scheduler_environment() {
+        log::warn!("routine scheduler sync skipped: {}", e);
+        suspend_machine_schedules_best_effort();
+        return;
+    }
     let runner_path = scheduler::runner_binary_path();
     let routines_snapshot: Vec<RoutineDefinition> = with_routines(|routines| routines.clone());
     if let Err(e) = scheduler::sync_all(&routines_snapshot, &runner_path) {
@@ -306,6 +364,10 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
             Ok(located) => {
                 let mut cmd = Command::new(&located.path);
                 cmd.hide_console();
+                // 先清掉父进程覆盖，再按 Monet 已解析的最终根重建 CLI 环境；
+                // 避免 MONET_CLAUDE_ROOT 与继承的 CLAUDE_CONFIG_DIR 优先级交叉。
+                cmd.env_remove("MONET_CLAUDE_ROOT");
+                cmd.env_remove("CLAUDE_CONFIG_DIR");
                 if let Some((k, v)) = config::claude_config_dir_env() {
                     cmd.env(k, v);
                 }
@@ -410,9 +472,11 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
 // ---------------------------------------------------------------------------
 
 pub fn startup_sync() {
-    // Install runner binary to stable path
-    if let Err(e) = scheduler::install_runner_binary() {
-        log::warn!("routine runner install failed: {}", e);
+    // 独立 runner 看不到 App 启动时的 Claude 根覆盖，先把当前生效结果固化。
+    // 写失败时撤下既有系统任务，禁止旧 runner 沿用陈旧快照继续执行。
+    if let Err(e) = ensure_scheduler_environment() {
+        log::warn!("{}; suspending schedules", e);
+        suspend_machine_schedules_best_effort();
         return;
     }
 
@@ -457,6 +521,11 @@ pub fn startup_sync() {
 fn sync_wake_if_active() {
     let policy = wake_policy();
     if policy == "active" {
+        if let Err(e) = ensure_wake_scheduler_environment() {
+            log::warn!("routine wake sync skipped: {}", e);
+            suspend_machine_schedules_best_effort();
+            return;
+        }
         let snapshot: Vec<RoutineDefinition> = with_routines(|r| r.clone());
         handle_wake_outcome(scheduler::sync_wake_schedule(&snapshot, &policy));
     }
@@ -531,9 +600,14 @@ pub async fn create_routine(
     });
 
     if routine.enabled {
-        let runner_path = scheduler::runner_binary_path();
-        if let Err(e) = scheduler::register_routine(&routine, &runner_path) {
-            log::warn!("scheduler register failed: {}", e);
+        if let Err(e) = ensure_scheduler_environment() {
+            log::warn!("scheduler register skipped: {}", e);
+            suspend_machine_schedules_best_effort();
+        } else {
+            let runner_path = scheduler::runner_binary_path();
+            if let Err(e) = scheduler::register_routine(&routine, &runner_path) {
+                log::warn!("scheduler register failed: {}", e);
+            }
         }
     }
 
@@ -603,9 +677,14 @@ pub async fn update_routine(
         if !scheduler::dev_build() {
             let _ = scheduler::unregister_routine(&result.id);
             if result.enabled {
-                let runner_path = scheduler::runner_binary_path();
-                if let Err(e) = scheduler::register_routine(&result, &runner_path) {
-                    log::warn!("scheduler re-register failed: {}", e);
+                if let Err(e) = ensure_scheduler_environment() {
+                    log::warn!("scheduler re-register skipped: {}", e);
+                    suspend_machine_schedules_best_effort();
+                } else {
+                    let runner_path = scheduler::runner_binary_path();
+                    if let Err(e) = scheduler::register_routine(&result, &runner_path) {
+                        log::warn!("scheduler re-register failed: {}", e);
+                    }
                 }
             }
         }
@@ -711,6 +790,10 @@ pub async fn set_routine_wake_policy(policy: String) -> Result<(), String> {
     if policy == "active" && !crate::wake::authorization_present() {
         return Err("NEEDS_AUTHORIZATION".to_string());
     }
+    if let Err(error) = ensure_wake_scheduler_environment() {
+        suspend_machine_schedules_best_effort();
+        return Err(error);
+    }
     write_app_setting(
         "routineWakePolicy",
         serde_json::Value::String(policy.clone()),
@@ -735,6 +818,10 @@ pub async fn enable_wake_active() -> Result<(), String> {
     if !crate::wake::authorization_present() {
         crate::wake::install_authorization()?;
     }
+    if let Err(error) = ensure_wake_scheduler_environment() {
+        suspend_machine_schedules_best_effort();
+        return Err(error);
+    }
     write_app_setting(
         "routineWakePolicy",
         serde_json::Value::String("active".to_string()),
@@ -748,6 +835,10 @@ pub async fn enable_wake_active() -> Result<(), String> {
 /// 再提权删除 sudoers 文件（用户主动点击，弹窗在预期内）
 #[tauri::command]
 pub async fn remove_wake_authorization() -> Result<(), String> {
+    if let Err(error) = ensure_wake_scheduler_environment() {
+        suspend_machine_schedules_best_effort();
+        return Err(error);
+    }
     write_app_setting(
         "routineWakePolicy",
         serde_json::Value::String("passive".to_string()),

@@ -54,6 +54,11 @@ mod cron_expr;
 #[allow(dead_code)]
 mod routine_run;
 
+// Routine 执行环境由主 App 在启动同步时写快照，独立 runner 读取；
+// 避免 launchd 丢失 App 启动时的 MONET_CLAUDE_ROOT / CLAUDE_CONFIG_DIR
+#[path = "../routine_env.rs"]
+mod routine_env;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecutionLog {
@@ -72,6 +77,11 @@ struct ExecutionLog {
 }
 
 fn main() {
+    if env::args().any(|argument| argument == "--environment-protocol") {
+        println!("1:{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     // 权限体检模式：由主 App 经 launchd 触发（与真实定时任务相同的 TCC
     // 归因语境），自检后写结果文件退出。--prompt <kind> 时对指定权限发起
     // 请求式调用（弹系统授权窗，用户在权限页面点击驱动）
@@ -133,55 +143,72 @@ fn main() {
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let output = match claude_locator::locate_lightweight() {
-        Ok(located) => {
-            let mut cmd = Command::new(&located.path);
-            // claude 本体走绝对路径定位，PATH 是给它的子进程（npx MCP servers 等）用的
-            cmd.env("PATH", path_env::enhanced_path());
-            // 无控制台的父进程 spawn 控制台子进程会新开窗口，必须抑制
-            // （runner 不链 app_lib，不走 proc_ext 收口，内联同款 cfg 块）
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-            }
-            // claude 自立进程组（组 ID = claude PID）：主 App 终止时组信号
-            // 整树回收（含其 MCP 子进程），runner 不在组内、存活收尾写日志
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                cmd.process_group(0);
-            }
-            cmd.arg("-p")
-                .arg(&routine.prompt)
-                .arg("--output-format")
-                .arg("text")
-                .arg("--session-id")
-                .arg(&session_id);
-            if !persist {
-                cmd.arg("--no-session-persistence");
-            }
-            cmd.current_dir(agent_cwd())
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            match cmd.spawn() {
-                Ok(child) => {
-                    // spawn 成功即写运行标记：主 App 终止能力与状态展示的事实源
-                    routine_run::write_marker(
-                        &data_dir(),
-                        &routine_id,
-                        &routine_run::RunningMarker {
-                            pid: child.id(),
-                            started_at: started_at.clone(),
-                            source: "cron".to_string(),
-                            cancelled: false,
-                        },
-                    );
-                    child.wait_with_output()
+        Ok(located) => match routine_env::read_claude_config_dir(&data_dir()) {
+            Ok(claude_config_dir) => {
+                let mut cmd = Command::new(&located.path);
+                // claude 本体走绝对路径定位，PATH 是给它的子进程（npx MCP servers 等）用的
+                cmd.env("PATH", path_env::enhanced_path());
+                // MONET_CLAUDE_ROOT 仅供主 App 解析，不应泄漏给独立执行链；
+                // runner 只按快照决定是否向 Claude CLI 注入 CLAUDE_CONFIG_DIR
+                cmd.env_remove("MONET_CLAUDE_ROOT");
+                match claude_config_dir {
+                    Some(dir) => {
+                        cmd.env("CLAUDE_CONFIG_DIR", dir);
+                    }
+                    None => {
+                        cmd.env_remove("CLAUDE_CONFIG_DIR");
+                    }
                 }
-                Err(e) => Err(e),
+                // 无控制台的父进程 spawn 控制台子进程会新开窗口，必须抑制
+                // （runner 不链 app_lib，不走 proc_ext 收口，内联同款 cfg 块）
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                }
+                // claude 自立进程组（组 ID = claude PID）：主 App 终止时组信号
+                // 整树回收（含其 MCP 子进程），runner 不在组内、存活收尾写日志
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    cmd.process_group(0);
+                }
+                cmd.arg("-p")
+                    .arg(&routine.prompt)
+                    .arg("--output-format")
+                    .arg("text")
+                    .arg("--session-id")
+                    .arg(&session_id);
+                if !persist {
+                    cmd.arg("--no-session-persistence");
+                }
+                cmd.current_dir(agent_cwd())
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                match cmd.spawn() {
+                    Ok(child) => {
+                        // spawn 成功即写运行标记：主 App 终止能力与状态展示的事实源
+                        routine_run::write_marker(
+                            &data_dir(),
+                            &routine_id,
+                            &routine_run::RunningMarker {
+                                pid: child.id(),
+                                started_at: started_at.clone(),
+                                source: "cron".to_string(),
+                                cancelled: false,
+                            },
+                        );
+                        child.wait_with_output()
+                    }
+                    Err(e) => Err(e),
+                }
             }
-        }
+            Err(error) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("routine environment unavailable: {}", error),
+            )),
+        },
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::NotFound, e)),
     };
 

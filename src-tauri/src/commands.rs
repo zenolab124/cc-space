@@ -243,7 +243,7 @@ pub async fn run_runner_health_check(
         return Err("macOS only".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        crate::scheduler::install_runner_binary()?;
+        crate::routines::ensure_scheduler_environment()?;
         // dev 门控使 install 短路：健康检查是显式触发的瞬态 job（/tmp plist，
         // 不产生登录项），dev 下直接用 target 目录产物保持体检可用
         let runner = if crate::scheduler::dev_build() {
