@@ -6,6 +6,7 @@ import { useUiState } from '@/composables/useUiState'
 import { useAutomation, buildRows } from '@/composables/useAutomation'
 import { useRoutines, type RoutineDefinition, type RoutineRow, type RoutineExecutionLog } from '@/composables/useRoutines'
 import { renderMarkdownCached } from '@/composables/useMarkdown'
+import { stripAnsi } from '@/utils/ansi'
 import RoutineForm from '@/components/automation/RoutineForm.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
 
@@ -212,6 +213,18 @@ function formatLogTime(ts: string): string {
 
 function renderLogContent(log: RoutineExecutionLog): string {
   return renderMarkdownCached(log.stdout || '')
+}
+
+function isLogWarning(log: RoutineExecutionLog): boolean {
+  return log.exitCode === 0 && stripAnsi(log.stderr).trim().length > 0
+}
+
+function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'warning' | 'running' | 'failed' {
+  if (log.cancelled) return 'cancelled'
+  if (isLogWarning(log)) return 'warning'
+  if (log.exitCode === 0) return 'success'
+  if (log.exitCode == null) return 'running'
+  return 'failed'
 }
 </script>
 
@@ -530,7 +543,7 @@ function renderLogContent(log: RoutineExecutionLog): string {
               :class="['log-list-item', { active: logPopup.selected === i }]"
               @click="selectLog(i)"
             >
-              <span class="log-status" :class="log.cancelled ? 'cancelled' : log.exitCode === 0 ? 'success' : log.exitCode == null ? 'running' : 'failed'" />
+              <span class="log-status" :class="logStatus(log)" />
               <span class="text-xs">{{ formatLogTime(log.startedAt) }}</span>
               <span v-if="log.finishedAt" class="text-[10px] text-muted-foreground ml-auto">{{ formatDuration(log.startedAt, log.finishedAt) }}</span>
               <span v-else class="text-[10px] text-accent ml-auto">{{ $t('automation.logs.running') }}</span>
@@ -562,10 +575,18 @@ function renderLogContent(log: RoutineExecutionLog): string {
               <!-- stdout (Markdown) -->
               <div class="log-md prose prose-sm" v-html="renderLogContent(logPopup.logs[logPopup.selected])" />
 
-              <!-- stderr -->
+              <!-- stderr / warning -->
               <div v-if="logPopup.logs[logPopup.selected].stderr" class="mt-3">
-                <div class="text-[10px] font-medium text-destructive mb-1">{{ $t('automation.logs.stderr') }}</div>
-                <pre class="log-stderr">{{ logPopup.logs[logPopup.selected].stderr }}</pre>
+                <div
+                  class="text-[10px] font-medium mb-1"
+                  :class="isLogWarning(logPopup.logs[logPopup.selected]) ? 'text-amber' : 'text-destructive'"
+                >
+                  {{ $t(isLogWarning(logPopup.logs[logPopup.selected]) ? 'automation.logs.warning' : 'automation.logs.stderr') }}
+                </div>
+                <pre
+                  class="log-stderr"
+                  :class="{ warning: isLogWarning(logPopup.logs[logPopup.selected]) }"
+                >{{ stripAnsi(logPopup.logs[logPopup.selected].stderr) }}</pre>
               </div>
             </template>
           </div>
@@ -850,6 +871,7 @@ function renderLogContent(log: RoutineExecutionLog): string {
   flex-shrink: 0;
 }
 .log-status.success { background: var(--success, #2d7d3a); }
+.log-status.warning { background: #d08a24; }
 .log-status.failed { background: var(--destructive); }
 .log-status.running { background: var(--accent); animation: pulse 1.5s infinite; }
 .log-status.cancelled { background: var(--muted-foreground); }
@@ -908,12 +930,21 @@ function renderLogContent(log: RoutineExecutionLog): string {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--destructive);
-  background: var(--muted);
+  background: color-mix(in srgb, var(--destructive) 8%, var(--muted));
+  border: 1px solid color-mix(in srgb, var(--destructive) 20%, transparent);
   border-radius: calc(var(--radius) - 2px);
   padding: 8px 10px;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 120px;
   overflow-y: auto;
+}
+.log-stderr.warning {
+  color: #b56f12;
+  background: color-mix(in srgb, #d08a24 10%, var(--muted));
+  border-color: color-mix(in srgb, #d08a24 24%, transparent);
+}
+:global(.dark) .log-stderr.warning {
+  color: #f0b95c;
 }
 </style>

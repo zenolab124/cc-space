@@ -458,7 +458,8 @@
       "noLogs": "No execution records",
       "duration": "Duration {duration}",
       "exitCode": "Exit code {code}",
-      "stderr": "Stderr",
+      "stderr": "Error output",
+      "warning": "Execution warning",
       "running": "Running…",
       "cancelled": "Stopped"
     },

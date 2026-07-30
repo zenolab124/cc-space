@@ -459,6 +459,7 @@
       "duration": "耗时 {duration}",
       "exitCode": "退出码 {code}",
       "stderr": "错误输出",
+      "warning": "执行警告",
       "running": "运行中…",
       "cancelled": "已终止"
     },
