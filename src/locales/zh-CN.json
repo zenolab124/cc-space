@@ -739,7 +739,9 @@
     "agentLogsModel": "模型",
     "agentLogsDuration": "耗时",
     "agentLogsStatus": "状态",
+    "agentLogsFailed": "失败",
     "agentLogsEmpty": "暂无调用记录",
+    "agentChannelFallback": "{channel}（回落）",
     "agentFeature_title": "标题生成",
     "agentFeature_permission_hint": "权限批注",
     "agentFeature_settings_explain": "设置解读",
@@ -1082,7 +1084,7 @@
   },
   "channel": {
     "official": "跟随 CLI",
-    "officialDirect": "官方",
+    "officialDirect": "官方（直连）",
     "followCliHint": "使用 claude CLI 自身的配置——官方登录或你在 CLI 里配的第三方,CLI 什么样就什么样",
     "officialDirectHint": "无视 CLI 配置中的第三方设置,强制直连 Anthropic 官方(使用 CLI 的登录态)",
     "cliTargetOfficial": "→ 官方登录 (OAuth)"

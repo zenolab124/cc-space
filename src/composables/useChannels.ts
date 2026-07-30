@@ -179,12 +179,12 @@ async function setAgentFeatureModel(key: string, channel: string | null, model: 
 
 async function deleteChannel(id: string): Promise<void> {
   await invoke('delete_channel', { id })
-  await refreshChannels()
+  await Promise.all([refreshChannels(), loadAgentPreferences()])
 }
 
 async function setChannelEnabled(id: string, enabled: boolean): Promise<void> {
   await invoke('set_channel_enabled', { id, enabled })
-  await refreshChannels()
+  await Promise.all([refreshChannels(), loadAgentPreferences()])
 }
 
 const revealedTokens = ref<Record<string, string>>({})

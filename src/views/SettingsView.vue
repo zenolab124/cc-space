@@ -6,6 +6,7 @@ import { useI18n } from 'vue-i18n'
 import {
   useChannels,
   refreshChannels,
+  channelDisplayName,
   OFFICIAL_CHANNEL_ID,
   OFFICIAL_DIRECT_CHANNEL_ID,
   APPLE_FM_CHANNEL_ID,
@@ -222,6 +223,14 @@ async function clearAgentLogs() {
 }
 
 const agentLogsSorted = computed(() => [...agentLogs.value].reverse())
+
+function agentLogChannelLabel(channelId: string): string {
+  if (channelId === 'official(fallback)') {
+    return t('settings.agentChannelFallback', { channel: channelDisplayName(OFFICIAL_CHANNEL_ID) })
+  }
+  if (!channelId) return t('common.unknown')
+  return channelDisplayName(channelId)
+}
 
 const agentLogsStats = computed(() => {
   const logs = agentLogs.value
@@ -478,7 +487,6 @@ async function onDelete(ch: ChannelInfo) {
 }
 
 const sessionChannels = () => channels.value.filter(c => c.scope !== 'agent-only')
-const agentOnlyChannels = () => channels.value.filter(c => c.scope === 'agent-only' && c.id !== APPLE_FM_CHANNEL_ID)
 
 // 官方渠道 Agent 可选模型:从 modelContext 的 MODELS 派生(单源,消灭第二份清单)。
 // 取具体版本 id 并剥 [1m] 后缀(Agent 用的是 API 模型名,1M 由 CLI/请求侧处理),去重。
@@ -491,21 +499,27 @@ watch(defaultAgentChannel, (v) => { agentChannelId.value = v ?? OFFICIAL_CHANNEL
 
 const hasAppleFm = computed(() => channels.value.some(c => c.id === APPLE_FM_CHANNEL_ID))
 const agentChannelCards = computed(() =>
-  // 内置渠道(跟随 CLI/官方)在模板里硬编码为前两条,此处只列用户渠道
-  channels.value.filter(c => c.id !== OFFICIAL_CHANNEL_ID && c.id !== OFFICIAL_DIRECT_CHANNEL_ID && c.id !== APPLE_FM_CHANNEL_ID && c.enabled)
+  // 已禁用的全功能渠道在左栏管理；Agent-only 渠道必须保留卡片，才能重新启用。
+  channels.value.filter(c =>
+    c.id !== OFFICIAL_CHANNEL_ID
+    && c.id !== OFFICIAL_DIRECT_CHANNEL_ID
+    && c.id !== APPLE_FM_CHANNEL_ID
+    && (c.enabled || c.scope === 'agent-only'),
+  )
 )
 
 /** Agent 卡片的实际生效模型标签:与 Rust 侧 fallback_agent_model 同序——
- *  显式 agentModel > 渠道默认模型 > 清单中含 haiku 者 > 清单首项 > haiku 写死值 */
+ *  显式 agentModel > 渠道默认模型 > 清单中含 haiku 者 > 清单首项 > 未配置 */
 function agentModelTag(ch: ChannelInfo): string {
   if (ch.agentModel) return ch.agentModel
   if (ch.defaultModel) return ch.defaultModel
   const models = ch.availableModels
-  return models.find(m => m.toLowerCase().includes('haiku')) ?? models[0] ?? 'haiku'
+  return models.find(m => m.toLowerCase().includes('haiku')) ?? models[0] ?? '—'
 }
 
-/** 内置虚拟渠道(无文件):不给编辑/删除/探测按钮 */
-const isBuiltinChannel = (id: string) => id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID
+/** 内置渠道由运行能力决定，不提供启停或删除。 */
+const isBuiltinChannel = (id: string) =>
+  id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID || id === APPLE_FM_CHANNEL_ID
 /** 内置渠道显示名走 i18n(Rust 侧默认名为英文) */
 const builtinChannelName = (ch: ChannelInfo) =>
   ch.id === OFFICIAL_CHANNEL_ID ? t('channel.official')
@@ -524,10 +538,16 @@ function toggleAppleFmAgent() {
 
 function onAgentChannelChange(id: string) {
   agentChannelId.value = id
-  setDefaultAgentModel(
-    id === OFFICIAL_CHANNEL_ID ? null : id,
-    'haiku',
-  )
+  if (id === OFFICIAL_CHANNEL_ID) {
+    setDefaultAgentModel(null, null)
+    return
+  }
+  if (id === OFFICIAL_DIRECT_CHANNEL_ID) {
+    setDefaultAgentModel(id, 'haiku')
+    return
+  }
+  const channel = channels.value.find(ch => ch.id === id)
+  setDefaultAgentModel(id, channel?.agentModel ?? null)
 }
 
 const agentModelOptions = () => {
@@ -737,8 +757,11 @@ function onSaved() {
                   v-for="ch in sessionChannels()"
                   :key="ch.id"
                   class="chain-item"
-                  :class="{ 'chain-item-active': (defaultSessionChannel ?? OFFICIAL_CHANNEL_ID) === ch.id }"
-                  @click="setDefaultSessionChannel(ch.id === OFFICIAL_CHANNEL_ID ? null : ch.id)"
+                  :class="{
+                    'chain-item-active': (defaultSessionChannel ?? OFFICIAL_CHANNEL_ID) === ch.id,
+                    'opacity-50': !ch.enabled,
+                  }"
+                  @click="ch.enabled && setDefaultSessionChannel(ch.id === OFFICIAL_CHANNEL_ID ? null : ch.id)"
                 >
                   <div class="chain-content">
                     <div class="chain-row-1">
@@ -747,7 +770,7 @@ function onSaved() {
                         <span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" />
                       </span>
                       <div class="chain-actions">
-                        <button :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
+                        <button v-if="!isBuiltinChannel(ch.id)" :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
                         <template v-if="!isBuiltinChannel(ch.id)">
                           <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                           <button class="icon-btn icon-btn-sm icon-btn-ghost icon-btn-danger" v-tooltip="$t('common.delete')" @click.stop="onDelete(ch)"><span class="i-carbon-trash-can w-3 h-3" /></button>
@@ -824,13 +847,17 @@ function onSaved() {
                   v-for="ch in agentChannelCards"
                   :key="ch.id"
                   class="chain-item"
-                  :class="{ 'chain-item-active': agentChannelId === ch.id }"
-                  @click="onAgentChannelChange(ch.id)"
+                  :class="{
+                    'chain-item-active': agentChannelId === ch.id,
+                    'opacity-50': !ch.enabled,
+                  }"
+                  @click="ch.enabled && onAgentChannelChange(ch.id)"
                 >
                   <div class="chain-content">
                     <div class="chain-row-1">
                       <span class="truncate font-medium text-xs">{{ ch.name }}</span>
                       <div class="chain-actions">
+                        <button v-if="ch.scope === 'agent-only'" :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
                         <button v-if="ch.scope === 'agent-only'" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                       </div>
                     </div>
@@ -1038,7 +1065,7 @@ function onSaved() {
           >
             <div v-if="agentTestResult.success" class="flex items-center gap-3 text-foreground">
               <span class="text-emerald-600 dark:text-emerald-400 font-medium">OK</span>
-              <span class="text-muted-foreground">{{ agentTestResult.channelId }}</span>
+              <span class="text-muted-foreground">{{ agentLogChannelLabel(agentTestResult.channelId) }}</span>
               <span class="font-mono text-muted-foreground">{{ agentTestResult.model }}</span>
               <span class="font-mono text-muted-foreground">{{ agentTestResult.durationMs >= 1000 ? `${(agentTestResult.durationMs / 1000).toFixed(1)}s` : `${agentTestResult.durationMs}ms` }}</span>
               <span v-if="agentTestResult.inputTokens" class="font-mono text-muted-foreground">↑{{ agentTestResult.inputTokens }} ↓{{ agentTestResult.outputTokens }}</span>
@@ -1387,7 +1414,7 @@ function onSaved() {
               <tr v-for="(log, i) in agentLogsSorted" :key="i" :class="{ 'opacity-60': !log.success }">
                 <td class="font-mono whitespace-nowrap">{{ new Date(log.timestamp).toLocaleString() }}</td>
                 <td>{{ $t(`settings.agentFeature_${log.feature}`, log.feature) }}</td>
-                <td class="font-mono">{{ log.channelId || 'official' }}</td>
+                <td>{{ agentLogChannelLabel(log.channelId) }}</td>
                 <td class="font-mono truncate max-w-32" :title="log.model">{{ log.model }}</td>
                 <td class="text-right font-mono">{{ log.durationMs >= 1000 ? `${(log.durationMs / 1000).toFixed(1)}s` : `${log.durationMs}ms` }}</td>
                 <td class="text-right font-mono">
@@ -1396,7 +1423,9 @@ function onSaved() {
                 </td>
                 <td>
                   <span v-if="log.success" class="text-emerald-600 dark:text-emerald-400">OK</span>
-                  <span v-else class="text-destructive cursor-help" :title="log.error">FAIL</span>
+                  <span v-else class="block max-w-72 truncate text-destructive" :title="log.error">
+                    {{ $t('settings.agentLogsFailed') }}<template v-if="log.error"> · {{ log.error }}</template>
+                  </span>
                 </td>
                 <td>
                   <button

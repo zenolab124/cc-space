@@ -739,7 +739,9 @@
     "agentLogsModel": "Model",
     "agentLogsDuration": "Duration",
     "agentLogsStatus": "Status",
+    "agentLogsFailed": "Failed",
     "agentLogsEmpty": "No call logs yet",
+    "agentChannelFallback": "{channel} (fallback)",
     "agentFeature_title": "Title",
     "agentFeature_permission_hint": "Permission Hint",
     "agentFeature_settings_explain": "Settings Explain",
@@ -1082,7 +1084,7 @@
   },
   "channel": {
     "official": "Follow CLI",
-    "officialDirect": "Official",
+    "officialDirect": "Official (Direct)",
     "followCliHint": "Uses the claude CLI's own configuration — official login or any third-party env you set up in the CLI, as-is",
     "officialDirectHint": "Ignores third-party settings in the CLI config and connects straight to Anthropic official (using the CLI's login state)",
     "cliTargetOfficial": "→ official login (OAuth)"
