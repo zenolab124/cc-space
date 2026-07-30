@@ -239,7 +239,7 @@ function onInputKeydown(e: KeyboardEvent) {
           v-model="inputText"
           :placeholder="t('workbench.race.sharedInput')"
           rows="1"
-          class="flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border text-foreground placeholder-muted-foreground resize-none focus:outline-none focus:border-ring transition-colors"
+          class="flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border text-foreground placeholder-muted-foreground resize-none overflow-x-hidden placeholder:[white-space:pre-wrap] focus:outline-none focus:border-ring transition-colors"
           @keydown="onInputKeydown"
           @input="autoResize"
         />

@@ -2917,6 +2917,7 @@ async function onReload() {
           rows="1"
           class="flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border
                  text-foreground placeholder-muted-foreground resize-none
+                 overflow-x-hidden placeholder:[white-space:pre-wrap]
                  focus:outline-none focus:border-ring transition-colors"
           @keydown="onInputKeydown"
           @input="onInputChange"
