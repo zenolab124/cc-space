@@ -217,42 +217,100 @@ fn request_with_fallback(prompt: &str, model: &str, max_tokens: u32) -> Result<A
 }
 
 fn request_for_agent(prompt: &str, agent_key: &str) -> Result<String, String> {
-    let start = std::time::Instant::now();
-    let result = request_for_agent_inner(prompt, agent_key);
-    let duration_ms = start.elapsed().as_millis() as u64;
-    match &result {
-        Ok(r) => {
-            record_log(agent_key, &r.channel_id, &r.model, duration_ms, r.usage.as_ref(), true, None, r.session_id.as_deref());
-            Ok(r.text.clone())
-        }
-        Err(e) => {
-            // 失败也带 session_id：CLI 已落盘的错误会话正是最需要「查看会话」的
-            record_log(agent_key, "", "", duration_ms, None, false, Some(&e.message), e.session_id.as_deref());
-            Err(e.message.clone())
-        }
-    }
+    request_for_agent_result(prompt, agent_key, 2048).map(|result| result.text)
 }
 
-fn request_for_agent_inner(prompt: &str, agent_key: &str) -> Result<AgentCallResult, CliCallError> {
-    if let Some(cred) = crate::channels::resolve_agent_for_feature(agent_key) {
-        let channel_id = cred.id.clone();
-        let effective_model = cred.agent_model.as_deref().unwrap_or(HTTP_FALLBACK_AGENT_MODEL).to_string();
-        match call_channel(&cred, prompt, &effective_model, 2048) {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                eprintln!("[agent] channel {} failed for {}, fallback: {}", channel_id, agent_key, e.message);
-                record_log(agent_key, &channel_id, &effective_model, 0, None, false, Some(&e.message), e.session_id.as_deref());
+fn request_for_agent_result(
+    prompt: &str,
+    agent_key: &str,
+    max_tokens: u32,
+) -> Result<AgentCallResult, String> {
+    let fell_back = match crate::channels::resolve_agent_for_feature_logged(agent_key) {
+        Ok(None) => false,
+        Err(e) => {
+            record_log(
+                agent_key,
+                &e.channel_id,
+                "",
+                0,
+                None,
+                false,
+                Some(&e.message),
+                None,
+            );
+            true
+        }
+        Ok(Some(cred)) if cred.id == crate::channels::OFFICIAL_ID => {
+            return request_logged_cli(
+                agent_key,
+                prompt,
+                OFFICIAL_AGENT_MODEL,
+                "low",
+                "official",
+                false,
+            );
+        }
+        Ok(Some(cred)) => {
+            let channel_id = cred.id.clone();
+            let effective_model = if cred.is_official {
+                OFFICIAL_AGENT_MODEL.to_string()
+            } else {
+                cred.agent_model
+                    .as_deref()
+                    .unwrap_or(HTTP_FALLBACK_AGENT_MODEL)
+                    .to_string()
+            };
+            let start = std::time::Instant::now();
+            match call_channel(&cred, prompt, &effective_model, max_tokens) {
+                Ok(result) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    record_log(
+                        agent_key,
+                        &result.channel_id,
+                        &result.model,
+                        duration_ms,
+                        result.usage.as_ref(),
+                        true,
+                        None,
+                        result.session_id.as_deref(),
+                    );
+                    return Ok(result);
+                }
+                Err(e) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    eprintln!(
+                        "[agent] channel {} failed for {}, fallback: {}",
+                        channel_id, agent_key, e.message
+                    );
+                    record_log(
+                        agent_key,
+                        &channel_id,
+                        &effective_model,
+                        duration_ms,
+                        None,
+                        false,
+                        Some(&e.message),
+                        e.session_id.as_deref(),
+                    );
+                    true
+                }
             }
         }
-    }
-    let r = request_blocking(prompt, false)?;
-    Ok(AgentCallResult {
-        text: r.text,
-        channel_id: "official(fallback)".to_string(),
-        model: OFFICIAL_AGENT_MODEL.to_string(),
-        usage: r.usage,
-        session_id: r.session_id,
-    })
+    };
+
+    let channel_id = if fell_back {
+        "official(fallback)"
+    } else {
+        "official"
+    };
+    request_logged_cli(
+        agent_key,
+        prompt,
+        OFFICIAL_AGENT_MODEL,
+        "low",
+        channel_id,
+        false,
+    )
 }
 
 fn request_blocking(prompt: &str, official_direct: bool) -> Result<CliCallResult, CliCallError> {
@@ -545,16 +603,137 @@ pub fn extract_search_terms(question: &str, model: &str, effort: &str) -> Result
     Ok(terms)
 }
 
-/// 智能搜索专用：官方 CLI 直调 + 记账（与 request_for_agent 的渠道链路口径对齐）
-fn request_logged(feature: &str, prompt: &str, model: &str, effort: &str) -> Result<CliCallResult, String> {
+/// 智能搜索专用：跟随会话默认渠道；非跟随 CLI 渠道失败后回落 CLI，并分别记账。
+fn request_logged(feature: &str, prompt: &str, model: &str, effort: &str) -> Result<AgentCallResult, String> {
+    let fell_back = match crate::channels::resolve_session_credentials(model) {
+        Ok(None) => false,
+        Err(e) => {
+            record_log(
+                feature,
+                &e.channel_id,
+                "",
+                0,
+                None,
+                false,
+                Some(&e.message),
+                None,
+            );
+            true
+        }
+        Ok(Some(cred)) if cred.id == crate::channels::OFFICIAL_ID => {
+            return request_logged_cli(feature, prompt, model, effort, "official", false);
+        }
+        Ok(Some(cred)) if cred.id == crate::channels::OFFICIAL_DIRECT_ID => {
+            match request_logged_cli(
+                feature,
+                prompt,
+                model,
+                effort,
+                crate::channels::OFFICIAL_DIRECT_ID,
+                true,
+            ) {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    eprintln!(
+                        "[agent] session channel {} failed for {}, fallback: {}",
+                        crate::channels::OFFICIAL_DIRECT_ID,
+                        feature,
+                        e
+                    );
+                    true
+                }
+            }
+        }
+        Ok(Some(cred)) => {
+            let channel_id = cred.id.clone();
+            let effective_model = cred.agent_model.as_deref().unwrap_or(model).to_string();
+            let start = std::time::Instant::now();
+            match call_channel(&cred, prompt, &effective_model, 2048) {
+                Ok(result) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    record_log(
+                        feature,
+                        &result.channel_id,
+                        &result.model,
+                        duration_ms,
+                        result.usage.as_ref(),
+                        true,
+                        None,
+                        result.session_id.as_deref(),
+                    );
+                    return Ok(result);
+                }
+                Err(e) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    eprintln!(
+                        "[agent] session channel {} failed for {}, fallback: {}",
+                        channel_id, feature, e.message
+                    );
+                    record_log(
+                        feature,
+                        &channel_id,
+                        &effective_model,
+                        duration_ms,
+                        None,
+                        false,
+                        Some(&e.message),
+                        e.session_id.as_deref(),
+                    );
+                    true
+                }
+            }
+        }
+    };
+
+    let channel_id = if fell_back { "official(fallback)" } else { "official" };
+    request_logged_cli(feature, prompt, model, effort, channel_id, false)
+}
+
+fn request_logged_cli(
+    feature: &str,
+    prompt: &str,
+    model: &str,
+    effort: &str,
+    channel_id: &str,
+    official_direct: bool,
+) -> Result<AgentCallResult, String> {
     let start = std::time::Instant::now();
-    let result = request_blocking_with(prompt, model, effort, false);
+    let result = request_blocking_with(prompt, model, effort, official_direct);
     let duration_ms = start.elapsed().as_millis() as u64;
-    match &result {
-        Ok(r) => record_log(feature, "official", model, duration_ms, r.usage.as_ref(), true, None, r.session_id.as_deref()),
-        Err(e) => record_log(feature, "official", model, duration_ms, None, false, Some(&e.message), e.session_id.as_deref()),
+    match result {
+        Ok(r) => {
+            record_log(
+                feature,
+                channel_id,
+                model,
+                duration_ms,
+                r.usage.as_ref(),
+                true,
+                None,
+                r.session_id.as_deref(),
+            );
+            Ok(AgentCallResult {
+                text: r.text,
+                channel_id: channel_id.to_string(),
+                model: model.to_string(),
+                usage: r.usage,
+                session_id: r.session_id,
+            })
+        }
+        Err(e) => {
+            record_log(
+                feature,
+                channel_id,
+                model,
+                duration_ms,
+                None,
+                false,
+                Some(&e.message),
+                e.session_id.as_deref(),
+            );
+            Err(e.message)
+        }
     }
-    result.map_err(|e| e.message)
 }
 
 /// 根据搜索结果综合回答用户的回忆问题
@@ -688,39 +867,33 @@ pub struct AgentTestResult {
 pub async fn test_agent_channel() -> AgentTestResult {
     let start = std::time::Instant::now();
     let result = tauri::async_runtime::spawn_blocking(|| {
-        request_with_fallback("Reply with exactly: OK", HTTP_FALLBACK_AGENT_MODEL, 32)
+        request_for_agent_result("Reply with exactly: OK", "test", 32)
     })
     .await
-    .map_err(|e| CliCallError { message: e.to_string(), session_id: None })
+    .map_err(|e| e.to_string())
     .and_then(|r| r);
     let duration_ms = start.elapsed().as_millis() as u64;
     match result {
-        Ok(r) => {
-            record_log("test", &r.channel_id, &r.model, duration_ms, r.usage.as_ref(), true, None, r.session_id.as_deref());
-            AgentTestResult {
-                success: true,
-                channel_id: r.channel_id,
-                model: r.model,
-                duration_ms,
-                input_tokens: r.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
-                output_tokens: r.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
-                reply: r.text,
-                error: None,
-            }
-        }
-        Err(e) => {
-            record_log("test", "", "", duration_ms, None, false, Some(&e.message), e.session_id.as_deref());
-            AgentTestResult {
-                success: false,
-                channel_id: String::new(),
-                model: String::new(),
-                duration_ms,
-                input_tokens: 0,
-                output_tokens: 0,
-                reply: String::new(),
-                error: Some(e.message),
-            }
-        }
+        Ok(r) => AgentTestResult {
+            success: true,
+            channel_id: r.channel_id,
+            model: r.model,
+            duration_ms,
+            input_tokens: r.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
+            output_tokens: r.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
+            reply: r.text,
+            error: None,
+        },
+        Err(message) => AgentTestResult {
+            success: false,
+            channel_id: String::new(),
+            model: String::new(),
+            duration_ms,
+            input_tokens: 0,
+            output_tokens: 0,
+            reply: String::new(),
+            error: Some(message),
+        },
     }
 }
 

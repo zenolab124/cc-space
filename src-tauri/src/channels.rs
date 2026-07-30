@@ -34,6 +34,10 @@ const OFFICIAL_BASE_URL: &str = "https://api.anthropic.com";
 pub const APPLE_FM_ID: &str = "apple-fm";
 const APPLE_FM_PORT: u16 = 39175;
 
+fn is_builtin_channel(id: &str) -> bool {
+    id == OFFICIAL_ID || id == OFFICIAL_DIRECT_ID || id == APPLE_FM_ID
+}
+
 /// 注入渠道时无条件压制的认证/路由残留键
 pub const DEFENSE_ENV_KEYS: [&str; 4] = [
     "ANTHROPIC_API_KEY",
@@ -152,6 +156,7 @@ pub(crate) fn read_channel_ext(id: &str) -> Option<ChannelExt> {
 pub struct ChannelMeta {
     pub name: Option<String>,
     pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     pub protocol: Option<String>,
     pub scope: Option<String>,
@@ -209,6 +214,35 @@ pub struct AppSettings {
     pub extra: Map<String, Value>,
 }
 
+fn is_channel_enabled(settings: &AppSettings, id: &str) -> bool {
+    is_builtin_channel(id)
+        || settings
+            .channels
+            .get(id)
+            .map_or(true, ChannelMeta::is_enabled)
+}
+
+fn clear_channel_references(settings: &mut AppSettings, id: &str) -> bool {
+    let mut changed = false;
+    if settings.default_session_channel.as_deref() == Some(id) {
+        settings.default_session_channel = None;
+        changed = true;
+    }
+    if settings.default_agent_channel.as_deref() == Some(id) {
+        settings.default_agent_channel = None;
+        settings.default_agent_model = None;
+        changed = true;
+    }
+    for prefs in settings.agent_preferences.values_mut() {
+        if prefs.preferred_channel.as_deref() == Some(id) {
+            prefs.preferred_channel = None;
+            prefs.preferred_model = None;
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub(crate) fn load_app_settings() -> AppSettings {
     let mut settings: AppSettings = fs::read_to_string(settings_path())
         .ok()
@@ -240,6 +274,37 @@ pub(crate) fn load_app_settings() -> AppSettings {
         settings.session_chain.clear();
         settings.agent_chain.clear();
         migrated = true;
+    }
+
+    // 内置渠道由运行能力决定，不参与普通渠道的启停生命周期。
+    for id in [OFFICIAL_ID, OFFICIAL_DIRECT_ID, APPLE_FM_ID] {
+        if settings
+            .channels
+            .get_mut(id)
+            .is_some_and(|meta| meta.enabled.take().is_some())
+        {
+            migrated = true;
+        }
+    }
+
+    // 兼容旧版本留下的矛盾状态：禁用的第三方不能继续作为任何默认项或功能偏好。
+    let disabled_ids: Vec<String> = settings
+        .channels
+        .iter()
+        .filter(|(id, meta)| !is_builtin_channel(id) && !meta.is_enabled())
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in disabled_ids {
+        migrated |= clear_channel_references(&mut settings, &id);
+    }
+
+    if settings.default_agent_channel.is_none() && settings.default_agent_model.take().is_some() {
+        migrated = true;
+    }
+    for prefs in settings.agent_preferences.values_mut() {
+        if prefs.preferred_channel.is_none() && prefs.preferred_model.take().is_some() {
+            migrated = true;
+        }
     }
 
     if migrated {
@@ -307,6 +372,123 @@ pub struct AgentChannelCredentials {
     pub agent_model: Option<String>,
 }
 
+pub struct AgentChannelResolveError {
+    pub channel_id: String,
+    pub message: String,
+}
+
+/// 解析会话默认渠道凭据，供智能搜索等跟随会话默认值的功能使用。
+pub fn resolve_session_credentials(
+    requested_model: &str,
+) -> Result<Option<AgentChannelCredentials>, AgentChannelResolveError> {
+    let settings = load_app_settings();
+    let Some(channel_id) = settings.default_session_channel.as_deref() else {
+        return Ok(None);
+    };
+    let model = resolve_session_model(channel_id, requested_model);
+    resolve_channel_credentials_checked(channel_id, &settings, model).map(Some)
+}
+
+pub fn resolve_agent_for_feature_logged(
+    key: &str,
+) -> Result<Option<AgentChannelCredentials>, AgentChannelResolveError> {
+    let settings = load_app_settings();
+    let (channel_id, model) = settings
+        .agent_preferences
+        .get(key)
+        .and_then(|prefs| {
+            prefs
+                .preferred_channel
+                .as_deref()
+                .map(|channel| (channel, prefs.preferred_model.clone()))
+        })
+        .or_else(|| {
+            settings
+                .default_agent_channel
+                .as_deref()
+                .map(|channel| (channel, settings.default_agent_model.clone()))
+        })
+        .map_or((None, None), |(channel, model)| (Some(channel), model));
+
+    let Some(channel_id) = channel_id else {
+        return Ok(None);
+    };
+    resolve_channel_credentials_checked(channel_id, &settings, model).map(Some)
+}
+
+fn resolve_channel_credentials_checked(
+    channel_id: &str,
+    settings: &AppSettings,
+    model: Option<String>,
+) -> Result<AgentChannelCredentials, AgentChannelResolveError> {
+    if !is_channel_enabled(settings, channel_id) {
+        return Err(AgentChannelResolveError {
+            channel_id: channel_id.to_string(),
+            message: "渠道已禁用".to_string(),
+        });
+    }
+
+    resolve_channel_credentials(channel_id, settings, model).ok_or_else(|| {
+        AgentChannelResolveError {
+            channel_id: channel_id.to_string(),
+            message: "渠道配置或凭据不可用".to_string(),
+        }
+    })
+}
+
+fn resolve_session_model(channel_id: &str, requested_model: &str) -> Option<String> {
+    let requested_model = requested_model.trim();
+    if requested_model.is_empty() {
+        return fallback_agent_model(channel_id);
+    }
+    if channel_id == APPLE_FM_ID {
+        return Some("system".to_string());
+    }
+    if channel_id == OFFICIAL_ID || channel_id == OFFICIAL_DIRECT_ID {
+        return Some(requested_model.to_string());
+    }
+
+    let parsed: Value = serde_json::from_str(
+        &fs::read_to_string(channel_file_path(channel_id)).ok()?,
+    )
+    .ok()?;
+    let env = parsed.get("env").and_then(Value::as_object);
+    let requested_lower = requested_model.to_ascii_lowercase();
+    let role = ["fable", "opus", "sonnet", "haiku"]
+        .into_iter()
+        .find(|role| requested_lower.contains(role));
+
+    if let Some(role) = role {
+        let key = format!("ANTHROPIC_DEFAULT_{}_MODEL", role.to_ascii_uppercase());
+        if let Some(model) = env
+            .and_then(|values| values.get(&key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+        {
+            return Some(model.to_string());
+        }
+    }
+
+    let models = read_channel_ext(channel_id)
+        .map(|ext| ext.available_models)
+        .unwrap_or_default();
+    if let Some(model) = models.iter().find(|model| {
+        model.eq_ignore_ascii_case(requested_model)
+            || role.is_some_and(|role| model.to_ascii_lowercase().contains(role))
+    }) {
+        return Some(model.clone());
+    }
+
+    env.and_then(|values| values.get("ANTHROPIC_MODEL"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(String::from)
+        .or_else(|| models.first().cloned())
+        .or_else(|| Some(requested_model.to_string()))
+}
+
 /// Resolve single agent credentials from default settings
 pub fn resolve_agent_credentials() -> Option<AgentChannelCredentials> {
     let settings = load_app_settings();
@@ -331,8 +513,8 @@ pub fn resolve_agent_for_feature(key: &str) -> Option<AgentChannelCredentials> {
 }
 
 fn resolve_channel_credentials(channel_id: &str, settings: &AppSettings, model_override: Option<String>) -> Option<AgentChannelCredentials> {
+    if !is_channel_enabled(settings, channel_id) { return None; }
     let meta = settings.channels.get(channel_id);
-    if !meta.map_or(true, |m| m.is_enabled()) { return None; }
 
     if channel_id == OFFICIAL_ID {
         return Some(AgentChannelCredentials {
@@ -463,7 +645,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             auth_token_masked: None,
             extra_env_keys: vec![],
             valid: true,
-            enabled: meta.is_enabled(),
+            enabled: true,
             protocol: "anthropic".to_string(),
             scope: "full".to_string(),
             agent_model: None,
@@ -482,7 +664,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             auth_token_masked: None,
             extra_env_keys: vec![],
             valid: true,
-            enabled: meta.is_enabled(),
+            enabled: true,
             protocol: "anthropic".to_string(),
             scope: "full".to_string(),
             agent_model: None,
@@ -501,7 +683,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             auth_token_masked: None,
             extra_env_keys: vec![],
             valid: true,
-            enabled: meta.is_enabled(),
+            enabled: true,
             protocol: "openai".to_string(),
             scope: "agent-only".to_string(),
             agent_model: meta.agent_model.clone(),
@@ -779,6 +961,9 @@ pub fn set_official_defaults(model: Option<String>, effort: Option<String>) -> R
 
 #[tauri::command]
 pub fn delete_channel(id: String) -> Result<(), String> {
+    if is_builtin_channel(&id) {
+        return Err("内置渠道不能删除".to_string());
+    }
     validate_id(&id)?;
     let path = channel_file_path(&id);
     if path.is_file() {
@@ -786,28 +971,36 @@ pub fn delete_channel(id: String) -> Result<(), String> {
     }
     let mut settings = load_app_settings();
     settings.channels.remove(&id);
-    if settings.default_session_channel.as_deref() == Some(&id) {
-        settings.default_session_channel = None;
-    }
-    if settings.default_agent_channel.as_deref() == Some(&id) {
-        settings.default_agent_channel = None;
-        settings.default_agent_model = None;
-    }
+    clear_channel_references(&mut settings, &id);
     save_app_settings(&settings)
 }
 
 #[tauri::command]
 pub fn set_channel_enabled(id: String, enabled: bool) -> Result<(), String> {
+    if is_builtin_channel(&id) {
+        return Ok(());
+    }
+    validate_id(&id)?;
     let mut settings = load_app_settings();
-    let meta = settings.channels.entry(id).or_default();
+    let meta = settings.channels.entry(id.clone()).or_default();
     meta.enabled = Some(enabled);
+    if !enabled {
+        clear_channel_references(&mut settings, &id);
+    }
     save_app_settings(&settings)
 }
 
 #[tauri::command]
 pub fn set_default_session_channel(id: Option<String>) -> Result<(), String> {
     let mut settings = load_app_settings();
-    settings.default_session_channel = id.filter(|s| !s.is_empty() && s != OFFICIAL_ID);
+    let channel = id.filter(|s| !s.is_empty() && s != OFFICIAL_ID);
+    if channel
+        .as_deref()
+        .is_some_and(|id| !is_channel_enabled(&settings, id))
+    {
+        return Err("已禁用的渠道不能设为会话默认渠道".to_string());
+    }
+    settings.default_session_channel = channel;
     save_app_settings(&settings)
 }
 
@@ -851,8 +1044,19 @@ pub fn get_cli_env_target() -> Value {
 #[tauri::command]
 pub fn set_default_agent_model(channel: Option<String>, model: Option<String>) -> Result<(), String> {
     let mut settings = load_app_settings();
-    settings.default_agent_channel = channel.filter(|s| !s.is_empty());
-    settings.default_agent_model = model.filter(|s| !s.is_empty());
+    let channel = channel.filter(|s| !s.is_empty() && s != OFFICIAL_ID);
+    if channel
+        .as_deref()
+        .is_some_and(|id| !is_channel_enabled(&settings, id))
+    {
+        return Err("已禁用的渠道不能设为 Agent 默认渠道".to_string());
+    }
+    settings.default_agent_model = if channel.is_some() {
+        model.filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+    settings.default_agent_channel = channel;
     save_app_settings(&settings)
 }
 
@@ -897,9 +1101,20 @@ pub fn get_agent_preferences() -> BTreeMap<String, AgentFeaturePrefs> {
 #[tauri::command]
 pub fn set_agent_feature_model(key: String, channel: Option<String>, model: Option<String>) -> Result<(), String> {
     let mut settings = load_app_settings();
+    let channel = channel.filter(|s| !s.is_empty());
+    if channel
+        .as_deref()
+        .is_some_and(|id| !is_channel_enabled(&settings, id))
+    {
+        return Err("已禁用的渠道不能设为功能偏好".to_string());
+    }
     let prefs = settings.agent_preferences.entry(key).or_default();
-    prefs.preferred_channel = channel.filter(|s| !s.is_empty());
-    prefs.preferred_model = model.filter(|s| !s.is_empty());
+    prefs.preferred_model = if channel.is_some() {
+        model.filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+    prefs.preferred_channel = channel;
     save_app_settings(&settings)
 }
 
@@ -1223,7 +1438,6 @@ pub fn register_apple_fm_if_available() {
     let meta = ChannelMeta {
         name: Some("Apple FM".to_string()),
         note: Some("Apple Foundation Models (local)".to_string()),
-        enabled: Some(true),
         protocol: Some("openai".to_string()),
         scope: Some("agent-only".to_string()),
         ..Default::default()
