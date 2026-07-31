@@ -27,6 +27,7 @@ fn invalid_data(message: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message.into())
 }
 
+#[allow(dead_code)]
 fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
@@ -37,6 +38,7 @@ fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
+#[allow(dead_code)]
 fn publish_snapshot(path: &Path, content: &str) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
     if let Err(error) = write_synced(&tmp, content).and_then(|_| replace_file(&tmp, path)) {
@@ -51,6 +53,7 @@ fn publish_snapshot(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -74,10 +77,12 @@ fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
     fs::rename(source, target)
 }
 
+#[allow(dead_code)]
 pub fn prepare_claude_config_dir<F, G>(
     data_dir: &Path,
     claude_config_dir: Option<&str>,
@@ -92,6 +97,7 @@ where
     fs::create_dir_all(data_dir)?;
     let lock = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path(data_dir))?;
@@ -138,13 +144,15 @@ where
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn read_claude_config_dir(data_dir: &Path) -> std::io::Result<Option<String>> {
     let lock = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path(data_dir))?;
-    lock.lock_shared()?;
+    FileExt::lock_shared(&lock)?;
 
     let content = fs::read_to_string(snapshot_path(data_dir))?;
     let environment: RoutineEnvironment =

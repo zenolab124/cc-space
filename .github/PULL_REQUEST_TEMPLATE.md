@@ -2,6 +2,10 @@
 
 <!-- Brief description of the change and its motivation. Link related issues with #123. -->
 
+## Related issues
+
+Refs #
+
 ## Checklist
 
 - [ ] `pnpm build` and `pnpm test` pass locally

@@ -31,6 +31,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Unit tests
+        run: pnpm test
+
       # 类型检查 + 构建产物完整性（package.json build = vue-tsc --noEmit && vite build）
       - name: Typecheck & build
         run: pnpm build
