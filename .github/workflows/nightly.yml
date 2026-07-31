@@ -112,6 +112,8 @@ jobs:
           security find-certificate -c "Monet Signing" -p build.keychain > /tmp/cert.pem
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
           rm -f /tmp/cert.p12 /tmp/cert.pem
+          IDENTITIES=$(security find-identity -v -p codesigning)
+          grep -F '"Monet Signing"' <<< "$IDENTITIES" >/dev/null
 
       - name: Install dependencies
         if: steps.check.outputs.skip == 'false'
@@ -119,7 +121,7 @@ jobs:
 
       - name: Build app
         if: steps.check.outputs.skip == 'false'
-        run: pnpm tauri build --bundles app
+        run: pnpm tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Monet Signing"}}}'
 
       - name: Bundle tray helper
         if: steps.check.outputs.skip == 'false'
@@ -133,6 +135,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: src-widget/build.sh
+
+      - name: Verify signature
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          APP=src-tauri/target/release/bundle/macos/Monet.app
+          codesign --verify --deep --strict "$APP"
+          DETAILS=$(codesign -dvv "$APP" 2>&1)
+          grep -F 'Authority=Monet Signing' <<< "$DETAILS" >/dev/null
+          if grep -F 'Signature=adhoc' <<< "$DETAILS" >/dev/null; then
+            echo 'Unexpected ad-hoc signature' >&2
+            exit 1
+          fi
 
       # build.sh 产的 latest.json 里 URL 指向 v<version> tag，对 nightly 是错的；
       # 这里用滚动 tag 重新生成，并且落到 nightly.json——latest.json 不上传

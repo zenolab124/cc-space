@@ -116,12 +116,14 @@ jobs:
           security find-certificate -c "Monet Signing" -p build.keychain > /tmp/cert.pem
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
           rm -f /tmp/cert.p12 /tmp/cert.pem
+          IDENTITIES=$(security find-identity -v -p codesigning)
+          grep -F '"Monet Signing"' <<< "$IDENTITIES" >/dev/null
 
       - name: Install dependencies
         run: pnpm install
 
       - name: Build app
-        run: pnpm tauri build --bundles app
+        run: pnpm tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Monet Signing"}}}'
 
       - name: Bundle tray helper
         run: bash scripts/bundle-tray.sh
@@ -136,8 +138,15 @@ jobs:
 
       - name: Verify signature
         run: |
-          codesign --verify --deep --strict src-tauri/target/release/bundle/macos/Monet.app
-          codesign -dv src-tauri/target/release/bundle/macos/Monet.app 2>&1 | grep 'Authority\|Signature'
+          set -euo pipefail
+          APP=src-tauri/target/release/bundle/macos/Monet.app
+          codesign --verify --deep --strict "$APP"
+          DETAILS=$(codesign -dvv "$APP" 2>&1)
+          grep -F 'Authority=Monet Signing' <<< "$DETAILS" >/dev/null
+          if grep -F 'Signature=adhoc' <<< "$DETAILS" >/dev/null; then
+            echo 'Unexpected ad-hoc signature' >&2
+            exit 1
+          fi
 
       - name: Download windows artifact
         uses: actions/download-artifact@v4

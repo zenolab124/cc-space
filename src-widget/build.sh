@@ -20,6 +20,16 @@ if [ ! -d "$APP_BUNDLE" ]; then
     exit 1
 fi
 
+if [ -f "$SIGNING_PASS_FILE" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
+    security unlock-keychain -p "$(cat "$SIGNING_PASS_FILE")" "$SIGNING_KEYCHAIN"
+fi
+IDENTITIES=$(security find-identity -v -p codesigning)
+if ! grep -F "\"$SIGN_ID\"" <<< "$IDENTITIES" >/dev/null; then
+    echo "Error: signing identity '$SIGN_ID' not found" >&2
+    exit 1
+fi
+CODESIGN_ARGS=(--force --options runtime --sign "$SIGN_ID")
+
 # --- 构建 Widget Extension ---
 echo "=> Building widget extension..."
 DEVELOPER_DIR="$XCODE" xcodegen generate --quiet 2>/dev/null || DEVELOPER_DIR="$XCODE" xcodegen generate
@@ -45,16 +55,6 @@ cp ../src-tauri/target/release/widget-updater "$APP_BUNDLE/Contents/MacOS/widget
 
 # --- 签名 ---
 echo "=> Signing..."
-if security find-identity -v -p codesigning | grep -q "$SIGN_ID"; then
-    if [ -f "$SIGNING_PASS_FILE" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
-        security unlock-keychain -p "$(cat "$SIGNING_PASS_FILE")" "$SIGNING_KEYCHAIN"
-    fi
-    CODESIGN_ARGS=(--force --options runtime --sign "$SIGN_ID")
-else
-    echo "   identity '$SIGN_ID' not found, falling back to adhoc signing"
-    echo "   (run scripts/setup-signing.sh to create a stable signing identity)"
-    CODESIGN_ARGS=(--force --sign -)
-fi
 
 codesign "${CODESIGN_ARGS[@]}" \
     --entitlements MonetWidgetExtension.entitlements \
@@ -74,6 +74,12 @@ fi
 codesign "${CODESIGN_ARGS[@]}" \
     --entitlements ../src-tauri/Monet.entitlements "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
+SIGNATURE_DETAILS=$(codesign -dvv "$APP_BUNDLE" 2>&1)
+grep -F "Authority=$SIGN_ID" <<< "$SIGNATURE_DETAILS" >/dev/null
+if grep -F 'Signature=adhoc' <<< "$SIGNATURE_DETAILS" >/dev/null; then
+    echo "Error: unexpected ad-hoc signature" >&2
+    exit 1
+fi
 
 # --- 打 DMG ---
 APP_NAME=$(basename "$APP_BUNDLE" .app)
