@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { SessionRecord } from '@/types'
 import { probeSessionLoad } from '@/utils/perfProbe'
@@ -10,6 +10,12 @@ export function createSessionDetail() {
   const error = ref<string | null>(null)
   const currentProjectId = ref<string | null>(null)
   const currentSessionId = ref<string | null>(null)
+  /** 屏外冷卸载只清 records，保留身份；重新可见时据此强制恢复。 */
+  const recordsReleased = ref(false)
+
+  watch(records, value => {
+    if (value.length > 0) recordsReleased.value = false
+  })
 
   async function loadRecords(projectId: string, sessionId: string, force = false, fallbackSessionId?: string) {
     if (!force && currentProjectId.value === projectId && currentSessionId.value === sessionId) {
@@ -39,6 +45,7 @@ export function createSessionDetail() {
       }
       probe?.afterInvoke(records.value.length)
       probe?.afterAssign()
+      recordsReleased.value = false
     } catch (e) {
       error.value = String(e)
       records.value = []
@@ -64,6 +71,18 @@ export function createSessionDetail() {
     currentProjectId.value = null
     currentSessionId.value = null
     error.value = null
+    recordsReleased.value = false
+  }
+
+  /**
+   * 释放屏外列的历史数据与派生 DOM；流式状态由 useStreaming 单例持有，不受影响。
+   * 与 clearRecords 不同，此处保留项目/会话身份，让恢复路径仍能识别当前数据源。
+   */
+  function releaseRecords() {
+    if (records.value.length === 0) return
+    records.value = []
+    error.value = null
+    recordsReleased.value = true
   }
 
   return {
@@ -72,9 +91,11 @@ export function createSessionDetail() {
     error,
     currentProjectId,
     currentSessionId,
+    recordsReleased,
     loadRecords,
     reloadRecords,
     clearRecords,
+    releaseRecords,
   }
 }
 

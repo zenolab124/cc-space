@@ -106,7 +106,16 @@ const { goToSession, notifyTransient } = useNotifications()
 
 // 每个实例独立的 detail 数据
 const detail = createSessionDetail()
-const { records, loading, error, loadRecords, reloadRecords, clearRecords } = detail
+const {
+  records,
+  loading,
+  error,
+  recordsReleased,
+  loadRecords,
+  reloadRecords,
+  clearRecords,
+  releaseRecords,
+} = detail
 
 const { sendMessage, stopStreaming, clearStreamingTurns, clearPendingUserMessage, getStream, removePendingQueueItem, consumePendingQueue, removeLandedTurns, demoteUnlandedTurns } = useStreaming()
 
@@ -807,8 +816,50 @@ const detailRootRef = ref<HTMLElement>()
 const renderSurfaceId = Symbol('session-detail-render-surface')
 let renderVisibilityObserver: IntersectionObserver | null = null
 let registeredRenderSessionId: string | null = null
+const renderSurfaceVisible = ref(false)
+let historyReleaseTimer: number | null = null
+const HISTORY_RELEASE_DELAY_MS = 20_000
+const HISTORY_RELEASE_MIN_RECORDS = 250
+
+function cancelHistoryRelease() {
+  if (historyReleaseTimer !== null) window.clearTimeout(historyReleaseTimer)
+  historyReleaseTimer = null
+}
+
+function restoreReleasedHistory() {
+  cancelHistoryRelease()
+  if (!recordsReleased.value || loading.value) return
+  const cs = currentSession.value
+  if (!cs) return
+  void loadRecords(
+    cs.projectId,
+    cs.summary.id,
+    true,
+    forkSourceOf(cs.summary.id) ?? undefined,
+  ).then(() => {
+    if (followStreaming.value) scrollToBottom(true)
+  })
+}
+
+function scheduleHistoryRelease() {
+  cancelHistoryRelease()
+  if (
+    renderSurfaceVisible.value
+    || props.mode !== 'workbench'
+    || records.value.length < HISTORY_RELEASE_MIN_RECORDS
+  ) return
+  historyReleaseTimer = window.setTimeout(() => {
+    historyReleaseTimer = null
+    // 用户主动停在历史位置时保留阅读上下文；只回收仍处于贴底跟随的屏外列。
+    if (renderSurfaceVisible.value || !followStreaming.value || loading.value) return
+    deferredRecords = null
+    releaseRecords()
+  }, HISTORY_RELEASE_DELAY_MS)
+}
 
 function detachRenderSurface() {
+  cancelHistoryRelease()
+  renderSurfaceVisible.value = false
   renderVisibilityObserver?.disconnect()
   renderVisibilityObserver = null
   if (registeredRenderSessionId) {
@@ -826,12 +877,23 @@ watch(
     setSessionRenderSurface(sid, renderSurfaceId, false)
     renderVisibilityObserver = new IntersectionObserver(([entry]) => {
       // 被 v-show 隐藏、横向完全移出视口、或宿主窗口不可见时均降为后台节奏。
-      setSessionRenderSurface(sid, renderSurfaceId, !!entry?.isIntersecting && entry.intersectionRatio > 0)
+      const visible = !!entry?.isIntersecting && entry.intersectionRatio > 0
+      renderSurfaceVisible.value = visible
+      setSessionRenderSurface(sid, renderSurfaceId, visible)
+      if (visible) restoreReleasedHistory()
+      else scheduleHistoryRelease()
     }, { threshold: [0, 0.01] })
     renderVisibilityObserver.observe(el)
   },
   { immediate: true, flush: 'post' },
 )
+
+// IntersectionObserver 往往先于 JSONL 加载完成回报不可见；记录到达后补排冷卸载。
+watch(() => records.value.length, (count) => {
+  if (count >= HISTORY_RELEASE_MIN_RECORDS && !renderSurfaceVisible.value) {
+    scheduleHistoryRelease()
+  }
+})
 
 function activateRenderSurface() {
   const sid = effectiveSessionId.value
