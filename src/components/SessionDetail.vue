@@ -2756,6 +2756,7 @@ async function onReload() {
             :user-has-visible-content="userHasVisibleContent"
             :content-blocks="contentBlocks"
             :channel-mark-label="channelMarkLabel"
+            granular-visibility
           />
         </div>
         <!-- 锚点失效的切换横线兜底:末尾按序渲染,不静默消失 -->
@@ -2788,7 +2789,12 @@ async function onReload() {
           </div>
         </div>
 
-        <div v-for="turn in stream.streamingTurns" :key="turn.messageId" class="flex gap-3 msg-block">
+        <div
+          v-for="turn in stream.streamingTurns"
+          :key="turn.messageId"
+          class="flex gap-3 msg-block"
+          :class="{ 'settled-turn-cv': !turn.live }"
+        >
           <div class="w-0.5 shrink-0 rounded-full bg-claude/60" />
           <div class="min-w-0 flex-1">
             <div class="text-xs font-medium mb-1 text-claude flex items-center gap-1.5">
@@ -3133,6 +3139,11 @@ async function onReload() {
 .msg-group-cv {
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
+}
+/* 自发轮完成后可能暂留到 JSONL 落账；稳定 turn 移出视口后不再参与渲染遍历。 */
+.settled-turn-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
 }
 .user-msg-sticky {
   position: sticky;

@@ -35,6 +35,8 @@ const props = defineProps<{
   userHasVisibleContent: (record: any) => boolean
   contentBlocks: (record: any) => ContentBlock[]
   channelMarkLabel: (mark: ChannelMark) => string
+  /** 末组保持整体挂载时，对其中已落账响应启用细粒度按需渲染。 */
+  granularVisibility?: boolean
 }>()
 
 const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
@@ -95,7 +97,12 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
   <!-- 回复(AI + system) -->
   <template v-for="(resp, ri) in group.responses" :key="resp.uuid || resp">
     <SystemEventRow v-if="resp.type === 'system'" :record="resp" />
-    <div v-else class="flex gap-3 msg-block">
+    <div
+      v-else
+      v-memo="[resp]"
+      class="flex gap-3 msg-block"
+      :class="{ 'response-cv': granularVisibility }"
+    >
       <div class="w-0.5 shrink-0 rounded-full bg-claude/60" />
       <div class="min-w-0 flex-1">
         <div class="text-xs font-medium mb-1 text-claude flex items-center gap-1.5 flex-wrap">
@@ -143,4 +150,10 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
 <style scoped>
 /* 吸顶层接管展示时文档流原件隐形占位 */
 .user-msg-ghost { visibility: hidden; }
+/* 末组不能整体虚拟化（吸顶/锚点需要完整容器），但其中已落账响应可逐条跳过
+   屏外 style/layout/paint；auto 会在首次渲染后记住真实高度，降低滚动条漂移。 */
+.response-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
 </style>
