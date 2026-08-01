@@ -340,19 +340,16 @@ export function buildAsyncLedger(
 
   // ---- 主扫描 ----
   records.forEach((record, idx) => {
-    if (record.type === 'assistant') {
+    if (record.type === 'task_notification') {
+      const n = parseTaskNotification(record.content)
+      if (n) ingestNotification(n, record.timestamp)
+    } else if (record.type === 'assistant') {
       const blocks = record.message?.content ?? []
       for (const b of blocks) {
         if (isToolUse(b)) ingestToolUse(b, record.timestamp)
       }
     } else if (record.type === 'user') {
       const content = record.message?.content
-      // 终态通知：origin.kind 精确判别（避免误命中引用旧通知的普通文本）
-      if (record.origin_kind === 'task-notification' && typeof content === 'string') {
-        const n = parseTaskNotification(content)
-        if (n) ingestNotification(n, record.timestamp)
-        return
-      }
       if (Array.isArray(content)) {
         // toolUseResult 是记录级字段：仅单 tool_result 记录可安全归属
         const results = content.filter(b => b.type === 'tool_result')
@@ -425,4 +422,10 @@ export function buildAsyncLedger(
 /** 进行中（含等待唤醒）——面板置顶区与徽章高亮判据 */
 export function isActive(item: AsyncTaskItem): boolean {
   return item.state === 'running' || item.state === 'waiting'
+}
+
+/** CLI stop_task 使用的稳定 ID；已结束或尚未拿到 ID 的条目不可终止。 */
+export function asyncTaskStopId(item: AsyncTaskItem): string | null {
+  if (!isActive(item)) return null
+  return item.taskId ?? item.agentId
 }

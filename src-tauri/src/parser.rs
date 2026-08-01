@@ -61,7 +61,7 @@ impl UsageLedger {
     }
 }
 
-/// 只解析 user/assistant 消息记录，跳过 file-history-snapshot 等大型记录
+/// 解析对话消息与异步任务通知，跳过 file-history-snapshot 等大型记录
 /// 避免 Value 中间层，直接反序列化到目标类型
 pub fn parse_messages(path: &Path) -> Vec<SessionRecord> {
     let file = match File::open(path) {
@@ -78,10 +78,7 @@ pub fn parse_messages(path: &Path) -> Vec<SessionRecord> {
         };
 
         // 快速字符串检测，跳过非消息类型（避免解析巨大的 snapshot 等）
-        if line.contains("\"file-history-snapshot\"")
-            || line.contains("\"queue-operation\"")
-            || line.contains("\"ai-title\"")
-        {
+        if should_skip_message_line(&line) {
             continue;
         }
 
@@ -98,6 +95,16 @@ pub fn parse_messages(path: &Path) -> Vec<SessionRecord> {
     }
 
     results
+}
+
+/// queue-operation 通常不是消息，但新版本 CLI 会借它投递
+/// `<task-notification>`；只为这类小记录打开解析通道。attachment 原本就会进入
+/// typed 解析，因此其通知由 SessionRecord 直接识别。
+fn should_skip_message_line(line: &str) -> bool {
+    if line.contains("\"file-history-snapshot\"") || line.contains("\"ai-title\"") {
+        return true;
+    }
+    line.contains("\"queue-operation\"") && !line.contains("<task-notification>")
 }
 
 // ============================================================================
@@ -516,6 +523,22 @@ mod tests {
 
     fn assistant_line(id: Option<&str>, output_tokens: u64) -> String {
         assistant_line_with_stop(id, 10, output_tokens, None)
+    }
+
+    #[test]
+    fn keeps_only_notification_control_records() {
+        assert!(!should_skip_message_line(
+            r#"{"type":"queue-operation","content":"<task-notification></task-notification>"}"#,
+        ));
+        assert!(!should_skip_message_line(
+            r#"{"type":"attachment","attachment":{"prompt":"<task-notification></task-notification>"}}"#,
+        ));
+        assert!(should_skip_message_line(
+            r#"{"type":"queue-operation","operation":"remove"}"#,
+        ));
+        assert!(!should_skip_message_line(
+            r#"{"type":"attachment","attachment":{"prompt":"ordinary queued command"}}"#,
+        ));
     }
 
     /// 同一 message.id 只计一次；后续最终快照替换零值占位。

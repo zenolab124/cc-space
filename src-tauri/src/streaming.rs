@@ -1194,7 +1194,48 @@ pub fn toggle_remote_control(
     write_stdin(&mut sp.stdin, &msg)
 }
 
-/// 中断当前回复（发 interrupt 控制消息，不杀进程）
+fn control_request(request_id: String, request: Value) -> Value {
+    json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": request
+    })
+}
+
+#[cfg(test)]
+mod task_control_tests {
+    use super::control_request;
+    use serde_json::json;
+
+    #[test]
+    fn builds_background_and_interrupt_requests() {
+        let background = control_request(
+            "background-tasks-1".to_string(),
+            json!({"subtype": "background_tasks"}),
+        );
+        let interrupt = control_request(
+            "interrupt-2".to_string(),
+            json!({"subtype": "interrupt"}),
+        );
+        assert_eq!(background["request"]["subtype"], "background_tasks");
+        assert_eq!(interrupt["request"]["subtype"], "interrupt");
+    }
+
+    #[test]
+    fn builds_single_task_stop_request() {
+        let request = control_request(
+            "stop-task-3".to_string(),
+            json!({"subtype": "stop_task", "task_id": "task-17"}),
+        );
+        assert_eq!(request["request"]["subtype"], "stop_task");
+        assert_eq!(request["request"]["task_id"], "task-17");
+    }
+}
+
+/// 中断当前回复（不杀进程，也不终止其异步任务）。
+///
+/// CLI 的 interrupt 会清理仍处于前台的任务，因此必须先用 background_tasks 把它们
+/// 从主轮次生命周期中分离；同一 stdin 上的两条控制消息按写入顺序处理。
 pub fn interrupt_session(session_id: &str) -> Result<(), String> {
     let process = ACTIVE_PROCESSES
         .lock()
@@ -1207,16 +1248,43 @@ pub fn interrupt_session(session_id: &str) -> Result<(), String> {
             let mut sp = p.lock().unwrap();
             eprintln!("[long-lived] 中断进程 PID={} 会话={}", sp.child.id(), &session_id[..session_id.len().min(8)]);
             sp.request_counter += 1;
-            let req_id = format!("interrupt-{}", sp.request_counter);
-            let msg = json!({
-                "type": "control_request",
-                "request_id": req_id,
-                "request": {"subtype": "interrupt"}
-            });
-            write_stdin(&mut sp.stdin, &msg)
+            let background_id = format!("background-tasks-{}", sp.request_counter);
+            let background = control_request(
+                background_id,
+                json!({"subtype": "background_tasks"}),
+            );
+            write_stdin(&mut sp.stdin, &background)?;
+
+            sp.request_counter += 1;
+            let interrupt_id = format!("interrupt-{}", sp.request_counter);
+            let interrupt = control_request(interrupt_id, json!({"subtype": "interrupt"}));
+            write_stdin(&mut sp.stdin, &interrupt)
         }
         None => Ok(()),
     }
+}
+
+/// 按 CLI 任务 ID 终止一个异步任务，不影响主轮次及同会话其他任务。
+pub fn stop_async_task(session_id: &str, task_id: &str) -> Result<(), String> {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return Err("异步任务 ID 不能为空".to_string());
+    }
+    let process = ACTIVE_PROCESSES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(session_id).cloned())
+        .ok_or_else(|| "会话进程不存在".to_string())?;
+
+    let mut sp = process.lock().unwrap();
+    sp.request_counter += 1;
+    let request_id = format!("stop-task-{}", sp.request_counter);
+    let request = control_request(
+        request_id,
+        json!({"subtype": "stop_task", "task_id": task_id}),
+    );
+    write_stdin(&mut sp.stdin, &request)
 }
 
 /// 运行时切换权限模式

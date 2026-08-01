@@ -157,6 +157,11 @@
     "title": "Async Tasks",
     "empty": "No async tasks",
     "locate": "Locate in chat",
+    "stop": "Stop task",
+    "stopping": "Stopping…",
+    "stopConfirm": "Stop async task “{name}”? This action cannot be undone.",
+    "stopConfirmOk": "Stop task",
+    "stopFailed": "Could not stop async task",
     "sectionActive": "Active",
     "sectionFinished": "Finished",
     "state": {

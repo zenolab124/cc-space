@@ -157,6 +157,11 @@
     "title": "异步任务",
     "empty": "暂无异步任务",
     "locate": "定位到对话中",
+    "stop": "终止任务",
+    "stopping": "正在终止…",
+    "stopConfirm": "终止异步任务“{name}”？此操作无法撤销。",
+    "stopConfirmOk": "终止任务",
+    "stopFailed": "无法终止异步任务",
     "sectionActive": "进行中",
     "sectionFinished": "已结束",
     "state": {

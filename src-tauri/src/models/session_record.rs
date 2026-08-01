@@ -11,10 +11,23 @@ pub enum SessionRecord {
     User(UserRecord),
     Assistant(AssistantRecord),
     System(SystemRecord),
+    TaskNotification(TaskNotificationRecord),
     AiTitle(AiTitleRecord),
     QueueOperation(QueueOperationRecord),
     FileHistorySnapshot(FileHistorySnapshotRecord),
     Unknown { raw_type: String },
+}
+
+/// CLI 注入的异步任务状态通知。
+///
+/// 不同 CLI 版本会把同一份 `<task-notification>` 放在 user、queue-operation
+/// 或 attachment 记录中；解析层统一成这一变体，避免协议载体变化渗入前端账本。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskNotificationRecord {
+    pub timestamp: Option<String>,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +232,27 @@ impl SessionRecord {
         let record_type = value.get("type")?.as_str()?.to_string();
         match record_type.as_str() {
             "user" => {
+                let task_notification = value
+                    .pointer("/origin/kind")
+                    .and_then(Value::as_str)
+                    .filter(|kind| *kind == "task-notification")
+                    .and_then(|_| value.pointer("/message/content"))
+                    .and_then(Value::as_str)
+                    .filter(|content| content.contains("<task-notification>"))
+                    .map(|content| TaskNotificationRecord {
+                        timestamp: value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(String::from),
+                        session_id: value
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .map(String::from),
+                        content: content.to_string(),
+                    });
+                if let Some(notification) = task_notification {
+                    return Some(SessionRecord::TaskNotification(notification));
+                }
                 let async_meta = value.get("toolUseResult").and_then(extract_async_meta);
                 let origin_kind = value
                     .pointer("/origin/kind")
@@ -239,9 +273,50 @@ impl SessionRecord {
             "ai-title" => serde_json::from_value(value)
                 .ok()
                 .map(SessionRecord::AiTitle),
-            "queue-operation" => serde_json::from_value(value)
-                .ok()
-                .map(SessionRecord::QueueOperation),
+            "queue-operation" => {
+                if let Some(content) = value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .filter(|content| content.contains("<task-notification>"))
+                {
+                    return Some(SessionRecord::TaskNotification(TaskNotificationRecord {
+                        timestamp: value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(String::from),
+                        session_id: value
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .map(String::from),
+                        content: content.to_string(),
+                    }));
+                }
+                serde_json::from_value(value)
+                    .ok()
+                    .map(SessionRecord::QueueOperation)
+            }
+            "attachment" => value
+                .pointer("/attachment/prompt")
+                .and_then(Value::as_str)
+                .filter(|content| content.contains("<task-notification>"))
+                .map(|content| {
+                    SessionRecord::TaskNotification(TaskNotificationRecord {
+                        timestamp: value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(String::from),
+                        session_id: value
+                            .get("sessionId")
+                            .and_then(Value::as_str)
+                            .map(String::from),
+                        content: content.to_string(),
+                    })
+                })
+                .or_else(|| {
+                    Some(SessionRecord::Unknown {
+                        raw_type: "attachment".to_string(),
+                    })
+                }),
             "file-history-snapshot" => serde_json::from_value(value)
                 .ok()
                 .map(SessionRecord::FileHistorySnapshot),
@@ -285,14 +360,58 @@ mod async_meta_tests {
         assert_eq!(meta.status.as_deref(), Some("async_launched"));
     }
 
-    /// 终态通知投递体：origin.kind 是唯一可靠判别，需透传
+    /// 旧版终态通知投递体也统一成独立记录，避免进入普通用户消息流。
     #[test]
     fn extracts_origin_kind() {
-        let u = parse_user(
-            r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b03o4t7yd</task-id>\n<status>completed</status>\n</task-notification>"},"origin":{"kind":"task-notification"}}"#,
-        );
-        assert_eq!(u.origin_kind.as_deref(), Some("task-notification"));
-        assert!(u.async_meta.is_none());
+        let record = SessionRecord::from_json_owned(
+            serde_json::from_str(
+                r#"{"type":"user","timestamp":"2026-08-02T10:00:00Z","message":{"role":"user","content":"<task-notification>\n<task-id>b03o4t7yd</task-id>\n<status>completed</status>\n</task-notification>"},"origin":{"kind":"task-notification"}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        match record {
+            SessionRecord::TaskNotification(n) => {
+                assert!(n.content.contains("<task-id>b03o4t7yd</task-id>"));
+                assert_eq!(n.timestamp.as_deref(), Some("2026-08-02T10:00:00Z"));
+            }
+            other => panic!("expected task notification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extracts_queue_operation_notification() {
+        let record = SessionRecord::from_json_owned(
+            serde_json::from_str(
+                r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-02T10:01:00Z","sessionId":"session-1","content":"<task-notification><task-id>agent-1</task-id><status>completed</status></task-notification>"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        match record {
+            SessionRecord::TaskNotification(n) => {
+                assert_eq!(n.session_id.as_deref(), Some("session-1"));
+                assert!(n.content.contains("<status>completed</status>"));
+            }
+            other => panic!("expected task notification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extracts_attachment_notification() {
+        let record = SessionRecord::from_json_owned(
+            serde_json::from_str(
+                r#"{"type":"attachment","timestamp":"2026-08-02T10:02:00Z","attachment":{"type":"queued_command","prompt":"<task-notification><task-id>agent-2</task-id><status>failed</status></task-notification>"}}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        match record {
+            SessionRecord::TaskNotification(n) => {
+                assert!(n.content.contains("<task-id>agent-2</task-id>"));
+            }
+            other => panic!("expected task notification, got {other:?}"),
+        }
     }
 
     /// 普通工具回执（Read/Edit 等）不挂 async_meta——锚点字段全缺

@@ -67,7 +67,7 @@ import {
   type RespondExtra,
 } from '@/composables/usePermissionRequests'
 import { createSubAgentContext } from '@/composables/useSubAgents'
-import { buildAsyncLedger, isActive, type AsyncTaskItem } from '@/composables/useAsyncTasks'
+import { asyncTaskStopId, buildAsyncLedger, isActive, type AsyncTaskItem } from '@/composables/useAsyncTasks'
 import type { SubAgentMeta } from '@/types'
 import AsyncTaskPanel from './AsyncTaskPanel.vue'
 import { IMAGE_LOCATOR, type ImageLocator } from '@/utils/ccimg'
@@ -124,7 +124,7 @@ const {
   releaseRecords,
 } = detail
 
-const { sendMessage, stopStreaming, clearStreamingTurns, clearPendingUserMessage, getStream, removePendingQueueItem, consumePendingQueue, removeLandedTurns, demoteUnlandedTurns } = useStreaming()
+const { sendMessage, stopStreaming, stopAsyncTask, clearStreamingTurns, clearPendingUserMessage, getStream, removePendingQueueItem, consumePendingQueue, removeLandedTurns, demoteUnlandedTurns } = useStreaming()
 
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const featureBannerShown = ref(false)
@@ -267,6 +267,53 @@ const asyncToolStates = computed(() => {
     if (item.toolUseId) states.set(item.toolUseId, item.state)
   }
   return states
+})
+const stoppingAsyncTaskIds = ref<ReadonlySet<string>>(new Set())
+const asyncStopTimers = new Map<string, number>()
+
+function setAsyncTaskStopping(taskId: string, value: boolean) {
+  const next = new Set(stoppingAsyncTaskIds.value)
+  if (value) next.add(taskId)
+  else next.delete(taskId)
+  stoppingAsyncTaskIds.value = next
+  const timer = asyncStopTimers.get(taskId)
+  if (timer !== undefined) window.clearTimeout(timer)
+  asyncStopTimers.delete(taskId)
+}
+
+watch(asyncTasks, (tasks) => {
+  for (const taskId of stoppingAsyncTaskIds.value) {
+    const stillActive = tasks.some(task =>
+      isActive(task) && (task.taskId === taskId || task.agentId === taskId))
+    if (!stillActive) setAsyncTaskStopping(taskId, false)
+  }
+})
+
+async function onStopAsyncTask(task: AsyncTaskItem) {
+  const sessionId = effectiveSessionId.value
+  const taskId = asyncTaskStopId(task)
+  if (!sessionId || !taskId || stoppingAsyncTaskIds.value.has(taskId)) return
+  const rawName = task.title || task.detail || taskId
+  const name = rawName.length > 80 ? `${rawName.slice(0, 80)}…` : rawName
+  if (!(await confirmDialog(t('asyncTask.stopConfirm', { name }), t('asyncTask.stopConfirmOk')))) return
+  if (!asyncTasks.value.some(item => asyncTaskStopId(item) === taskId)) return
+
+  setAsyncTaskStopping(taskId, true)
+  try {
+    await stopAsyncTask(sessionId, taskId)
+    // 正常由终态通知解锁；兜底避免异常 CLI 永久留下 loading 状态。
+    asyncStopTimers.set(taskId, window.setTimeout(() => {
+      setAsyncTaskStopping(taskId, false)
+    }, 10_000))
+  } catch (error) {
+    setAsyncTaskStopping(taskId, false)
+    notifyTransient(t('asyncTask.stopFailed'), String(error))
+  }
+}
+
+onUnmounted(() => {
+  for (const timer of asyncStopTimers.values()) window.clearTimeout(timer)
+  asyncStopTimers.clear()
 })
 
 /** 自持长活进程忙 = 自发轮在途(live turn 在播):此窗口发消息应排队而非直发——
@@ -610,7 +657,7 @@ watch(effectiveSessionId, () => {
 
 // --- 权限请求(仅工作台列交互;档案馆只读不渲染) ---
 const permissionRequest = currentForSession(effectiveSessionId)
-const { respondRequest, denyAllForSession } = usePermissionRequests()
+const { respondRequest } = usePermissionRequests()
 
 const permissionToolUseId = computed(() => findPendingPermissionToolUseId(
   stream.value.streamingTurns.map(turn => turn.content),
@@ -675,7 +722,6 @@ async function onStop() {
   // 自发轮(后台唤醒轮):interrupt 只打断当前在跑的这一轮,进程内已武装的
   // 定时唤醒不受影响,到点仍会再次触发——toast 说清边界,彻底断根走列头关闭
   const autoTurnOnly = !stream.value.streaming && ownProcessBusy.value
-  await denyAllForSession(sid)
   await stopStreaming(sid)
   if (autoTurnOnly) notifyTransient(t('session.autoTurnStopped'), t('session.autoTurnStoppedHint'))
 }
@@ -3253,10 +3299,12 @@ async function onReload() {
         :active-tab-id="subAgentActiveTabId"
         :project-id="currentSession?.projectId ?? null"
         :session-id="currentSession?.summary.id ?? null"
+        :stopping-task-ids="stoppingAsyncTaskIds"
         @select-agent="toggleSubAgent($event)"
         @close-tab="closeSubAgentTab($event)"
         @close="closeAsyncPanel"
         @locate="locateToolUse"
+        @stop="onStopAsyncTask"
       />
     </div>
     <!-- 文件账本面板:与异步面板互斥,同款手风琴 -->

@@ -1308,7 +1308,7 @@ async function consumePendingQueue(sessionId: string, cwd: string) {
   await sendMessage(sessionId, cwd, next.message, next.opts)
 }
 
-/** 中断当前回复（发 interrupt 控制消息，不杀进程；
+/** 中断当前回复（先分离异步任务，再发 interrupt，不杀进程；
  *  stream-done 由 CLI interrupt 响应的 result 事件驱动，无需前端同步 finishStream。
  *  interrupt 失败时前端兜底收尾，防止永远卡在 streaming 状态） */
 async function stopStreaming(sessionId: string) {
@@ -1317,6 +1317,11 @@ async function stopStreaming(sessionId: string) {
   } catch (_) {
     finishStream(sessionId)
   }
+}
+
+/** 按任务 ID 终止单个异步任务，不影响主轮次与同会话其他任务。 */
+async function stopAsyncTask(sessionId: string, taskId: string) {
+  await invoke('stop_async_task', { sessionId, taskId })
 }
 
 /** 驱逐某会话的前端传输态缓存。streams/turnIndex/tailTextAcc 等模块级 Map
@@ -1356,6 +1361,7 @@ export function useStreaming() {
     sendMessage,
     retrySession,
     stopStreaming,
+    stopAsyncTask,
     closeSession,
     clearStreamingTurns,
     clearPendingUserMessage,

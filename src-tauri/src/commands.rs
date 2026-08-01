@@ -542,6 +542,12 @@ pub fn stop_streaming(session_id: String) -> Result<(), String> {
     streaming::interrupt_session(&session_id)
 }
 
+/// 终止指定异步任务，不影响主轮次与其他任务
+#[tauri::command]
+pub fn stop_async_task(session_id: String, task_id: String) -> Result<(), String> {
+    streaming::stop_async_task(&session_id, &task_id)
+}
+
 /// 运行时切换权限模式
 #[tauri::command]
 pub fn set_permission_mode(session_id: String, mode: String) -> Result<(), String> {

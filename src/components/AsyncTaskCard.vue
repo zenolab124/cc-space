@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { isActive, type AsyncTaskItem, type AsyncSpecies, type AsyncTaskState } from '@/composables/useAsyncTasks'
+import { asyncTaskStopId, isActive, type AsyncTaskItem, type AsyncSpecies, type AsyncTaskState } from '@/composables/useAsyncTasks'
 import type { SubAgentMeta } from '@/types'
 import { formatTokens } from '@/types'
 
@@ -9,12 +9,14 @@ const props = defineProps<{
   task: AsyncTaskItem
   /** 面板级时钟（30s tick），waiting 倒计时用 */
   now: number
+  stopping?: boolean
 }>()
 
 const emit = defineEmits<{
   open: [task: AsyncTaskItem]
   openChild: [meta: SubAgentMeta]
   locate: [toolUseId: string]
+  stop: [task: AsyncTaskItem]
 }>()
 
 const { t } = useI18n()
@@ -39,6 +41,7 @@ const STATE_DOT: Record<AsyncTaskState, string> = {
 }
 
 const species = computed(() => SPECIES_META[props.task.species] ?? SPECIES_META.generic)
+const canStop = computed(() => asyncTaskStopId(props.task) !== null)
 
 // 活跃任务秒级计时器
 const elapsed = ref(0)
@@ -109,9 +112,22 @@ function formatDuration(ms: number): string {
         <span v-if="metaLine" class="text-[9px] text-muted-foreground/70 tabular-nums truncate">{{ metaLine }}</span>
         <span class="flex-1" />
         <button
+          v-if="canStop"
+          class="w-5 h-5 flex items-center justify-center rounded text-destructive
+                 hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2
+                 focus-visible:ring-destructive/40 disabled:opacity-50 disabled:cursor-wait transition-colors"
+          :title="stopping ? t('asyncTask.stopping') : t('asyncTask.stop')"
+          :aria-label="stopping ? t('asyncTask.stopping') : t('asyncTask.stop')"
+          :disabled="stopping"
+          @click.stop="emit('stop', task)"
+        >
+          <span :class="stopping ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-stop-filled'" class="w-3 h-3" />
+        </button>
+        <button
           v-if="task.toolUseId"
           class="w-4 h-4 flex items-center justify-center rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
           :title="t('asyncTask.locate')"
+          :aria-label="t('asyncTask.locate')"
           @click.stop="emit('locate', task.toolUseId!)"
         >
           <span class="i-carbon-location w-3 h-3" />

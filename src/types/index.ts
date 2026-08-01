@@ -115,6 +115,7 @@ export type SessionRecord =
   | { type: 'assistant'; uuid: string | null; parent_uuid: string | null; session_id: string | null; timestamp: string | null; cwd: string | null; version: string | null; git_branch: string | null; is_sidechain: boolean | null; message: AssistantMessage | null }
   // system 记录字段随 Rust SystemRecord 的 rename_all = "camelCase" 序列化
   | { type: 'system'; subtype: string | null; content: string | null; level: string | null; timestamp: string | null; uuid: string | null; error: Record<string, unknown> | null; compactMetadata: Record<string, unknown> | null; retryAttempt: number | null; maxRetries: number | null }
+  | { type: 'task_notification'; timestamp: string | null; session_id: string | null; content: string }
   | { type: 'ai_title'; session_id: string | null; ai_title: string }
   | { type: 'queue_operation'; operation: string | null; timestamp: string | null; session_id: string | null }
   | { type: 'file_history_snapshot'; message_id: string | null; is_snapshot_update: boolean | null }

@@ -3,7 +3,7 @@ import { ref, computed, provide, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SubAgentState } from '@/composables/useSubAgents'
 import type { AsyncTaskItem, AsyncTaskState } from '@/composables/useAsyncTasks'
-import { isActive } from '@/composables/useAsyncTasks'
+import { asyncTaskStopId, isActive } from '@/composables/useAsyncTasks'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import type { SubAgentMeta, SessionRecord, ContentBlock } from '@/types'
 import { shortModel, formatTokens, hasReportedUsage } from '@/types'
@@ -21,6 +21,7 @@ const props = defineProps<{
   activeTabId: string | null
   projectId?: string | null
   sessionId?: string | null
+  stoppingTaskIds?: ReadonlySet<string>
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +29,7 @@ const emit = defineEmits<{
   closeTab: [agentId: string]
   close: []
   locate: [toolUseId: string]
+  stop: [task: AsyncTaskItem]
 }>()
 
 const { t } = useI18n()
@@ -50,6 +52,12 @@ const selectedKey = ref<string | null>(null)
 const selectedTask = computed(() =>
   props.tasks.find(x => x.key === selectedKey.value) ?? null,
 )
+const headerTask = computed(() => view.value === 'list' ? null : selectedTask.value)
+
+function isStopping(task: AsyncTaskItem): boolean {
+  const id = asyncTaskStopId(task)
+  return id !== null && (props.stoppingTaskIds?.has(id) ?? false)
+}
 
 // 会话切换：面板实例跨会话复用（档案馆单 SessionDetail），视图状态必须归位，
 // 否则残留的 view='task'/'agent' 会因 key 失配落进空白 agent 分支
@@ -176,6 +184,7 @@ const messageGroups = computed<MessageGroup[]>(() =>
         v-if="view !== 'list'"
         class="w-5 h-5 flex items-center justify-center rounded hover:bg-muted transition-colors"
         @click="backToList"
+        :aria-label="t('common.back')"
       >
         <span class="i-carbon-chevron-left w-3.5 h-3.5" />
       </button>
@@ -191,8 +200,21 @@ const messageGroups = computed<MessageGroup[]>(() =>
         class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-claude/15 text-claude tabular-nums"
       >{{ tasks.length }}</span>
       <button
+        v-if="headerTask && asyncTaskStopId(headerTask)"
+        class="w-6 h-6 flex items-center justify-center rounded text-destructive
+               hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2
+               focus-visible:ring-destructive/40 disabled:opacity-50 disabled:cursor-wait transition-colors"
+        :title="isStopping(headerTask) ? t('asyncTask.stopping') : t('asyncTask.stop')"
+        :aria-label="isStopping(headerTask) ? t('asyncTask.stopping') : t('asyncTask.stop')"
+        :disabled="isStopping(headerTask)"
+        @click="emit('stop', headerTask)"
+      >
+        <span :class="isStopping(headerTask) ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-stop-filled'" class="w-3.5 h-3.5" />
+      </button>
+      <button
         class="w-5 h-5 flex items-center justify-center rounded hover:bg-muted transition-colors"
         :title="t('common.close')"
+        :aria-label="t('common.close')"
         @click="emit('close')"
       >
         <span class="i-carbon-close w-3 h-3" />
@@ -212,9 +234,11 @@ const messageGroups = computed<MessageGroup[]>(() =>
           :key="task.key"
           :task="task"
           :now="now"
+          :stopping="isStopping(task)"
           @open="onOpenTask"
           @open-child="openAgentTranscript"
           @locate="emit('locate', $event)"
+          @stop="emit('stop', $event)"
         />
       </template>
 
@@ -228,9 +252,11 @@ const messageGroups = computed<MessageGroup[]>(() =>
           :key="task.key"
           :task="task"
           :now="now"
+          :stopping="isStopping(task)"
           @open="onOpenTask"
           @open-child="openAgentTranscript"
           @locate="emit('locate', $event)"
+          @stop="emit('stop', $event)"
         />
       </template>
 

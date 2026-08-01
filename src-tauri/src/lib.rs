@@ -211,6 +211,7 @@ pub fn run() {
             commands::get_agent_session_dir,
             commands::start_streaming,
             commands::stop_streaming,
+            commands::stop_async_task,
             commands::close_session,
             commands::toggle_remote_control,
             commands::respond_permission,
