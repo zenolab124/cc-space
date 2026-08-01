@@ -45,6 +45,19 @@ struct AgentProcess {
     session_id: Option<String>,
 }
 
+/// oneshot Agent 无论成功、协议错误还是调用方提前返回，都必须同步回收子进程。
+/// `Child` 的默认 Drop 不会 wait，连续生成标题/标签/摘要时会按调用次数累积 zombie。
+fn terminate_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+impl Drop for AgentProcess {
+    fn drop(&mut self) {
+        terminate_and_reap(&mut self.child);
+    }
+}
+
 fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<AgentProcess, String> {
     let (executable, prefix_args) = find_claude();
     eprintln!("[agent-service] spawn: executable={} prefix_args={:?} model={} effort={}", executable, prefix_args, model, effort);
@@ -324,7 +337,6 @@ fn request_blocking_with(prompt: &str, model: &str, effort: &str, official_direc
     let mut agent = spawn_agent_with(model, effort, official_direct)?;
     let session_id = agent.session_id.clone();
     let result = send_and_collect(&mut agent, prompt);
-    let _ = agent.child.kill();
     // 进程启动后的失败：会话可能已落盘，错误携带 id
     result
         .map(|r| CliCallResult { session_id: session_id.clone(), ..r })
@@ -455,6 +467,31 @@ pub fn init() {
 
 /// 关闭 AgentService（oneshot 模式无需清理）
 pub fn shutdown() {}
+
+#[cfg(all(test, unix))]
+mod process_reap_tests {
+    use super::terminate_and_reap;
+    use std::process::Command;
+
+    #[test]
+    fn terminate_and_reap_consumes_child_status() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+
+        terminate_and_reap(&mut child);
+
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert_eq!(result, -1, "child status should already be reaped");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD),
+        );
+    }
+}
 
 // --- 公开的 agent 能力 ---
 

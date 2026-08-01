@@ -1492,6 +1492,7 @@ pub fn shutdown_fm_serve() {
     let mut guard = FM_PROCESS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
+        let _ = child.wait();
         eprintln!("[apple-fm] fm serve 已关闭");
     }
 }
@@ -1621,4 +1622,3 @@ pub fn import_cc_switch(ids: Vec<String>) -> Result<u32, String> {
     }
     Ok(imported)
 }
-

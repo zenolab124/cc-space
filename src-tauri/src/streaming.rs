@@ -53,6 +53,12 @@ struct SessionProcess {
     started_at_ms: i64,
 }
 
+/// 仅用于 SessionProcess 尚未接管 Child 的启动阶段错误路径。
+fn terminate_and_reap_startup_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// 自定义参数黑名单:会打爆 Monet↔CLI 通信的协议级参数(会话身份/流式格式/权限桥/渠道注入)。
 /// 冲突级参数(--model/--effort/--chrome 等)刻意放行——追加在 Monet 参数之后,CLI 后者
 /// 覆盖语义让用户能强行改写,这正是逃生舱的意义
@@ -799,14 +805,14 @@ fn open_session(
     })?;
 
     // 7. Take handles
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "无法获取 stdin".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "无法获取 stdout".to_string())?;
+    let Some(mut stdin) = child.stdin.take() else {
+        terminate_and_reap_startup_child(&mut child);
+        return Err("无法获取 stdin".to_string());
+    };
+    let Some(stdout) = child.stdout.take() else {
+        terminate_and_reap_startup_child(&mut child);
+        return Err("无法获取 stdout".to_string());
+    };
     let stderr = child.stderr.take();
 
     // 8. 初始化握手（没有这个握手，进程不处理任何消息）
@@ -815,27 +821,33 @@ fn open_session(
         "request_id": "init-1",
         "request": {"subtype": "initialize"}
     });
-    write_stdin(&mut stdin, &init_msg).map_err(|e| {
+    if let Err(e) = write_stdin(&mut stdin, &init_msg) {
         PermissionService::stop_for(session_id);
         if let Some(inj) = &channel_injection {
             crate::channels::cleanup_runtime_file(&inj.runtime_path);
         }
-        format!("初始化握手写入失败: {}", e)
-    })?;
+        terminate_and_reap_startup_child(&mut child);
+        return Err(format!("初始化握手写入失败: {}", e));
+    }
 
     let mut reader = BufReader::new(stdout);
     let mut line_buf = String::new();
     loop {
         line_buf.clear();
-        let bytes_read = reader.read_line(&mut line_buf).map_err(|e| {
-            PermissionService::stop_for(session_id);
-            if let Some(inj) = &channel_injection {
-                crate::channels::cleanup_runtime_file(&inj.runtime_path);
+        let bytes_read = match reader.read_line(&mut line_buf) {
+            Ok(bytes_read) => bytes_read,
+            Err(e) => {
+                PermissionService::stop_for(session_id);
+                if let Some(inj) = &channel_injection {
+                    crate::channels::cleanup_runtime_file(&inj.runtime_path);
+                }
+                terminate_and_reap_startup_child(&mut child);
+                return Err(format!("初始化握手读取失败: {}", e));
             }
-            format!("初始化握手读取失败: {}", e)
-        })?;
+        };
         if bytes_read == 0 {
             PermissionService::stop_for(session_id);
+            terminate_and_reap_startup_child(&mut child);
             let stderr_msg = stderr
                 .map(|s| {
                     let mut r = BufReader::new(s);
@@ -1428,6 +1440,14 @@ fn read_stream(
 
     // stdout EOF —— 进程已退出
 
+    // 所有退出路径都在 reader 线程统一 wait。close_session / 热重启会先从活跃表移除，
+    // 但 `Child` Drop 本身不会回收退出状态；只在“非预期退出”分支 wait 会让预期关闭
+    // 与被新代际顶替的进程短暂或永久成为 zombie。
+    let exit_status = {
+        let mut sp = process.lock().unwrap();
+        sp.child.wait().ok()
+    };
+
     // 判断退出性质（close_session 会先从 map 移除再 SIGTERM）：
     // - map 中仍是本进程 = 非预期退出，需要上报错误
     // - map 中是别的 Arc = 已被新进程顶替（模型/渠道变更重启），会话进程实际还活着
@@ -1461,12 +1481,6 @@ fn read_stream(
     }
 
     if was_unexpected {
-        // 等待并检查退出状态
-        let exit_status = {
-            let mut sp = process.lock().unwrap();
-            sp.child.wait().ok()
-        };
-
         if let Some(status) = exit_status {
             if !status.success() {
                 let stderr_text = stderr.map(|stderr| {
