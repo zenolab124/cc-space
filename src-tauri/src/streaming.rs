@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -207,6 +208,38 @@ pub enum StreamEvent {
         session_id: String,
         message: String,
     },
+}
+
+/// 流式链路累计计数，供开发者性能 HUD 对比入口事件率与实际 IPC 批次率。
+/// 计数只增不减；前端按相邻采样差值换算每秒速率。
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct StreamPerfCounters {
+    pub input_events: u64,
+    pub emitted_batches: u64,
+    pub emitted_events: u64,
+    pub merged_deltas: u64,
+}
+
+static STREAM_INPUT_EVENTS: AtomicU64 = AtomicU64::new(0);
+static STREAM_EMITTED_BATCHES: AtomicU64 = AtomicU64::new(0);
+static STREAM_EMITTED_EVENTS: AtomicU64 = AtomicU64::new(0);
+static STREAM_MERGED_DELTAS: AtomicU64 = AtomicU64::new(0);
+
+pub fn stream_perf_counters() -> StreamPerfCounters {
+    StreamPerfCounters {
+        input_events: STREAM_INPUT_EVENTS.load(Ordering::Relaxed),
+        emitted_batches: STREAM_EMITTED_BATCHES.load(Ordering::Relaxed),
+        emitted_events: STREAM_EMITTED_EVENTS.load(Ordering::Relaxed),
+        merged_deltas: STREAM_MERGED_DELTAS.load(Ordering::Relaxed),
+    }
+}
+
+/// 当前直发实现的统一入口。后续事件合批只替换此处，调用侧与计数口径保持不变。
+fn dispatch_stream_event(app: &AppHandle, event: StreamEvent) {
+    STREAM_INPUT_EVENTS.fetch_add(1, Ordering::Relaxed);
+    STREAM_EMITTED_BATCHES.fetch_add(1, Ordering::Relaxed);
+    STREAM_EMITTED_EVENTS.fetch_add(1, Ordering::Relaxed);
+    let _ = app.emit("stream-event", event);
 }
 
 /// 查找 claude 可执行文件路径（薄 wrapper，事实源在 claude_locator）。
@@ -984,12 +1017,9 @@ fn graceful_shutdown(sp: &mut SessionProcess) {
 }
 
 fn emit_error(app: &AppHandle, session_id: &str, message: String) {
-    let _ = app.emit(
-        "stream-event",
-        StreamEvent::Error {
-            session_id: session_id.to_string(),
-            message,
-        },
+    dispatch_stream_event(
+        app,
+        StreamEvent::Error { session_id: session_id.to_string(), message },
     );
     let _ = app.emit("stream-done", json!({ "session_id": session_id }));
 }
@@ -1057,7 +1087,7 @@ fn read_stream(
             .unwrap_or("");
 
         if let Some(event) = decode_stream_event(&value, session_id, &mut current_message_id) {
-            let _ = app.emit("stream-event", &event);
+            dispatch_stream_event(app, event);
         }
 
         // hook 事件转发给前端（system 类型的 hook_started / hook_response）

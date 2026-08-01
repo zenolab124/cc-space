@@ -1217,6 +1217,8 @@
     "memWeb": "WebView",
     "memCli": "CLI 子进程 ×{count}",
     "memTotal": "合计",
+    "streamEvents": "流事件 → IPC 批次",
+    "streamMerged": "合并 delta",
     "projEvents": "项目事件",
     "incremental": "增量",
     "full": "全量",

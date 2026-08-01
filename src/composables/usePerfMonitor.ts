@@ -13,6 +13,12 @@ export interface PerfStats {
   webkit: ProcMem[]
   cli: ProcMem[]
   total_mb: number
+  streaming: {
+    input_events: number
+    emitted_batches: number
+    emitted_events: number
+    merged_deltas: number
+  }
 }
 
 // ---- 采样状态（模块单例；仅 HUD 打开期间运行） ----
@@ -32,6 +38,8 @@ const domNodes = ref(0)
 const memStats = ref<PerfStats | null>(null)
 /** projects-changed 事件计数（验证增量更新是否生效） */
 const projEvents = reactive({ incremental: 0, full: 0 })
+/** 流式入口事件率、IPC 批次率与合并率（相邻内存采样差分）。 */
+const streamRates = reactive({ input: 0, batches: 0, emitted: 0, merged: 0 })
 /** 每秒一个 FPS 采样点，最多 60 个（sparkline 数据） */
 const fpsHistory = ref<number[]>([])
 /** 长帧归因记录：帧总时长、其中 JS 埋点段合计、最耗时的埋点段 */
@@ -56,6 +64,7 @@ const clickSamples: number[] = []
 let memTimer = 0
 let domTimer = 0
 let unlistenProj: UnlistenFn | null = null
+let previousStreamSample: { at: number; counters: PerfStats['streaming'] } | null = null
 // 代际计数：listen() 是异步的，start→stop→start 交错时旧 listen 的 resolve
 // 会覆盖新监听造成泄漏，await 后校验代际未变才落地
 let startGen = 0
@@ -124,7 +133,18 @@ function onPointerDown(e: PointerEvent) {
 
 async function pollMem() {
   try {
-    memStats.value = await invoke<PerfStats>('get_perf_stats')
+    const next = await invoke<PerfStats>('get_perf_stats')
+    const now = performance.now()
+    if (previousStreamSample) {
+      const seconds = Math.max(0.001, (now - previousStreamSample.at) / 1000)
+      const prev = previousStreamSample.counters
+      streamRates.input = Math.round((next.streaming.input_events - prev.input_events) / seconds)
+      streamRates.batches = Math.round((next.streaming.emitted_batches - prev.emitted_batches) / seconds)
+      streamRates.emitted = Math.round((next.streaming.emitted_events - prev.emitted_events) / seconds)
+      streamRates.merged = Math.round((next.streaming.merged_deltas - prev.merged_deltas) / seconds)
+    }
+    previousStreamSample = { at: now, counters: next.streaming }
+    memStats.value = next
   } catch (_) {
     // 采集失败保持旧值
   }
@@ -174,6 +194,11 @@ export function stopPerfMonitor() {
   bucketJank = 0
   bucketMaxBlock = 0
   framesThisSecond = 0
+  previousStreamSample = null
+  streamRates.input = 0
+  streamRates.batches = 0
+  streamRates.emitted = 0
+  streamRates.merged = 0
 }
 
 export function usePerfMonitor() {
@@ -188,6 +213,7 @@ export function usePerfMonitor() {
     domNodes,
     memStats,
     projEvents,
+    streamRates,
     fpsHistory,
   }
 }

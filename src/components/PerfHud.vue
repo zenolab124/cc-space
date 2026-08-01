@@ -18,6 +18,7 @@ const {
   domNodes,
   memStats,
   projEvents,
+  streamRates,
   fpsHistory,
 } = usePerfMonitor()
 
@@ -166,6 +167,19 @@ const bootOverlay = bootSegs.filter(s => s.overlay)
       </template>
 
       <!-- 事件计数 -->
+      <div class="flex items-center justify-between border-t border-border pt-1">
+        <span class="font-sans text-muted-foreground">{{ t('perf.streamEvents') }}</span>
+        <span>
+          <span>{{ streamRates.input }}</span>
+          <span class="text-muted-foreground"> → </span>
+          <span :class="streamRates.batches > 60 ? 'text-destructive' : ''">{{ streamRates.batches }}</span>
+          <span class="text-muted-foreground"> /s</span>
+        </span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="font-sans text-muted-foreground">{{ t('perf.streamMerged') }}</span>
+        <span>{{ streamRates.merged }} <span class="text-muted-foreground">/s</span></span>
+      </div>
       <div class="flex items-center justify-between border-t border-border pt-1">
         <span class="font-sans text-muted-foreground">{{ t('perf.projEvents') }}</span>
         <span>

@@ -1217,6 +1217,8 @@
     "memWeb": "WebView",
     "memCli": "CLI children ×{count}",
     "memTotal": "Total",
+    "streamEvents": "Stream events → IPC batches",
+    "streamMerged": "Merged deltas",
     "projEvents": "Project events",
     "incremental": "incr",
     "full": "full",

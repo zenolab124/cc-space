@@ -20,6 +20,8 @@ pub struct PerfStats {
     /// 子进程树（claude CLI 及其子孙），按树根聚合
     pub cli: Vec<ProcMem>,
     pub total_mb: f64,
+    /// 流式事件入口与 IPC 发射累计计数；前端按采样差值显示每秒速率。
+    pub streaming: crate::streaming::StreamPerfCounters,
 }
 
 #[cfg(target_os = "macos")]
@@ -224,7 +226,13 @@ mod macos {
             + webkit.iter().map(|p| p.footprint_mb).sum::<f64>()
             + cli.iter().map(|p| p.footprint_mb).sum::<f64>();
 
-        PerfStats { main, webkit, cli, total_mb }
+        PerfStats {
+            main,
+            webkit,
+            cli,
+            total_mb,
+            streaming: crate::streaming::stream_perf_counters(),
+        }
     }
 }
 
