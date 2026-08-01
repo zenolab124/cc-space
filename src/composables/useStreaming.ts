@@ -644,8 +644,7 @@ export async function initStreamListeners(): Promise<void> {
   if (listenersReady) return
   listenersReady = true
 
-  await listen<StreamEventPayload>('stream-event', (event) => {
-    const payload = event.payload
+  const handleStreamEvent = (payload: StreamEventPayload) => {
     const sid = payload.session_id
     if (!sid) return
     const state = getStream(sid)
@@ -856,7 +855,16 @@ export async function initStreamListeners(): Promise<void> {
         markTailDirty(sid)
         break
     }
-  })
+  }
+
+  // 新版 Rust 将 32ms 窗口内的多会话 delta 合成一个 IPC；保留单事件监听，
+  // 兼容开发期前端连到旧后端的热重载场景。
+  await Promise.all([
+    listen<StreamEventPayload[]>('stream-events', (event) => {
+      for (const payload of event.payload) handleStreamEvent(payload)
+    }),
+    listen<StreamEventPayload>('stream-event', (event) => handleStreamEvent(event.payload)),
+  ])
 
   // 轮次归属分流:自发轮(CLI 被 task-notification 唤醒,result 带 origin → initiator=auto)
   // 不得冒领用户消息的 streaming 标志——用户在后台任务期间发的消息还在 CLI 队列里,

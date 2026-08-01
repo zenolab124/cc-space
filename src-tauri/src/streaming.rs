@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -224,6 +226,206 @@ static STREAM_INPUT_EVENTS: AtomicU64 = AtomicU64::new(0);
 static STREAM_EMITTED_BATCHES: AtomicU64 = AtomicU64::new(0);
 static STREAM_EMITTED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static STREAM_MERGED_DELTAS: AtomicU64 = AtomicU64::new(0);
+static STREAM_EVENT_PUMP: OnceLock<SyncSender<StreamDispatch>> = OnceLock::new();
+
+const STREAM_BATCH_WINDOW: Duration = Duration::from_millis(32);
+const STREAM_BATCH_CAPACITY: usize = 256;
+const STREAM_QUEUE_CAPACITY: usize = 8192;
+
+#[derive(Debug)]
+enum StreamDispatch {
+    Event(StreamEvent),
+    Signal { name: &'static str, payload: Value },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeltaKey {
+    message_id: String,
+    index: usize,
+    delta_type: String,
+}
+
+#[derive(Default)]
+struct StreamBatch {
+    events: Vec<StreamEvent>,
+    /// 每个会话只允许与它自己的最后一个 delta 合并；其他会话的事件不构成屏障。
+    last_delta_by_session: HashMap<String, (DeltaKey, usize)>,
+}
+
+impl StreamBatch {
+    fn push(&mut self, event: StreamEvent) -> bool {
+        let session_id = event.session_id().to_string();
+        if let Some(key) = event.delta_key() {
+            if let Some((last_key, event_index)) = self.last_delta_by_session.get(&session_id) {
+                if *last_key == key && merge_delta(&mut self.events[*event_index], &event) {
+                    return true;
+                }
+            }
+            let event_index = self.events.len();
+            self.events.push(event);
+            self.last_delta_by_session.insert(session_id, (key, event_index));
+        } else {
+            // 同会话的语义事件是严格屏障；不同会话仍可继续各自合并。
+            self.last_delta_by_session.remove(&session_id);
+            self.events.push(event);
+        }
+        false
+    }
+
+    fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.events.len()
+    }
+}
+
+impl StreamEvent {
+    fn session_id(&self) -> &str {
+        match self {
+            Self::AssistantMessage { session_id, .. }
+            | Self::BlockStart { session_id, .. }
+            | Self::BlockDelta { session_id, .. }
+            | Self::BlockStop { session_id, .. }
+            | Self::Result { session_id, .. }
+            | Self::Error { session_id, .. } => session_id,
+        }
+    }
+
+    fn delta_key(&self) -> Option<DeltaKey> {
+        let Self::BlockDelta { message_id, index, delta, .. } = self else {
+            return None;
+        };
+        Some(DeltaKey {
+            message_id: message_id.clone(),
+            index: *index,
+            delta_type: delta.get("type")?.as_str()?.to_string(),
+        })
+    }
+
+    fn is_delta(&self) -> bool {
+        matches!(self, Self::BlockDelta { .. })
+    }
+}
+
+fn delta_text_field(delta: &Value) -> Option<(&'static str, &str)> {
+    let field = match delta.get("type")?.as_str()? {
+        "text_delta" => "text",
+        "thinking_delta" => "thinking",
+        "input_json_delta" => "partial_json",
+        "signature_delta" => "signature",
+        _ => return None,
+    };
+    Some((field, delta.get(field)?.as_str()?))
+}
+
+/// 合并同一会话、message、block、delta 类型的字符串负载。
+fn merge_delta(target: &mut StreamEvent, incoming: &StreamEvent) -> bool {
+    let (
+        StreamEvent::BlockDelta { delta: target_delta, .. },
+        StreamEvent::BlockDelta { delta: incoming_delta, .. },
+    ) = (target, incoming)
+    else {
+        return false;
+    };
+    let Some((incoming_field, incoming_text)) = delta_text_field(incoming_delta) else {
+        return false;
+    };
+    let Some((target_field, target_text)) = delta_text_field(target_delta) else {
+        return false;
+    };
+    if target_field != incoming_field {
+        return false;
+    }
+    let mut merged = String::with_capacity(target_text.len() + incoming_text.len());
+    merged.push_str(target_text);
+    merged.push_str(incoming_text);
+    let Some(slot) = target_delta.get_mut(target_field) else {
+        return false;
+    };
+    *slot = Value::String(merged);
+    true
+}
+
+#[cfg(test)]
+mod stream_batch_tests {
+    use super::*;
+
+    fn text_delta(session: &str, text: &str) -> StreamEvent {
+        StreamEvent::BlockDelta {
+            session_id: session.to_string(),
+            message_id: format!("message-{session}"),
+            index: 0,
+            delta: json!({ "type": "text_delta", "text": text }),
+        }
+    }
+
+    fn delta_text(event: &StreamEvent) -> &str {
+        let StreamEvent::BlockDelta { delta, .. } = event else {
+            panic!("expected block delta");
+        };
+        delta.get("text").and_then(Value::as_str).unwrap()
+    }
+
+    #[test]
+    fn coalesces_interleaved_sessions_independently() {
+        let mut batch = StreamBatch::default();
+        let mut merged = 0;
+        for _ in 0..100 {
+            for sid in 0..7 {
+                merged += usize::from(batch.push(text_delta(&format!("s{sid}"), "x")));
+            }
+        }
+
+        assert_eq!(batch.len(), 7);
+        assert_eq!(merged, 693);
+        assert!(batch.events.iter().all(|event| delta_text(event).len() == 100));
+    }
+
+    #[test]
+    fn semantic_event_is_a_per_session_ordering_barrier() {
+        let mut batch = StreamBatch::default();
+        assert!(!batch.push(text_delta("s1", "a")));
+        assert!(!batch.push(StreamEvent::BlockStop {
+            session_id: "s1".to_string(),
+            message_id: "message-s1".to_string(),
+            index: 0,
+        }));
+        assert!(!batch.push(text_delta("s1", "b")));
+
+        assert_eq!(batch.len(), 3);
+        assert_eq!(delta_text(&batch.events[0]), "a");
+        assert!(matches!(batch.events[1], StreamEvent::BlockStop { .. }));
+        assert_eq!(delta_text(&batch.events[2]), "b");
+    }
+
+    #[test]
+    fn preserves_signature_and_partial_json_chunks() {
+        let mut batch = StreamBatch::default();
+        for (delta_type, field, left, right) in [
+            ("signature_delta", "signature", "sig-", "tail"),
+            ("input_json_delta", "partial_json", "{\"a\":", "1}"),
+        ] {
+            let make = |text: &str| {
+                let mut delta = json!({ "type": delta_type });
+                delta[field] = json!(text);
+                StreamEvent::BlockDelta {
+                    session_id: delta_type.to_string(),
+                    message_id: "m".to_string(),
+                    index: 0,
+                    delta,
+                }
+            };
+            assert!(!batch.push(make(left)));
+            assert!(batch.push(make(right)));
+        }
+
+        let serialized = serde_json::to_value(&batch.events).unwrap();
+        assert_eq!(serialized[0]["delta"]["signature"], "sig-tail");
+        assert_eq!(serialized[1]["delta"]["partial_json"], "{\"a\":1}");
+    }
+}
 
 pub fn stream_perf_counters() -> StreamPerfCounters {
     StreamPerfCounters {
@@ -234,12 +436,88 @@ pub fn stream_perf_counters() -> StreamPerfCounters {
     }
 }
 
-/// 当前直发实现的统一入口。后续事件合批只替换此处，调用侧与计数口径保持不变。
+fn emit_stream_batch(app: &AppHandle, batch: StreamBatch) {
+    if batch.is_empty() {
+        return;
+    }
+    STREAM_EMITTED_BATCHES.fetch_add(1, Ordering::Relaxed);
+    STREAM_EMITTED_EVENTS.fetch_add(batch.len() as u64, Ordering::Relaxed);
+    let _ = app.emit("stream-events", batch.events);
+}
+
+fn run_stream_event_pump(app: AppHandle, receiver: Receiver<StreamDispatch>) {
+    while let Ok(first) = receiver.recv() {
+        match first {
+            StreamDispatch::Signal { name, payload } => {
+                let _ = app.emit(name, payload);
+            }
+            StreamDispatch::Event(event) if !event.is_delta() => {
+                let mut batch = StreamBatch::default();
+                batch.push(event);
+                emit_stream_batch(&app, batch);
+            }
+            StreamDispatch::Event(event) => {
+                let mut batch = StreamBatch::default();
+                batch.push(event);
+                let deadline = Instant::now() + STREAM_BATCH_WINDOW;
+                loop {
+                    let now = Instant::now();
+                    if now >= deadline || batch.len() >= STREAM_BATCH_CAPACITY {
+                        emit_stream_batch(&app, batch);
+                        break;
+                    }
+                    match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
+                        Ok(StreamDispatch::Event(next)) => {
+                            let barrier = !next.is_delta();
+                            if batch.push(next) {
+                                STREAM_MERGED_DELTAS.fetch_add(1, Ordering::Relaxed);
+                            }
+                            if barrier || batch.len() >= STREAM_BATCH_CAPACITY {
+                                emit_stream_batch(&app, batch);
+                                break;
+                            }
+                        }
+                        Ok(StreamDispatch::Signal { name, payload }) => {
+                            emit_stream_batch(&app, batch);
+                            let _ = app.emit(name, payload);
+                            break;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            emit_stream_batch(&app, batch);
+                            break;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => {
+                            emit_stream_batch(&app, batch);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn stream_event_sender(app: &AppHandle) -> &'static SyncSender<StreamDispatch> {
+    STREAM_EVENT_PUMP.get_or_init(|| {
+        let (sender, receiver) = sync_channel(STREAM_QUEUE_CAPACITY);
+        let worker_app = app.clone();
+        std::thread::Builder::new()
+            .name("stream-event-pump".to_string())
+            .spawn(move || run_stream_event_pump(worker_app, receiver))
+            .expect("stream event pump thread must start");
+        sender
+    })
+}
+
+/// 所有 WebView 流式消息的统一入口：先进入有界队列，再由单一线程跨会话合批发射。
 fn dispatch_stream_event(app: &AppHandle, event: StreamEvent) {
     STREAM_INPUT_EVENTS.fetch_add(1, Ordering::Relaxed);
-    STREAM_EMITTED_BATCHES.fetch_add(1, Ordering::Relaxed);
-    STREAM_EMITTED_EVENTS.fetch_add(1, Ordering::Relaxed);
-    let _ = app.emit("stream-event", event);
+    let _ = stream_event_sender(app).send(StreamDispatch::Event(event));
+}
+
+/// 与流内容存在先后关系的生命周期信号也走同一队列，保证 result/error 已先抵达前端。
+fn dispatch_stream_signal(app: &AppHandle, name: &'static str, payload: Value) {
+    let _ = stream_event_sender(app).send(StreamDispatch::Signal { name, payload });
 }
 
 /// 查找 claude 可执行文件路径（薄 wrapper，事实源在 claude_locator）。
@@ -1021,7 +1299,7 @@ fn emit_error(app: &AppHandle, session_id: &str, message: String) {
         app,
         StreamEvent::Error { session_id: session_id.to_string(), message },
     );
-    let _ = app.emit("stream-done", json!({ "session_id": session_id }));
+    dispatch_stream_signal(app, "stream-done", json!({ "session_id": session_id }));
 }
 
 /// 定位 monet-mcp 二进制
@@ -1137,7 +1415,8 @@ fn read_stream(
         // 否则后台任务期间发消息会出现轮次边界错乱（消息重复出现/消失）
         if raw_type == "result" {
             let is_auto = value.get("origin").is_some_and(|v| !v.is_null());
-            let _ = app.emit(
+            dispatch_stream_signal(
+                app,
                 "stream-done",
                 json!({
                     "session_id": session_id,
@@ -1174,7 +1453,11 @@ fn read_stream(
     // 时，异步账本据此把无终态条目判为 running 而非 unknown。被顶替时不发，防止
     // 旧进程 EOF 迟到把新进程的活态翻掉。
     if !superseded {
-        let _ = app.emit("session-process-exited", json!({ "session_id": session_id }));
+        dispatch_stream_signal(
+            app,
+            "session-process-exited",
+            json!({ "session_id": session_id }),
+        );
     }
 
     if was_unexpected {
@@ -1199,7 +1482,7 @@ fn read_stream(
                 emit_error(app, session_id, err_msg);
             } else {
                 // 正常退出但未预期（CLI 自行决定退出），通知前端收尾
-                let _ = app.emit("stream-done", json!({ "session_id": session_id }));
+                dispatch_stream_signal(app, "stream-done", json!({ "session_id": session_id }));
             }
         } else {
             emit_error(app, session_id, "进程异常退出".to_string());
