@@ -8,6 +8,11 @@ import type { EffortSetting } from './useSessionSettings'
 import { frameWatchRetain, frameWatchRelease, probeFinishFlip } from '@/utils/perfProbe'
 import { useConfirm } from './useConfirm'
 import i18n from '../locales'
+import {
+  resolveStreamRenderPriority,
+  smoothTakeForElapsed,
+  streamRenderInterval,
+} from '@/lib/streamRenderPolicy'
 
 export interface SendOptions {
   model?: string
@@ -301,6 +306,60 @@ interface PendingTextDelta {
 }
 const pendingTextDeltas = new Map<string, PendingTextDelta>()
 
+// 一个会话可能同时存在于工作台与档案馆(v-show 常驻)，按渲染 surface 汇总可见性。
+// 调度只关心“至少一个 surface 可见”，避免隐藏视图最后一次 IO 回调覆盖可见视图。
+const streamRenderSurfaces = new Map<string, Map<symbol, boolean>>()
+let activeRenderSessionId: string | null = null
+
+export function setSessionRenderSurface(
+  sessionId: string,
+  surfaceId: symbol,
+  visible: boolean,
+): void {
+  let surfaces = streamRenderSurfaces.get(sessionId)
+  if (!surfaces) {
+    surfaces = new Map()
+    streamRenderSurfaces.set(sessionId, surfaces)
+  }
+  surfaces.set(surfaceId, visible)
+  bump(true)
+}
+
+export function removeSessionRenderSurface(sessionId: string, surfaceId: symbol): void {
+  const surfaces = streamRenderSurfaces.get(sessionId)
+  if (!surfaces) return
+  surfaces.delete(surfaceId)
+  if (surfaces.size === 0) {
+    streamRenderSurfaces.delete(sessionId)
+    if (activeRenderSessionId === sessionId) activeRenderSessionId = null
+  }
+  bump(true)
+}
+
+export function markSessionRenderActive(sessionId: string): void {
+  if (activeRenderSessionId === sessionId) return
+  activeRenderSessionId = sessionId
+  bump(true)
+}
+
+function isSessionSurfaceVisible(sessionId: string): boolean {
+  const surfaces = streamRenderSurfaces.get(sessionId)
+  if (!surfaces) return false
+  for (const visible of surfaces.values()) {
+    if (visible) return true
+  }
+  return false
+}
+
+function renderIntervalForSession(sessionId: string): number {
+  const visible = isSessionSurfaceVisible(sessionId)
+  const priority = resolveStreamRenderPriority(
+    visible,
+    visible && activeRenderSessionId === sessionId,
+  )
+  return streamRenderInterval(priority, document.visibilityState === 'visible')
+}
+
 /** 取(或建)pending 条目,新建时盖 bornAt 预热时间戳 */
 function pendingEntryOf(key: string): PendingTextDelta {
   let e = pendingTextDeltas.get(key)
@@ -312,6 +371,8 @@ function pendingEntryOf(key: string): PendingTextDelta {
 }
 export const streamingTick = ref(0)
 let rafId: number | null = null
+let scheduledFlushAt = Number.POSITIVE_INFINITY
+const lastSessionFlushAt = new Map<string, number>()
 
 /**
  * 平滑窗口:任意时刻缓冲里的字符会在约该时长内播完。稳态下显示速率 = API
@@ -338,24 +399,24 @@ const SMOOTH_WARMUP_MS = 200
  * @param instant      true:全量瞬吐(窗口隐藏 / 落账前收尾);false:平滑排量
  * @returns 是否还有未消化字符
  */
-function flushTextDeltas(onlySession?: string, instant = false): boolean {
+function flushTextDeltas(onlySession?: string, instant = false, elapsedMs = 16): boolean {
   if (pendingTextDeltas.size === 0) return false
   // HUD 长帧归因埋点:流式期主线程的最大嫌疑段
   const perfT0 = performance.now()
   try {
-    return flushTextDeltasInner(onlySession, instant)
+    return flushTextDeltasInner(onlySession, instant, elapsedMs)
   } finally {
     performance.measure('stream-flush', { start: perfT0, duration: performance.now() - perfT0 })
   }
 }
 
 /** 比例排量:每帧吐「缓冲 × 帧时长 ÷ 平滑窗口」,大块指数衰减追平,尾部至少 1 字防拖尾 */
-function smoothTake(bufferLen: number): number {
+function smoothTake(bufferLen: number, elapsedMs: number): number {
   if (bufferLen > FLOOD_CHARS) return Infinity
-  return Math.max(1, Math.ceil((bufferLen * 16) / SMOOTH_WINDOW_MS))
+  return smoothTakeForElapsed(bufferLen, elapsedMs, SMOOTH_WINDOW_MS)
 }
 
-function flushTextDeltasInner(onlySession?: string, instant = false): boolean {
+function flushTextDeltasInner(onlySession?: string, instant = false, elapsedMs = 16): boolean {
   let hasRemaining = false
   pendingTextDeltas.forEach((p, key) => {
     const hashIdx = key.indexOf('#')
@@ -365,7 +426,6 @@ function flushTextDeltasInner(onlySession?: string, instant = false): boolean {
     const entry = turnIndex.get(mid)
     if (!entry) return
     if (onlySession && entry.sessionId !== onlySession) {
-      hasRemaining = true
       return
     }
     const block = entry.turn.content[index] as ContentBlock | undefined
@@ -379,7 +439,7 @@ function flushTextDeltasInner(onlySession?: string, instant = false): boolean {
     }
 
     if (p.thinking !== undefined && block.type === 'thinking') {
-      const take = instant ? Infinity : smoothTake(p.thinking.length)
+      const take = instant ? Infinity : smoothTake(p.thinking.length, elapsedMs)
       ;(block as { thinking: string }).thinking += p.thinking.slice(0, take)
       const rem = p.thinking.slice(take)
       if (rem) {
@@ -394,7 +454,7 @@ function flushTextDeltasInner(onlySession?: string, instant = false): boolean {
       p.signature = undefined
     }
     if (p.text !== undefined && block.type === 'text') {
-      const take = instant ? Infinity : smoothTake(p.text.length)
+      const take = instant ? Infinity : smoothTake(p.text.length, elapsedMs)
       ;(block as { text: string }).text += p.text.slice(0, take)
       const rem = p.text.slice(take)
       if (rem) {
@@ -423,16 +483,53 @@ function hasSessionPending(sessionId: string): boolean {
   return false
 }
 
-function bump() {
-  if (rafId !== null) return
-  // 可见 16ms(≈一帧,setTimeout 实现无 RAF 遮挡饿死问题);窗口隐藏 160ms 降频省电
-  const visible = document.visibilityState === 'visible'
-  const delay = visible ? 16 : 160
+function pendingSessionIds(): Set<string> {
+  const ids = new Set<string>()
+  for (const key of pendingTextDeltas.keys()) {
+    const hashIdx = key.indexOf('#')
+    if (hashIdx < 0) continue
+    const entry = turnIndex.get(key.slice(0, hashIdx))
+    if (entry) ids.add(entry.sessionId)
+  }
+  return ids
+}
+
+function nextFlushDelay(now: number): number | null {
+  let delay = Number.POSITIVE_INFINITY
+  for (const sid of pendingSessionIds()) {
+    const interval = renderIntervalForSession(sid)
+    const last = lastSessionFlushAt.get(sid)
+    delay = Math.min(delay, last === undefined ? interval : Math.max(0, last + interval - now))
+  }
+  if (drainingStreams.size > 0 && !Number.isFinite(delay)) return 0
+  return Number.isFinite(delay) ? delay : null
+}
+
+function bump(forceReschedule = false) {
+  const now = performance.now()
+  const delay = nextFlushDelay(now)
+  if (delay === null) return
+  const nextAt = now + delay
+  if (rafId !== null && !forceReschedule && scheduledFlushAt <= nextAt + 1) return
+  if (rafId !== null) window.clearTimeout(rafId)
+  scheduledFlushAt = nextAt
   rafId = window.setTimeout(() => {
     rafId = null
-    // 隐藏时无人观看,平滑无意义,全量落地省 CPU
-    const hasRemaining = flushTextDeltas(undefined, !visible)
-    streamingTick.value++
+    scheduledFlushAt = Number.POSITIVE_INFINITY
+    const flushAt = performance.now()
+    const documentVisible = document.visibilityState === 'visible'
+    let flushed = false
+    for (const sid of pendingSessionIds()) {
+      const interval = renderIntervalForSession(sid)
+      const last = lastSessionFlushAt.get(sid)
+      if (last !== undefined && flushAt - last + 1 < interval) continue
+      const elapsed = last === undefined ? interval : Math.max(interval, flushAt - last)
+      lastSessionFlushAt.set(sid, flushAt)
+      // 整个窗口隐藏时无人观看，平滑无意义，直接落地省 CPU。
+      flushTextDeltas(sid, !documentVisible, elapsed)
+      flushed = true
+    }
+    if (flushed) streamingTick.value++
     // 检查排空中的会话:pending 落净 → 完成收尾
     if (drainingStreams.size > 0) {
       for (const sid of [...drainingStreams]) {
@@ -442,7 +539,7 @@ function bump() {
         }
       }
     }
-    if (hasRemaining || drainingStreams.size > 0) bump()
+    if (pendingTextDeltas.size > 0 || drainingStreams.size > 0) bump()
   }, delay)
 }
 
@@ -643,6 +740,7 @@ let listenersReady = false
 export async function initStreamListeners(): Promise<void> {
   if (listenersReady) return
   listenersReady = true
+  document.addEventListener('visibilitychange', () => bump(true))
 
   const handleStreamEvent = (payload: StreamEventPayload) => {
     const sid = payload.session_id
@@ -1041,6 +1139,12 @@ function finishStream(sessionId: string) {
     try { cb(sessionId, hasError) } catch (_) { /* */ }
   })
   if (hasSessionPending(sessionId)) {
+    // 屏外会话没有逐字播放价值，结果到达时直接追平，避免后台 residual timer。
+    if (!isSessionSurfaceVisible(sessionId) || document.visibilityState !== 'visible') {
+      flushTextDeltas(sessionId, true)
+      completeFinish(sessionId)
+      return
+    }
     drainingStreams.add(sessionId)
     bump()
     return
@@ -1232,6 +1336,9 @@ export function evictSessionTransients(sessionId: string) {
   processEpoch.delete(sessionId)
   autoLandedSessions.delete(sessionId)
   finishedDirty.delete(sessionId)
+  lastSessionFlushAt.delete(sessionId)
+  streamRenderSurfaces.delete(sessionId)
+  if (activeRenderSessionId === sessionId) activeRenderSessionId = null
   streams.delete(sessionId)
 }
 

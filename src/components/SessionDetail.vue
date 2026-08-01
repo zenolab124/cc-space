@@ -15,6 +15,9 @@ import {
   syncProcessAlive,
   autoTurnLanded,
   autoLandedSessions,
+  setSessionRenderSurface,
+  removeSessionRenderSurface,
+  markSessionRenderActive,
 } from '@/composables/useStreaming'
 import { useSessionSettings, type ChannelMark } from '@/composables/useSessionSettings'
 import { useRunConfig } from '@/composables/useRunConfig'
@@ -800,6 +803,41 @@ const forkBadgeSource = computed(() => {
 
 // 图片输入:粘贴绑 textarea;拖拽收图区放大到整个详情面板(多列并排时拖到哪列进哪列),仅可输入时生效
 const detailRootRef = ref<HTMLElement>()
+const renderSurfaceId = Symbol('session-detail-render-surface')
+let renderVisibilityObserver: IntersectionObserver | null = null
+let registeredRenderSessionId: string | null = null
+
+function detachRenderSurface() {
+  renderVisibilityObserver?.disconnect()
+  renderVisibilityObserver = null
+  if (registeredRenderSessionId) {
+    removeSessionRenderSurface(registeredRenderSessionId, renderSurfaceId)
+    registeredRenderSessionId = null
+  }
+}
+
+watch(
+  [detailRootRef, effectiveSessionId],
+  ([el, sid]) => {
+    detachRenderSurface()
+    if (!el || !sid) return
+    registeredRenderSessionId = sid
+    setSessionRenderSurface(sid, renderSurfaceId, false)
+    renderVisibilityObserver = new IntersectionObserver(([entry]) => {
+      // 被 v-show 隐藏、横向完全移出视口、或宿主窗口不可见时均降为后台节奏。
+      setSessionRenderSurface(sid, renderSurfaceId, !!entry?.isIntersecting && entry.intersectionRatio > 0)
+    }, { threshold: [0, 0.01] })
+    renderVisibilityObserver.observe(el)
+  },
+  { immediate: true, flush: 'post' },
+)
+
+function activateRenderSurface() {
+  const sid = effectiveSessionId.value
+  if (sid) markSessionRenderActive(sid)
+}
+
+onUnmounted(detachRenderSurface)
 const imageDropArea = computed<HTMLElement | null | undefined>(() =>
   interactive.value && !props.hideInput && currentSession.value?.summary.cwd
     ? detailRootRef.value
@@ -2446,7 +2484,12 @@ async function onReload() {
     <p class="text-muted-foreground text-sm">{{ mode === 'workbench' ? $t('session.notExist') : $t('archive.selectSession') }}</p>
   </div>
 
-  <div v-else ref="detailRootRef" class="h-full flex min-h-0 relative">
+  <div
+    v-else
+    ref="detailRootRef"
+    class="h-full flex min-h-0 relative"
+    @pointerdown.capture="activateRenderSurface"
+  >
     <!-- 主内容区 -->
     <div class="flex-1 min-w-0 flex flex-col relative">
     <!-- 会话顶栏(单行极简:标题由列头/列表承担,不重复显示) -->
