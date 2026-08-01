@@ -308,63 +308,71 @@ async function setWidgetMonthMode(mode: string) {
 }
 
 // --- 托盘标题配置 ---
-type TraySlotKind = 'session' | 'weekly' | { model: string }
-interface TrayTitleConfig { slots: TraySlotKind[] }
+interface TrayTitleSlot { provider: string; item: string }
+interface TrayTitleConfig { version: number; slots: TrayTitleSlot[] }
+interface QuotaItem {
+  id: string
+  label: string
+  kind: 'fiveHour' | 'weekly' | 'other'
+}
+interface QuotaGroup { id: string; label: string; items: QuotaItem[] }
+interface ProviderQuota { id: string; displayName: string; groups: QuotaGroup[] }
+interface QuotaBundle { providers: ProviderQuota[] }
 
-const traySlots = ref<TraySlotKind[]>([])
-const trayAvailableModels = ref<string[]>([])
+const traySlots = ref<TrayTitleSlot[]>([])
+const quotaProviders = ref<ProviderQuota[]>([])
+
+function traySlotKey(slot: TrayTitleSlot): string {
+  return `${slot.provider}/${slot.item}`
+}
 
 const traySlotOptions = computed(() => {
-  const opts = [
-    { key: 'session', label: t('settings.traySlotSession') },
-    { key: 'weekly', label: t('settings.traySlotWeekly') },
-  ]
-  for (const name of trayAvailableModels.value) {
-    opts.push({ key: `model:${name}`, label: t('settings.traySlotModel', { name }) })
+  const options: { key: string; slot: TrayTitleSlot; label: string }[] = []
+  for (const provider of quotaProviders.value) {
+    for (const group of provider.groups) {
+      for (const item of group.items) {
+        const metric = item.kind === 'fiveHour'
+          ? t('settings.traySlotFiveHour')
+          : item.kind === 'weekly'
+            ? t('settings.traySlotWeekly')
+            : item.label
+        options.push({
+          key: traySlotKey({ provider: provider.id, item: item.id }),
+          slot: { provider: provider.id, item: item.id },
+          label: t('settings.traySlotProvider', { provider: provider.displayName, metric }),
+        })
+      }
+    }
   }
-  return opts
+  const known = new Set(options.map(option => option.key))
+  for (const slot of traySlots.value) {
+    const key = traySlotKey(slot)
+    if (!known.has(key)) {
+      options.push({
+        key,
+        slot,
+        label: t('settings.traySlotUnavailable', { provider: slot.provider }),
+      })
+    }
+  }
+  return options
 })
 
-function slotToKind(key: string): TraySlotKind {
-  if (key === 'session') return 'session'
-  if (key === 'weekly') return 'weekly'
-  if (key.startsWith('model:')) return { model: key.slice(6) }
-  return 'session'
-}
-
-function kindToKey(kind: TraySlotKind): string {
-  if (kind === 'session') return 'session'
-  if (kind === 'weekly') return 'weekly'
-  if (typeof kind === 'object' && 'model' in kind) return `model:${kind.model}`
-  return 'session'
-}
-
 function isTraySlotActive(key: string): boolean {
-  return traySlots.value.some(s => kindToKey(s) === key)
+  return traySlots.value.some(slot => traySlotKey(slot) === key)
 }
 
-const SLOT_ORDER = ['session', 'weekly'] as const
-
-function sortSlots(slots: TraySlotKind[]): TraySlotKind[] {
-  return [...slots].sort((a, b) => {
-    const ka = kindToKey(a)
-    const kb = kindToKey(b)
-    const ia = SLOT_ORDER.indexOf(ka as any)
-    const ib = SLOT_ORDER.indexOf(kb as any)
-    const oa = ia >= 0 ? ia : SLOT_ORDER.length
-    const ob = ib >= 0 ? ib : SLOT_ORDER.length
-    return oa - ob
-  })
-}
-
-async function toggleTraySlot(key: string) {
-  const active = isTraySlotActive(key)
-  if (active) {
-    traySlots.value = traySlots.value.filter(s => kindToKey(s) !== key)
+async function toggleTraySlot(option: { key: string; slot: TrayTitleSlot }) {
+  if (isTraySlotActive(option.key)) {
+    traySlots.value = traySlots.value.filter(slot => traySlotKey(slot) !== option.key)
   } else {
-    traySlots.value = sortSlots([...traySlots.value, slotToKind(key)])
+    const order = new Map(traySlotOptions.value.map((item, index) => [item.key, index]))
+    traySlots.value = [...traySlots.value, option.slot].sort((left, right) =>
+      (order.get(traySlotKey(left)) ?? Number.MAX_SAFE_INTEGER)
+      - (order.get(traySlotKey(right)) ?? Number.MAX_SAFE_INTEGER),
+    )
   }
-  await invoke('set_tray_title_config', { slots: traySlots.value }).catch(() => {})
+  await invoke('set_tray_title_config_v2', { slots: traySlots.value }).catch(() => {})
 }
 
 const trayEnabled = ref(true)
@@ -383,28 +391,17 @@ async function toggleTrayEnabled() {
   }
 }
 
-interface QuotaInfo {
-  session: unknown
-  weekly: unknown
-  weeklyModels: { model: string; displayName: string | null; usedPercent: number }[]
-  error: string | null
-}
-
 async function loadTrayTitleConfig() {
   try {
     trayEnabled.value = await invoke<boolean>('get_tray_enabled')
   } catch {}
   try {
-    const cfg = await invoke<TrayTitleConfig>('get_tray_title_config')
+    const cfg = await invoke<TrayTitleConfig>('get_tray_title_config_v2')
     traySlots.value = cfg.slots
   } catch {}
   try {
-    const qi = await invoke<QuotaInfo>('get_quota')
-    // 刷新失败时后端返回「旧缓存数据 + error 标注」，数据仍可用——
-    // 按数据本身判断，error 只代表本次没刷新成功
-    if (qi?.weeklyModels?.length) {
-      trayAvailableModels.value = qi.weeklyModels.map(m => m.displayName || m.model)
-    }
+    const bundle = await invoke<QuotaBundle>('get_quota_bundle')
+    quotaProviders.value = bundle.providers
   } catch {}
 }
 
@@ -1263,7 +1260,7 @@ function onSaved() {
                     v-for="slot in traySlotOptions"
                     :key="slot.key"
                     :class="['setting-chip', { on: isTraySlotActive(slot.key) }]"
-                    @click="toggleTraySlot(slot.key)"
+                    @click="toggleTraySlot(slot)"
                   >{{ slot.label }}</button>
                 </div>
               </div>

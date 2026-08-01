@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use app_lib::quota::{self, QuotaInfo};
+use app_lib::quota::{self, ProviderQuota, QuotaBundle};
 
 fn main() {
     #[cfg(target_os = "macos")]
@@ -39,7 +39,7 @@ fn macos_main() {
     attach_menu(&status_item, &menu);
     set_tooltip(&status_item, "Monet");
 
-    let pending: Arc<Mutex<Option<QuotaInfo>>> = Arc::new(Mutex::new(None));
+    let pending: Arc<Mutex<Option<QuotaBundle>>> = Arc::new(Mutex::new(None));
     let fetching = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut state = TrayState {
         // 计时一律用墙钟毫秒：Instant 在 macOS 睡眠期间暂停，合盖过夜后
@@ -47,15 +47,15 @@ fn macos_main() {
         last_refresh_ms: now_ms() - REFRESH_INTERVAL_MS,
         last_render_ms: now_ms(),
         title_config_mtime: tray_title_mtime(),
-        cache_mtime: quota_cache_mtime(),
-        last_info: None,
-        in_backoff: quota::backoff_remaining_secs().is_some(),
+        cache_mtimes: quota_cache_mtimes(),
+        last_bundle: None,
     };
 
     // 冷启动先用磁盘缓存渲染一帧（含数据年龄行），不等首次 fetch
-    if let Some(info) = quota::peek_cached_quota() {
-        apply_to_tray(&status_item, &info, &menu);
-        state.last_info = Some(info);
+    let bundle = quota::peek_quota_bundle();
+    if bundle.providers.iter().any(|provider| provider.visible) {
+        apply_to_tray(&status_item, &bundle, &menu);
+        state.last_bundle = Some(bundle);
     }
 
     // 周期逻辑挂 NSTimer（default mode），事件循环交给标准 NSApp.run()。
@@ -64,9 +64,17 @@ fn macos_main() {
     // 菜单打开期间 runloop 在 tracking mode，default-mode timer 不触发，
     // 重填不会撞上正在显示的菜单
     let state = std::cell::RefCell::new(state);
-    let tick = block2::RcBlock::new(move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
-        tray_tick(&status_item, &menu, &mut state.borrow_mut(), &pending, &fetching);
-    });
+    let tick = block2::RcBlock::new(
+        move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
+            tray_tick(
+                &status_item,
+                &menu,
+                &mut state.borrow_mut(),
+                &pending,
+                &fetching,
+            );
+        },
+    );
     let _timer = unsafe {
         objc2_foundation::NSTimer::scheduledTimerWithTimeInterval_repeats_block(1.0, true, &tick)
     };
@@ -78,10 +86,9 @@ struct TrayState {
     last_refresh_ms: i64,
     last_render_ms: i64,
     title_config_mtime: Option<std::time::SystemTime>,
-    cache_mtime: Option<std::time::SystemTime>,
-    /// 进程内记住最新一帧数据（含 error 标注），周期重渲染倒计时/数据年龄用
-    last_info: Option<QuotaInfo>,
-    in_backoff: bool,
+    cache_mtimes: Vec<Option<std::time::SystemTime>>,
+    /// 进程内记住最新一帧数据，周期重渲染倒计时/数据年龄用
+    last_bundle: Option<QuotaBundle>,
 }
 
 /// 每秒 tick：消费菜单事件与后台刷新结果、侦测配置/缓存变化、周期重渲染与周期刷新
@@ -90,7 +97,7 @@ fn tray_tick(
     status_item: &objc2_app_kit::NSStatusItem,
     menu: &muda::Menu,
     st: &mut TrayState,
-    pending: &Arc<Mutex<Option<QuotaInfo>>>,
+    pending: &Arc<Mutex<Option<QuotaBundle>>>,
     fetching: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
@@ -113,9 +120,9 @@ fn tray_tick(
     // 主应用可能写盘，现采会把那次写入标记为已消费、吞掉下方 mtime 分支
     // 用新数据清 error 的机会；tray 自己写盘引发的 mtime 分支多渲染一帧无害
     if let Ok(mut guard) = pending.try_lock() {
-        if let Some(info) = guard.take() {
-            apply_to_tray(status_item, &info, menu);
-            st.last_info = Some(info);
+        if let Some(bundle) = guard.take() {
+            apply_to_tray(status_item, &bundle, menu);
+            st.last_bundle = Some(bundle);
             st.last_render_ms = now_ms();
         }
     }
@@ -124,49 +131,37 @@ fn tray_tick(
     let mtime = tray_title_mtime();
     if mtime != st.title_config_mtime {
         st.title_config_mtime = mtime;
-        if let Some(info) = st.last_info.clone().or_else(quota::peek_cached_quota) {
-            apply_to_tray(status_item, &info, menu);
-            st.last_render_ms = now_ms();
-        }
+        let bundle = st
+            .last_bundle
+            .clone()
+            .unwrap_or_else(quota::peek_quota_bundle);
+        apply_to_tray(status_item, &bundle, menu);
+        st.last_bundle = Some(bundle);
+        st.last_render_ms = now_ms();
     }
 
     // 磁盘缓存更新（主应用或 tray 自己刷新成功）→ mtime 变化 →
     // peek 按时间戳取内存/磁盘新者 → 采用新数据（同时清掉旧 error 标注）
-    let cm = quota_cache_mtime();
-    if cm != st.cache_mtime {
-        st.cache_mtime = cm;
-        if let Some(info) = quota::peek_cached_quota() {
-            apply_to_tray(status_item, &info, menu);
-            st.last_info = Some(info);
-            st.last_render_ms = now_ms();
-        }
+    let cache_mtimes = quota_cache_mtimes();
+    if cache_mtimes != st.cache_mtimes {
+        st.cache_mtimes = cache_mtimes;
+        let bundle = quota::peek_quota_bundle();
+        apply_to_tray(status_item, &bundle, menu);
+        st.last_bundle = Some(bundle);
+        st.last_render_ms = now_ms();
     }
 
     // 周期重渲染：重置倒计时、数据年龄、限流剩余时间都是现算的，
     // 不重建菜单就会停在上一帧（曾因此显示 fetch 时刻算死的倒计时）
     if now_ms() - st.last_render_ms >= 30_000 {
-        if let Some(info) = &st.last_info {
-            apply_to_tray(status_item, info, menu);
+        if let Some(bundle) = &st.last_bundle {
+            apply_to_tray(status_item, bundle, menu);
         }
         st.last_render_ms = now_ms();
     }
 
-    // 限流冷却结束的下降沿：立即补一次刷新，不等下个周期（最多 5 分钟）。
-    // 边沿触发只发生一次，非 429 失败不会走到这里（不写 backoff），无风暴风险
-    let backoff_now = quota::backoff_remaining_secs().is_some();
-    if st.in_backoff && !backoff_now {
-        if quota::quota_available() {
-            request_refresh(pending, fetching, false);
-        }
-        st.last_refresh_ms = now_ms();
-    }
-    st.in_backoff = backoff_now;
-
     if now_ms() - st.last_refresh_ms >= REFRESH_INTERVAL_MS {
-        if quota::quota_available() {
-            // 周期刷新：共享磁盘缓存 TTL（主应用可能刚刷过，省 API 调用）
-            request_refresh(pending, fetching, false);
-        }
+        request_refresh(pending, fetching, false);
         st.last_refresh_ms = now_ms();
     }
 }
@@ -181,20 +176,25 @@ fn now_ms() -> i64 {
 }
 
 fn tray_title_mtime() -> Option<std::time::SystemTime> {
-    std::fs::metadata(app_lib::config::data_dir().join("tray-title.json"))
+    std::fs::metadata(quota::tray_title_config_path())
         .ok()
-        .and_then(|m| m.modified().ok())
+        .and_then(|metadata| metadata.modified().ok())
 }
 
-fn quota_cache_mtime() -> Option<std::time::SystemTime> {
-    std::fs::metadata(app_lib::config::data_dir().join("quota-cache.json"))
-        .ok()
-        .and_then(|m| m.modified().ok())
+fn quota_cache_mtimes() -> Vec<Option<std::time::SystemTime>> {
+    quota::provider_watch_paths()
+        .into_iter()
+        .map(|path| {
+            std::fs::metadata(path)
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+        })
+        .collect()
 }
 
 /// 发起后台 quota 刷新（不阻塞主线程）。force=true 跳过磁盘缓存 TTL。
 fn request_refresh(
-    pending: &Arc<Mutex<Option<QuotaInfo>>>,
+    pending: &Arc<Mutex<Option<QuotaBundle>>>,
     fetching: &Arc<std::sync::atomic::AtomicBool>,
     force: bool,
 ) {
@@ -204,9 +204,13 @@ fn request_refresh(
     let pending = Arc::clone(pending);
     let fetching = Arc::clone(fetching);
     std::thread::spawn(move || {
-        let info = if force { quota::refresh_quota() } else { quota::get_quota() };
+        let bundle = if force {
+            quota::refresh_quota_bundle()
+        } else {
+            quota::get_quota_bundle()
+        };
         if let Ok(mut guard) = pending.lock() {
-            *guard = Some(info);
+            *guard = Some(bundle);
         }
         fetching.store(false, std::sync::atomic::Ordering::SeqCst);
     });
@@ -254,7 +258,9 @@ fn attach_menu(status_item: &objc2_app_kit::NSStatusItem, menu: &muda::Menu) {
 #[cfg(target_os = "macos")]
 fn set_tooltip(status_item: &objc2_app_kit::NSStatusItem, tooltip: &str) {
     use objc2_foundation::{MainThreadMarker, NSString};
-    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
     if let Some(button) = status_item.button(mtm) {
         button.setToolTip(Some(&NSString::from_str(tooltip)));
     }
@@ -263,7 +269,9 @@ fn set_tooltip(status_item: &objc2_app_kit::NSStatusItem, tooltip: &str) {
 #[cfg(target_os = "macos")]
 fn set_button_title(status_item: &objc2_app_kit::NSStatusItem, title: &str) {
     use objc2_foundation::{MainThreadMarker, NSString};
-    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
     if let Some(button) = status_item.button(mtm) {
         // 空串真正清空标题（此前 tray-icon 的 set_title(None) 清不掉，一并修复）
         button.setTitle(&NSString::from_str(title));
@@ -274,117 +282,264 @@ fn set_button_title(status_item: &objc2_app_kit::NSStatusItem, title: &str) {
 #[cfg(target_os = "macos")]
 fn apply_to_tray(
     status_item: &objc2_app_kit::NSStatusItem,
-    info: &QuotaInfo,
+    bundle: &QuotaBundle,
     menu: &muda::Menu,
 ) {
-    fill_menu(menu, Some(info));
-    patch_menu_styles(menu);
-    set_tooltip(status_item, &quota::format_tray_tooltip(info));
+    let header_indices = fill_menu(menu, Some(bundle));
+    patch_menu_styles(menu, &header_indices);
+    set_tooltip(status_item, &format_bundle_tooltip(bundle));
     set_button_title(
         status_item,
-        quota::format_tray_title(info).as_deref().unwrap_or(""),
+        quota::format_bundle_title(bundle).as_deref().unwrap_or(""),
     );
 }
 
 /// 原位重填常驻菜单：先清空再按当前数据追加，不替换 NSMenu 对象本身
-fn fill_menu(menu: &muda::Menu, info: Option<&QuotaInfo>) {
+fn fill_menu(menu: &muda::Menu, bundle: Option<&QuotaBundle>) -> Vec<isize> {
     use muda::{MenuItem, PredefinedMenuItem};
 
     while menu.remove_at(0).is_some() {}
     let zh = is_chinese();
+    let mut header_indices = Vec::new();
+    let mut item_index = 0isize;
 
-    if let Some(qi) = info {
-        // 刷新失败时旧数据仍有参考价值：照常展示额度块，
-        // 由下方状态行（限流/失败 + 数据年龄）说明它有多旧
-        let has_data = qi.session.is_some() || qi.weekly.is_some() || !qi.weekly_models.is_empty();
-        if has_data {
-            let plan = qi.plan.as_deref().unwrap_or("");
-            let title = if plan.is_empty() {
-                "Claude Code".to_string()
-            } else {
-                format!("Claude Code · {plan}")
+    if let Some(bundle) = bundle {
+        for provider in bundle.providers.iter().filter(|provider| provider.visible) {
+            header_indices.push(item_index);
+            let title = match provider.plan.as_deref() {
+                Some(plan) if !plan.is_empty() => {
+                    format!("{} · {plan}", provider.display_name)
+                }
+                _ => provider.display_name.clone(),
             };
-            let _ = menu.append(&MenuItem::with_id("title", title, true, None::<muda::accelerator::Accelerator>));
-            let _ = menu.append(&PredefinedMenuItem::separator());
+            let _ = menu.append(&MenuItem::with_id(
+                format!("provider-{}", provider.id),
+                title,
+                true,
+                None::<muda::accelerator::Accelerator>,
+            ));
+            item_index += 1;
 
-            if let Some(s) = &qi.session {
-                let label = format_quota_line(
-                    if zh { "本轮" } else { "Session" },
-                    s.used_percent,
-                    // 倒计时从绝对重置时刻现算——缓存里的 resets_in_secs 是
-                    // fetch 时刻的快照，会随缓存年龄漂移
-                    quota::secs_until(s.resets_at.as_deref()),
-                    zh,
-                );
-                let _ = menu.append(&MenuItem::with_id("s", label, true, None::<muda::accelerator::Accelerator>));
+            for group in &provider.groups {
+                if provider.groups.len() > 1 {
+                    let _ = menu.append(&MenuItem::with_id(
+                        format!("group-{}-{}", provider.id, group.id),
+                        group.label.clone(),
+                        false,
+                        None::<muda::accelerator::Accelerator>,
+                    ));
+                    item_index += 1;
+                }
+                for item in &group.items {
+                    let label = format_quota_line(
+                        &quota_item_label(item, zh),
+                        item.used_percent.unwrap_or(0.0),
+                        quota::secs_until(item.resets_at.as_deref()),
+                        zh,
+                    );
+                    let _ = menu.append(&MenuItem::with_id(
+                        format!("quota-{}-{}", provider.id, item.id),
+                        label,
+                        true,
+                        None::<muda::accelerator::Accelerator>,
+                    ));
+                    item_index += 1;
+                }
+                if let Some(credits) = &group.credits {
+                    if !(credits.has_credits || credits.unlimited || credits.balance.is_some()) {
+                        continue;
+                    }
+                    let value = if credits.unlimited {
+                        if zh {
+                            "不限量".into()
+                        } else {
+                            "Unlimited".into()
+                        }
+                    } else {
+                        credits.balance.clone().unwrap_or_else(|| {
+                            if zh {
+                                "可用".into()
+                            } else {
+                                "Available".into()
+                            }
+                        })
+                    };
+                    let label = format!("Credits  {value}");
+                    let _ = menu.append(&MenuItem::with_id(
+                        format!("credits-{}-{}", provider.id, group.id),
+                        label,
+                        true,
+                        None::<muda::accelerator::Accelerator>,
+                    ));
+                    item_index += 1;
+                }
             }
-            if let Some(w) = &qi.weekly {
-                let label = format_quota_line(
-                    if zh { "每周" } else { "Weekly" },
-                    w.used_percent,
-                    quota::secs_until(w.resets_at.as_deref()),
-                    zh,
-                );
-                let _ = menu.append(&MenuItem::with_id("w", label, true, None::<muda::accelerator::Accelerator>));
-            }
-            for (i, m) in qi.weekly_models.iter().enumerate() {
-                let name = m.display_name.as_deref().unwrap_or(&m.model);
-                let label = format!("{name}  {:.0}%", m.used_percent);
+
+            if let Some(label) = provider_status_label(provider, zh) {
                 let _ = menu.append(&MenuItem::with_id(
-                    format!("m{i}"),
+                    format!("status-{}", provider.id),
                     label,
-                    true,
+                    false,
                     None::<muda::accelerator::Accelerator>,
                 ));
+                item_index += 1;
             }
-        }
-
-        // 状态行：限流 > 一般失败，加数据年龄；disabled 灰字
-        if let Some(remain) = quota::backoff_remaining_secs() {
-            let mins = (remain + 59) / 60;
-            let label = if zh {
-                format!("接口限流中 · {mins} 分钟后自动恢复")
-            } else {
-                format!("Rate limited · resumes in {mins}m")
-            };
-            let _ = menu.append(&MenuItem::with_id("status", label, false, None::<muda::accelerator::Accelerator>));
-        } else if qi.error.is_some() {
-            // 按错误分类给行动引导：过期点刷新即触发委托续期（quota.rs 手动路径），
-            // 笼统的「刷新失败」只留给无法归类的残余
-            let label = match qi.error_kind.as_deref() {
-                Some("token_expired") => {
-                    if zh { "凭据已过期 · 点击下方刷新恢复" } else { "Credentials expired · click Refresh below" }
+            if let Some(updated_at) = provider.updated_at.as_deref() {
+                if let Some(age) = format_age(updated_at, zh) {
+                    let _ = menu.append(&MenuItem::with_id(
+                        format!("age-{}", provider.id),
+                        age,
+                        false,
+                        None::<muda::accelerator::Accelerator>,
+                    ));
+                    item_index += 1;
                 }
-                Some("no_credentials") => {
-                    if zh { "未检测到 Claude 登录凭据" } else { "No Claude credentials found" }
-                }
-                Some("network") => {
-                    if zh { "网络错误 · 将自动重试" } else { "Network error · will retry" }
-                }
-                _ => {
-                    if zh { "刷新失败" } else { "Refresh failed" }
-                }
-            };
-            let _ = menu.append(&MenuItem::with_id("status", label, false, None::<muda::accelerator::Accelerator>));
-        }
-        if has_data {
-            if let Some(age) = format_age(&qi.updated_at, zh) {
-                let _ = menu.append(&MenuItem::with_id("age", age, false, None::<muda::accelerator::Accelerator>));
             }
             let _ = menu.append(&PredefinedMenuItem::separator());
-        } else if qi.error.is_some() {
-            let _ = menu.append(&PredefinedMenuItem::separator());
+            item_index += 1;
         }
     }
 
     let show_label = if zh { "打开 Monet" } else { "Open Monet" };
-    let refresh_label = if zh { "刷新额度" } else { "Refresh Quota" };
-    let quit_label = if zh { "退出菜单栏" } else { "Quit Menu Bar" };
+    let refresh_label = if zh {
+        "立即刷新额度"
+    } else {
+        "Refresh Quota Now"
+    };
+    let quit_label = if zh {
+        "退出菜单栏"
+    } else {
+        "Quit Menu Bar"
+    };
 
-    let _ = menu.append(&MenuItem::with_id("show", show_label, true, None::<muda::accelerator::Accelerator>));
-    let _ = menu.append(&MenuItem::with_id("refresh", refresh_label, true, None::<muda::accelerator::Accelerator>));
+    let _ = menu.append(&MenuItem::with_id(
+        "show",
+        show_label,
+        true,
+        None::<muda::accelerator::Accelerator>,
+    ));
+    let _ = menu.append(&MenuItem::with_id(
+        "refresh",
+        refresh_label,
+        true,
+        None::<muda::accelerator::Accelerator>,
+    ));
     let _ = menu.append(&PredefinedMenuItem::separator());
-    let _ = menu.append(&MenuItem::with_id("quit", quit_label, true, None::<muda::accelerator::Accelerator>));
+    let _ = menu.append(&MenuItem::with_id(
+        "quit",
+        quit_label,
+        true,
+        None::<muda::accelerator::Accelerator>,
+    ));
+
+    header_indices
+}
+
+fn quota_item_label(item: &app_lib::quota::QuotaItem, zh: bool) -> String {
+    match item.kind {
+        app_lib::quota::QuotaItemKind::FiveHour => {
+            if zh {
+                "5 小时".into()
+            } else {
+                "5 hours".into()
+            }
+        }
+        app_lib::quota::QuotaItemKind::Weekly => {
+            if zh {
+                "每周".into()
+            } else {
+                "Weekly".into()
+            }
+        }
+        app_lib::quota::QuotaItemKind::Other => match item.window_duration_mins {
+            Some(minutes) if zh => format!("{minutes} 分钟"),
+            Some(minutes) => format!("{minutes} minutes"),
+            None => item.label.clone(),
+        },
+    }
+}
+
+fn provider_status_label(provider: &ProviderQuota, zh: bool) -> Option<String> {
+    if provider.in_flight {
+        return Some(if zh {
+            "正在刷新…".into()
+        } else {
+            "Refreshing…".into()
+        });
+    }
+    if let Some(remaining) = provider.retry_after_secs {
+        let minutes = (remaining + 59) / 60;
+        return Some(if zh {
+            format!("接口限流中 · {minutes} 分钟后自动恢复")
+        } else {
+            format!("Rate limited · resumes in {minutes}m")
+        });
+    }
+    let error = provider.error.as_ref()?;
+    Some(match error.kind.as_str() {
+        "token_expired" => {
+            if zh {
+                "凭据已过期 · 点击下方刷新恢复".into()
+            } else {
+                "Credentials expired · click Refresh below".into()
+            }
+        }
+        "no_credentials" => {
+            if zh {
+                "未检测到 Claude 登录凭据".into()
+            } else {
+                "No Claude credentials found".into()
+            }
+        }
+        "not_logged_in" => {
+            if zh {
+                "请先通过 Codex CLI 登录".into()
+            } else {
+                "Sign in with the Codex CLI first".into()
+            }
+        }
+        "cli_not_found" => {
+            if zh {
+                "未检测到 Codex CLI".into()
+            } else {
+                "Codex CLI not found".into()
+            }
+        }
+        "network" => {
+            if zh {
+                "网络错误 · 将自动重试".into()
+            } else {
+                "Network error · will retry".into()
+            }
+        }
+        _ => {
+            if zh {
+                "额度暂不可用".into()
+            } else {
+                "Quota temporarily unavailable".into()
+            }
+        }
+    })
+}
+
+fn format_bundle_tooltip(bundle: &QuotaBundle) -> String {
+    let mut lines = Vec::new();
+    for provider in bundle.providers.iter().filter(|provider| provider.visible) {
+        lines.push(match provider.plan.as_deref() {
+            Some(plan) => format!("{} · {plan}", provider.display_name),
+            None => provider.display_name.clone(),
+        });
+        for item in provider.groups.iter().flat_map(|group| &group.items) {
+            if let Some(percent) = item.used_percent {
+                lines.push(format!("{}: {percent:.0}% used", item.label));
+            }
+        }
+    }
+    if lines.is_empty() {
+        "Monet".into()
+    } else {
+        lines.join("\n")
+    }
 }
 
 fn open_main_app() {
@@ -471,16 +626,32 @@ fn format_age(updated_at: &str, zh: bool) -> Option<String> {
         .num_seconds()
         .max(0);
     Some(if secs < 60 {
-        if zh { "刚刚更新".into() } else { "Updated just now".into() }
+        if zh {
+            "刚刚更新".into()
+        } else {
+            "Updated just now".into()
+        }
     } else if secs < 3600 {
         let m = secs / 60;
-        if zh { format!("更新于 {m} 分钟前") } else { format!("Updated {m}m ago") }
+        if zh {
+            format!("更新于 {m} 分钟前")
+        } else {
+            format!("Updated {m}m ago")
+        }
     } else if secs < 86_400 {
         let h = secs / 3600;
-        if zh { format!("更新于 {h} 小时前") } else { format!("Updated {h}h ago") }
+        if zh {
+            format!("更新于 {h} 小时前")
+        } else {
+            format!("Updated {h}h ago")
+        }
     } else {
         let d = secs / 86_400;
-        if zh { format!("更新于 {d} 天前") } else { format!("Updated {d}d ago") }
+        if zh {
+            format!("更新于 {d} 天前")
+        } else {
+            format!("Updated {d}d ago")
+        }
     })
 }
 
@@ -514,7 +685,7 @@ fn format_reset(secs: Option<i64>, zh: bool) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-fn patch_menu_styles(menu: &muda::Menu) {
+fn patch_menu_styles(menu: &muda::Menu, header_indices: &[isize]) {
     use muda::ContextMenu;
     use objc2::runtime::AnyObject;
     use objc2::AnyThread;
@@ -563,7 +734,7 @@ fn patch_menu_styles(menu: &muda::Menu) {
 
         let title_rs = item.title().to_string();
 
-        if title_rs.starts_with("Claude Code") {
+        if header_indices.contains(&i) {
             let ns_str = NSString::from_str(&title_rs);
             let attr = NSMutableAttributedString::initWithString(
                 NSMutableAttributedString::alloc(),

@@ -56,7 +56,7 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 
 **A home for multi-channel players.** Official subscription, third-party APIs, self-hosted proxies, local models — each session on its own channel, hot-switchable mid-conversation: a strong model for the hard turn, a cheap channel for the chores. "Follow CLI" and "Official Direct" stand side by side, and the settings page shows exactly where your CLI config points.
 
-**Your data stays yours.** Read-only over Claude Code's session files by architecture — there is no write path in the code, not a toggle. Fully offline, zero telemetry, no accounts; everything Monet adds lives in its own `~/.monet/` directory, so uninstalling leaves your data untouched.
+**Your data stays yours.** Read-only over Claude Code's session files by architecture — there is no write path in the code, not a toggle. Zero telemetry and no Monet account system; local session features work offline, while subscription quota and AI features you explicitly invoke contact the respective provider's official services. Everything Monet adds lives in its own `~/.monet/` directory, so uninstalling leaves your data untouched.
 
 **It works while you sleep.** Scheduled tasks run through the OS scheduler even with Monet closed; your Mac can wake itself on time, run the task, and go back to sleep. System notifications call you back whenever needed — you can walk away, the work doesn't stop.
 
@@ -106,7 +106,7 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 
 ### Always-on glances
 
-- Menu-bar quota: session window / weekly window / per-model usage with reset countdown, visible with the app closed
+- Menu-bar subscription quota: Claude Code and Codex appear as vertically ordered provider sections, preserving the windows, groups, and reset countdowns each upstream actually supplies — visible with the main app closed
 - Desktop widgets: streaks, token pulse, 28-day heatmap, model mix
 - Cost estimation prices four token classes separately; unknown models are honestly labeled "unpriced" — never guessed
 
@@ -194,7 +194,7 @@ Without it, the build falls back to ad-hoc signing — functional, but TCC permi
 | Monet metadata (titles, tags, routines) | `~/.monet/` | Read-write |
 | MCP registration | `~/.claude/settings.json` | Adds `monet` entry under `mcpServers` |
 
-Fully offline, zero telemetry, no accounts. Credential discipline: API tokens never enter command-line arguments, temp files are deleted right after use, and the CLI's OAuth credentials are never refreshed by Monet.
+Local session features work offline, with zero telemetry and no Monet account system. Subscription quota contacts only the official Claude/Codex services and reuses the official clients' existing sign-in state; Monet never proactively refreshes or writes OAuth credentials. Credential discipline: API tokens never enter command-line arguments, and temporary files are deleted right after use.
 
 ## FAQ
 

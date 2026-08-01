@@ -33,7 +33,7 @@ Log locations (all under `~/.monet/`):
 
 **A permission-gated feature fails silently** (resume in terminal, UI automation, screen observation). Open Settings → permission health check; it shows exactly what's granted and how to fix each. Do not suggest `tccutil reset` unless the panel's guidance fails — it wipes grants app-wide.
 
-**Usage/quota numbers look stale.** The usage API rate-limits aggressively; Monet backs off (~15 min) rather than hammering it. Waiting is the fix. Only report a bug if numbers stay frozen for hours.
+**Usage/quota numbers look stale.** Claude and Codex each keep a five-minute successful cache and independently respect server backoff; refresh-now does not bypass backoff. The menu keeps a failed provider's old snapshot with its update age while other providers continue normally. If the Codex section says it is signed out, sign in through the official Codex CLI first; when Codex has never been installed or configured, that section stays hidden. Only report a bug if numbers remain frozen for hours without a backoff or error status.
 
 **Update failed mid-way.** Homebrew: `brew upgrade --cask monet`. Direct install: download the latest `.dmg` from Releases and replace the app; data in `~/.monet/` is untouched.
 

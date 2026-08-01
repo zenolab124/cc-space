@@ -43,6 +43,7 @@ mod tcc;
 mod workshop;
 mod cli_env;
 mod cli_settings;
+mod codex_locator;
 /// pub：类型+获取逻辑同时被 monet-tray 独立二进制复用
 pub mod quota;
 mod tray_agent;
@@ -322,8 +323,12 @@ pub fn run() {
             quota::get_quota,
             quota::refresh_quota,
             quota::quota_available,
+            quota::get_quota_bundle,
+            quota::refresh_quota_bundle,
             quota::get_tray_title_config,
             quota::set_tray_title_config,
+            quota::get_tray_title_config_v2,
+            quota::set_tray_title_config_v2,
             tray_agent::get_tray_enabled,
             tray_agent::set_tray_enabled,
             menu::hide_main_window,
