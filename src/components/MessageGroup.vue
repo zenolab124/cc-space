@@ -2,7 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import type { SessionRecord, ContentBlock } from '@/types'
 import type { ChannelMark } from '@/composables/useSessionSettings'
-import { shortModel, formatTokens } from '@/types'
+import { shortModel, formatTokens, hasReportedUsage } from '@/types'
 import MessageBlock from './MessageBlock.vue'
 import SystemEventRow from './SystemEventRow.vue'
 import MsgClamp from './MsgClamp.vue'
@@ -105,7 +105,7 @@ const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
               ({{ shortModel((resp as any).message.model) }})
             </span>
           </span>
-          <span v-if="(resp as any).message?.usage" class="text-muted-foreground/70 font-normal tabular-nums">
+          <span v-if="hasReportedUsage((resp as any).message?.usage)" class="text-muted-foreground/70 font-normal tabular-nums">
             {{ formatTokens((resp as any).message.usage.input_tokens) }} in
             · {{ formatTokens((resp as any).message.usage.cache_read_input_tokens) }} cache
             · {{ formatTokens((resp as any).message.usage.cache_creation_input_tokens) }} new

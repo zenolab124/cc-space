@@ -6,12 +6,13 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{SessionSummary, TokenUsage};
-use crate::parser;
+use crate::models::SessionSummary;
+use crate::parser::{self, UsageLedger};
 
 // v2: CachedContrib 从 tokens 总量改为四类分量（成本分价计算需要），旧缓存整体重扫
 // v3: SessionSummary 增加 subagent_tokens 分项且 total_tokens 口径改为含子 Agent，旧缓存整体重扫
-const CACHE_VERSION: u32 = 3;
+// v4: usage 按 message.id 选择最终完整快照，子 Agent 缓存保留账本以支持跨文件去重
+const CACHE_VERSION: u32 = 4;
 
 // ── Disk format ──────────────────────────────────────────
 
@@ -47,7 +48,7 @@ struct DiskSubEntry {
     mtime_secs: u64,
     mtime_nsec: u32,
     size: u64,
-    tokens: TokenUsage,
+    ledger: UsageLedger,
 }
 
 // ── Public types (usage_stats 消费) ──────────────────────
@@ -62,7 +63,7 @@ pub struct CachedUsage {
 pub struct CachedContrib {
     pub date: String,
     pub model: Option<String>,
-    pub usage: crate::models::TokenUsage,
+    pub snapshot: crate::models::UsageSnapshot,
 }
 
 // ── In-memory state ──────────────────────────────────────
@@ -85,7 +86,7 @@ struct SubEntry {
     mtime_secs: u64,
     mtime_nsec: u32,
     size: u64,
-    tokens: TokenUsage,
+    ledger: UsageLedger,
 }
 
 struct CacheState {
@@ -164,7 +165,7 @@ fn load_from_disk() -> CacheState {
                             mtime_secs: v.mtime_secs,
                             mtime_nsec: v.mtime_nsec,
                             size: v.size,
-                            tokens: v.tokens,
+                            ledger: v.ledger,
                         },
                     )
                 })
@@ -200,14 +201,14 @@ pub fn get_summary(path: &Path) -> Option<SessionSummary> {
         }
     }
 
-    let mut summary = parser::parse_summary(path, 50)?;
+    let (mut summary, mut total_ledger) = parser::parse_summary_with_usage(path, 50)?;
 
-    // 会话总消耗口径含子 Agent/工作流：total_tokens 合并、subagent_tokens 留分项。
-    // 以主文件 stamp 锚定缓存：工作流进行中主文件不动则数字滞后，
-    // 与 watcher 只监听主文件的行为一致，轮次落账（tool result 写回）即追平
-    let sub_tokens = collect_subagent_tokens(path);
-    summary.total_tokens.accumulate(&sub_tokens);
-    summary.subagent_tokens = sub_tokens;
+    // 主会话与子 Agent/工作流先按 message.id 合并，再求和，避免转发或复制记录重复计数。
+    let sub_ledger = collect_subagent_usage(path);
+    let subagent_tokens = sub_ledger.total();
+    total_ledger.merge(sub_ledger);
+    summary.total_tokens = total_ledger.total();
+    summary.subagent_tokens = subagent_tokens;
 
     if let Ok(mut cache) = state().lock() {
         cache.summaries.insert(
@@ -227,13 +228,13 @@ pub fn get_summary(path: &Path) -> Option<SessionSummary> {
 /// 累计一个会话全部子 Agent 转录的 token 用量。
 /// 覆盖直接子 Agent（subagents/agent-*.jsonl）与工作流
 /// （subagents/workflows/<run>/agent-*.jsonl），逐文件走 (mtime, size) 缓存。
-fn collect_subagent_tokens(main_path: &Path) -> TokenUsage {
-    let mut total = TokenUsage::default();
+fn collect_subagent_usage(main_path: &Path) -> UsageLedger {
+    let mut ledger = UsageLedger::default();
     let Some(stem) = main_path.file_stem() else {
-        return total;
+        return ledger;
     };
     let Some(parent) = main_path.parent() else {
-        return total;
+        return ledger;
     };
     let subagents_dir = parent.join(stem).join("subagents");
 
@@ -244,7 +245,7 @@ fn collect_subagent_tokens(main_path: &Path) -> TokenUsage {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with("agent-") && name.ends_with(".jsonl") {
-                total.accumulate(&sub_file_tokens(&path));
+                ledger.merge(sub_file_usage(&path));
             }
         }
     };
@@ -260,25 +261,25 @@ fn collect_subagent_tokens(main_path: &Path) -> TokenUsage {
         }
     }
 
-    total
+    ledger
 }
 
-/// 单个子 Agent 文件的 token 用量，(mtime, size) 命中则免解析
-fn sub_file_tokens(path: &Path) -> TokenUsage {
+/// 单个子 Agent 文件的 usage 账本，(mtime, size) 命中则免解析
+fn sub_file_usage(path: &Path) -> UsageLedger {
     let Ok(meta) = fs::metadata(path) else {
-        return TokenUsage::default();
+        return UsageLedger::default();
     };
     let (secs, nanos, size) = file_stamp(&meta);
 
     if let Ok(cache) = state().lock() {
         if let Some(e) = cache.subs.get(path) {
             if e.mtime_secs == secs && e.mtime_nsec == nanos && e.size == size {
-                return e.tokens.clone();
+                return e.ledger.clone();
             }
         }
     }
 
-    let tokens = parser::parse_subagent_usage(path);
+    let ledger = parser::parse_usage_ledger(path);
     if let Ok(mut cache) = state().lock() {
         cache.subs.insert(
             path.to_path_buf(),
@@ -286,12 +287,12 @@ fn sub_file_tokens(path: &Path) -> TokenUsage {
                 mtime_secs: secs,
                 mtime_nsec: nanos,
                 size,
-                tokens: tokens.clone(),
+                ledger: ledger.clone(),
             },
         );
         cache.dirty = true;
     }
-    tokens
+    ledger
 }
 
 // ── Public API: usage ────────────────────────────────────
@@ -383,7 +384,7 @@ pub fn flush() {
                             mtime_secs: v.mtime_secs,
                             mtime_nsec: v.mtime_nsec,
                             size: v.size,
-                            tokens: v.tokens.clone(),
+                            ledger: v.ledger.clone(),
                         },
                     )
                 })

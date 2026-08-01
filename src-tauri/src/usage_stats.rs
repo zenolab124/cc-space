@@ -2,8 +2,8 @@
 //!
 //! 聚合口径（PRD docs/prd/v2.2.0-home-dashboard.md FR-001）：
 //! - 仅 assistant 记录的 message.usage，四类 token 求和（计费口径）
-//! - 按 message.id 去重：同一次 API 响应拆成多行时每行重复携带相同 usage，
-//!   只计首次；id 缺失的行按行独立计
+//! - 按 message.id 归并：优先终结非零快照，其次未终结非零，最后零值占位；
+//!   id 缺失的行按行独立计
 //! - `<synthetic>`（CLI 本地合成占位）与 timestamp 缺失的记录不进任何桶
 //! - timestamp（ISO 8601 UTC）转本地时区后分天
 
@@ -17,7 +17,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::cache::{self, CachedContrib, CachedUsage};
-use crate::models::TokenUsage;
+use crate::models::{TokenUsage, UsageSnapshot};
 use crate::probe;
 
 #[derive(Debug, Serialize)]
@@ -62,7 +62,7 @@ pub struct RawModelUsage {
 struct Contribution {
     date: NaiveDate,
     model: Option<String>,
-    usage: TokenUsage,
+    snapshot: UsageSnapshot,
 }
 
 /// 文件局部聚合容器，rayon map-reduce 合并。
@@ -74,15 +74,17 @@ struct Buckets {
 }
 
 impl Buckets {
-    /// 已知边界：rayon reduce 的合并顺序非确定，跨文件同 id 而 usage 不一致时
-    /// （resume/fork 谱系、resp_* 代理会话首行 usage=0 终行才有真值）「首次」不可复现。
-    /// Anthropic msg_* 行同 id 的 usage 逐字节相同，保留哪份结果一致，影响可忽略。
-    /// infer_cache_creation 是文件级的，混合渠道谱系（第三方文件触发推断、fork 后
-    /// 官方续写的文件不触发）会让同 id 两份 usage 的 creation/read 拆分不同——
-    /// 总量仍相同，成本估算在两次运行间有微小抖动，量级可忽略，接受
     fn merge(mut self, other: Buckets) -> Buckets {
-        for (k, v) in other.by_id {
-            self.by_id.entry(k).or_insert(v);
+        for (id, candidate) in other.by_id {
+            match self.by_id.get_mut(&id) {
+                Some(current) if candidate.snapshot.is_better_than(&current.snapshot) => {
+                    *current = candidate;
+                }
+                Some(_) => {}
+                None => {
+                    self.by_id.insert(id, candidate);
+                }
+            }
         }
         self.anon.extend(other.anon);
         self
@@ -102,6 +104,7 @@ struct LineExtract {
 struct MsgExtract {
     id: Option<String>,
     model: Option<String>,
+    stop_reason: Option<String>,
     usage: Option<TokenUsage>,
 }
 
@@ -112,7 +115,7 @@ fn scan_file(path: &Path) -> Buckets {
 
     // 先按行序收集，EOF 后统一做缓存写推断再入桶（推断需要整个文件的全局判断）
     let mut rows: Vec<(Option<String>, Contribution)> = Vec::new();
-    for line in reader.lines() {
+    for (sequence, line) in reader.lines().enumerate() {
         let Ok(line) = line else { break };
         if !line.contains("\"assistant\"") || !line.contains("\"usage\"") {
             continue;
@@ -140,46 +143,78 @@ fn scan_file(path: &Path) -> Buckets {
             Contribution {
                 date,
                 model: msg.model,
-                usage,
+                snapshot: UsageSnapshot::new(
+                    usage,
+                    msg.stop_reason.as_deref(),
+                    ext.timestamp,
+                    sequence as u64,
+                ),
             },
         ));
     }
 
-    infer_cache_creation(&mut rows);
     for (id, contribution) in rows {
         match id {
-            Some(id) => {
-                out.by_id.entry(id).or_insert(contribution);
-            }
+            Some(id) => match out.by_id.get_mut(&id) {
+                Some(current) if contribution.snapshot.is_better_than(&current.snapshot) => {
+                    *current = contribution;
+                }
+                Some(_) => {}
+                None => {
+                    out.by_id.insert(id, contribution);
+                }
+            },
             None => out.anon.push(contribution),
         }
     }
+    infer_cache_creation(&mut out);
     out
 }
 
-/// 第三方兼容层的已知缺口：部分渠道只上报 cache_read 不报 cache_creation，
-/// 缓存写入量恒 0 会让成本被系统性低估。仅当整个文件不含任何 creation 且出现过
-/// read 时启用推断：cache_read 水位单调上涨的部分视为本轮新写入的缓存（计 creation），
-/// 存量水位视为真实命中（计 read）。每行 token 总量保持不变，官方渠道会话零影响。
-///
-/// 推断假设「未上报的 creation 被渠道完全丢弃」。若渠道实际把未命中部分折进了
-/// input_tokens（OpenAI 兼容层常见），推断会对同批 token 二次计价（方向高估）；
-/// 反之会话中途缓存过期重建不产生水位增量（方向低估）。两者均为启发式固有误差，
-/// 相比不推断（creation 恒 0 的系统性低估）整体更接近真值。
-fn infer_cache_creation(rows: &mut [(Option<String>, Contribution)]) {
+fn is_openai_model(model: Option<&str>) -> bool {
+    let Some(model) = model else { return false };
+    let model = model.to_ascii_lowercase();
+    let bare = model.strip_prefix("openai/").unwrap_or(&model);
+    model.starts_with("openai/")
+        || bare.contains("gpt")
+        || bare.contains("codex")
+        || matches!(bare, "o1" | "o3" | "o4")
+        || bare.starts_with("o1-")
+        || bare.starts_with("o3-")
+        || bare.starts_with("o4-")
+}
+
+/// 第三方兼容层的已知缺口：部分 Anthropic 渠道只上报 cache_read 不报
+/// cache_creation。OpenAI/GPT 的缓存语义不同，不参与这项启发式推断。
+fn infer_cache_creation(buckets: &mut Buckets) {
+    let mut rows: Vec<&mut Contribution> = buckets
+        .by_id
+        .values_mut()
+        .chain(buckets.anon.iter_mut())
+        .filter(|c| !is_openai_model(c.model.as_deref()))
+        .collect();
+    rows.sort_unstable_by(|a, b| {
+        a.snapshot
+            .timestamp
+            .cmp(&b.snapshot.timestamp)
+            .then(a.snapshot.sequence.cmp(&b.snapshot.sequence))
+    });
+
     let has_creation = rows
         .iter()
-        .any(|(_, c)| c.usage.cache_creation_input_tokens > 0);
-    let has_read = rows.iter().any(|(_, c)| c.usage.cache_read_input_tokens > 0);
+        .any(|c| c.snapshot.usage.cache_creation_input_tokens > 0);
+    let has_read = rows
+        .iter()
+        .any(|c| c.snapshot.usage.cache_read_input_tokens > 0);
     if has_creation || !has_read {
         return;
     }
     let mut max_read: u64 = 0;
-    for (_, c) in rows.iter_mut() {
-        let read = c.usage.cache_read_input_tokens;
+    for c in rows {
+        let read = c.snapshot.usage.cache_read_input_tokens;
         if read > max_read {
-            c.usage.cache_creation_input_tokens = read - max_read;
-            c.usage.cache_read_input_tokens = max_read;
+            c.snapshot.usage.cache_creation_input_tokens = read - max_read;
+            c.snapshot.usage.cache_read_input_tokens = max_read;
             max_read = read;
         }
     }
@@ -207,7 +242,7 @@ fn cached_to_buckets(cached: CachedUsage) -> Buckets {
                         Contribution {
                             date,
                             model: c.model,
-                            usage: c.usage,
+                            snapshot: c.snapshot,
                         },
                     )
                 })
@@ -222,7 +257,7 @@ fn cached_to_buckets(cached: CachedUsage) -> Buckets {
                 .map(|date| Contribution {
                     date,
                     model: c.model,
-                    usage: c.usage,
+                    snapshot: c.snapshot,
                 })
         })
         .collect();
@@ -240,7 +275,7 @@ fn buckets_to_cached(buckets: &Buckets) -> CachedUsage {
                     CachedContrib {
                         date: c.date.format("%Y-%m-%d").to_string(),
                         model: c.model.clone(),
-                        usage: c.usage.clone(),
+                        snapshot: c.snapshot.clone(),
                     },
                 )
             })
@@ -251,7 +286,7 @@ fn buckets_to_cached(buckets: &Buckets) -> CachedUsage {
             .map(|c| CachedContrib {
                 date: c.date.format("%Y-%m-%d").to_string(),
                 model: c.model.clone(),
-                usage: c.usage.clone(),
+                snapshot: c.snapshot.clone(),
             })
             .collect(),
     }
@@ -311,7 +346,8 @@ pub fn collect_usage_stats() -> Result<UsageStats, String> {
     let mut month_total: u64 = 0;
 
     for c in buckets.by_id.into_values().chain(buckets.anon) {
-        let tokens = c.usage.total();
+        let usage = &c.snapshot.usage;
+        let tokens = usage.total();
         if c.date >= window_start && c.date <= today {
             *daily.entry(c.date).or_default() += tokens;
         }
@@ -327,7 +363,7 @@ pub fn collect_usage_stats() -> Result<UsageStats, String> {
             by_raw_model
                 .entry(c.model.unwrap_or_default())
                 .or_default()
-                .accumulate(&c.usage);
+                .accumulate(usage);
         }
     }
 
@@ -405,56 +441,70 @@ mod tests {
         assert_eq!(buckets.by_id.len(), 1);
         assert!(buckets.anon.is_empty());
         // 极简 usage（缺两个 cache 字段）按 0 计：1 + 2 = 3
-        assert_eq!(buckets.by_id.get("m1").unwrap().usage.total(), 3);
+        assert_eq!(
+            buckets.by_id.get("m1").unwrap().snapshot.usage.total(),
+            3
+        );
         std::fs::remove_file(&path).ok();
     }
 
-    /// 第三方兼容层缓存写推断：只报 cache_read 的会话按水位差值拆出 creation，
-    /// 每行总量不变；官方会话（已含 creation）与无缓存会话零改动
+    /// Anthropic 兼容渠道保留 cache creation 推断；OpenAI/GPT 不套用该语义。
     #[test]
-    fn cache_creation_inference() {
-        let mk = |cc: u64, cr: u64| {
-            (
-                None,
-                Contribution {
-                    date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
-                    model: None,
-                    usage: TokenUsage {
-                        input_tokens: 10,
-                        output_tokens: 5,
-                        cache_creation_input_tokens: cc,
-                        cache_read_input_tokens: cr,
-                    },
+    fn cache_creation_inference_skips_openai_models() {
+        let contribution = |model: &str, cc: u64, cr: u64, sequence: u64| Contribution {
+            date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            model: Some(model.into()),
+            snapshot: UsageSnapshot::new(
+                TokenUsage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    cache_creation_input_tokens: cc,
+                    cache_read_input_tokens: cr,
                 },
-            )
+                Some("end_turn"),
+                Some(format!("2026-07-01T00:00:{sequence:02}Z")),
+                sequence,
+            ),
         };
 
-        // 场景一：无 creation、read 水位 0 → 1000 → 1000 → 3000
-        let mut rows = vec![mk(0, 0), mk(0, 1000), mk(0, 1000), mk(0, 3000)];
-        infer_cache_creation(&mut rows);
-        let u = |i: usize| &rows[i].1.usage;
-        assert_eq!(
-            (u(1).cache_creation_input_tokens, u(1).cache_read_input_tokens),
-            (1000, 0),
-            "首次出现的缓存全算写入"
-        );
-        assert_eq!(
-            (u(2).cache_creation_input_tokens, u(2).cache_read_input_tokens),
-            (0, 1000),
-            "水位未涨则全是命中"
-        );
-        assert_eq!(
-            (u(3).cache_creation_input_tokens, u(3).cache_read_input_tokens),
-            (2000, 1000),
-            "水位上涨部分算写入，存量算命中"
-        );
-        assert_eq!(u(3).total(), 10 + 5 + 3000, "每行总量不变");
+        let mut buckets = Buckets::default();
+        buckets
+            .by_id
+            .insert("a0".into(), contribution("claude-fable-5", 0, 0, 0));
+        buckets
+            .by_id
+            .insert("a1".into(), contribution("claude-fable-5", 0, 1000, 1));
+        buckets
+            .by_id
+            .insert("a2".into(), contribution("claude-fable-5", 0, 3000, 2));
+        buckets
+            .by_id
+            .insert("g1".into(), contribution("gpt-5.6-sol", 0, 4000, 3));
 
-        // 场景二：已有 creation 的官方会话不触发推断
-        let mut rows = vec![mk(500, 0), mk(0, 2000)];
-        infer_cache_creation(&mut rows);
-        assert_eq!(rows[1].1.usage.cache_read_input_tokens, 2000);
-        assert_eq!(rows[1].1.usage.cache_creation_input_tokens, 0);
+        infer_cache_creation(&mut buckets);
+        let usage = |id: &str| &buckets.by_id.get(id).unwrap().snapshot.usage;
+        assert_eq!(
+            (
+                usage("a1").cache_creation_input_tokens,
+                usage("a1").cache_read_input_tokens,
+            ),
+            (1000, 0)
+        );
+        assert_eq!(
+            (
+                usage("a2").cache_creation_input_tokens,
+                usage("a2").cache_read_input_tokens,
+            ),
+            (2000, 1000)
+        );
+        assert_eq!(
+            (
+                usage("g1").cache_creation_input_tokens,
+                usage("g1").cache_read_input_tokens,
+            ),
+            (0, 4000),
+            "GPT 缓存字段保持上游原值"
+        );
     }
 
     /// 联机 smoke：本机真实数据全量聚合的耗时与量级。

@@ -9,6 +9,30 @@ export interface TokenUsage {
   cache_read_input_tokens: number
 }
 
+export function hasReportedUsage(usage: Partial<TokenUsage> | null | undefined): boolean {
+  if (!usage) return false
+  return (usage.input_tokens ?? 0)
+    + (usage.output_tokens ?? 0)
+    + (usage.cache_creation_input_tokens ?? 0)
+    + (usage.cache_read_input_tokens ?? 0) > 0
+}
+
+export function shouldReplaceUsage(
+  current: Partial<TokenUsage> | null | undefined,
+  currentStopReason: string | null | undefined,
+  candidate: Partial<TokenUsage> | null | undefined,
+  candidateStopReason: string | null | undefined,
+): boolean {
+  const currentReported = hasReportedUsage(current)
+  const candidateReported = hasReportedUsage(candidate)
+  if (candidateReported !== currentReported) return candidateReported
+  if (!candidateReported) return false
+  const currentTerminal = !!currentStopReason
+  const candidateTerminal = !!candidateStopReason
+  if (candidateTerminal !== currentTerminal) return candidateTerminal
+  return true
+}
+
 export interface SessionSummary {
   id: string
   title: string | null

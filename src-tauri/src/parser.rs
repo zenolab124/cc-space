@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::models::*;
@@ -13,13 +13,52 @@ use crate::models::*;
 struct UsageExtractor {
     #[serde(rename = "type")]
     record_type: Option<String>,
+    timestamp: Option<String>,
     message: Option<UsageMessage>,
 }
 
 #[derive(Deserialize)]
 struct UsageMessage {
     id: Option<String>,
+    model: Option<String>,
+    stop_reason: Option<String>,
     usage: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageLedger {
+    pub by_id: HashMap<String, UsageSnapshot>,
+    pub anonymous: Vec<UsageSnapshot>,
+}
+
+impl UsageLedger {
+    pub fn insert(&mut self, id: Option<String>, snapshot: UsageSnapshot) {
+        match id {
+            Some(id) => match self.by_id.get_mut(&id) {
+                Some(current) if snapshot.is_better_than(current) => *current = snapshot,
+                Some(_) => {}
+                None => {
+                    self.by_id.insert(id, snapshot);
+                }
+            },
+            None => self.anonymous.push(snapshot),
+        }
+    }
+
+    pub fn merge(&mut self, other: UsageLedger) {
+        for (id, snapshot) in other.by_id {
+            self.insert(Some(id), snapshot);
+        }
+        self.anonymous.extend(other.anonymous);
+    }
+
+    pub fn total(&self) -> TokenUsage {
+        let mut total = TokenUsage::default();
+        for snapshot in self.by_id.values().chain(self.anonymous.iter()) {
+            total.accumulate(&snapshot.usage);
+        }
+        total
+    }
 }
 
 /// 只解析 user/assistant 消息记录，跳过 file-history-snapshot 等大型记录
@@ -118,7 +157,10 @@ pub(crate) fn walk_blocks_assign(blocks: &mut [ContentBlock], counter: &mut u32)
 
 /// 懒解析：提取摘要信息，不加载完整对话
 /// 前 max_lines 行完整解析提取元数据，后续行用轻量结构体仅提取 token usage
-pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
+pub fn parse_summary_with_usage(
+    path: &Path,
+    max_lines: usize,
+) -> Option<(SessionSummary, UsageLedger)> {
     let metadata = fs::metadata(path).ok()?;
     let file_size = metadata.len();
     let last_modified = metadata
@@ -141,12 +183,9 @@ pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
     let mut cwd: Option<String> = None;
     let mut version: Option<String> = None;
     let mut earliest_timestamp: Option<String> = None;
-    let mut total_tokens = TokenUsage::default();
+    let mut usage_ledger = UsageLedger::default();
     let mut message_count: u32 = 0;
     let mut context_window: Option<u64> = None;
-    // 同一次 API 响应拆多行时每行重复携带相同 usage，按 message.id 去重只计首次
-    // （v2.2.0 FR-007；id 缺失的行按行独立计）。set 跨完整/轻量两条路径共享
-    let mut seen_usage_ids: HashSet<String> = HashSet::new();
 
     for (i, line) in reader.lines().enumerate() {
         let line = match line.ok() {
@@ -196,15 +235,20 @@ pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
                             model = msg.get("model").and_then(|m| m.as_str()).map(String::from);
                         }
                         if let Some(usage) = msg.get("usage") {
-                            let first_seen = match msg.get("id").and_then(|i| i.as_str()) {
-                                Some(id) => seen_usage_ids.insert(id.to_string()),
-                                None => true,
-                            };
-                            if first_seen {
-                                let u: TokenUsage =
-                                    serde_json::from_value(usage.clone()).unwrap_or_default();
-                                total_tokens.accumulate(&u);
-                            }
+                            let usage: TokenUsage =
+                                serde_json::from_value(usage.clone()).unwrap_or_default();
+                            usage_ledger.insert(
+                                msg.get("id").and_then(|i| i.as_str()).map(String::from),
+                                UsageSnapshot::new(
+                                    usage,
+                                    msg.get("stop_reason").and_then(|v| v.as_str()),
+                                    value
+                                        .get("timestamp")
+                                        .and_then(|v| v.as_str())
+                                        .map(String::from),
+                                    i as u64,
+                                ),
+                            );
                         }
                     }
                     if earliest_timestamp.is_none() {
@@ -280,13 +324,15 @@ pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
                         if ext.record_type.as_deref() == Some("assistant") {
                             if let Some(msg) = ext.message {
                                 if let Some(u) = msg.usage {
-                                    let first_seen = match &msg.id {
-                                        Some(id) => seen_usage_ids.insert(id.clone()),
-                                        None => true,
-                                    };
-                                    if first_seen {
-                                        total_tokens.accumulate(&u);
-                                    }
+                                    usage_ledger.insert(
+                                        msg.id,
+                                        UsageSnapshot::new(
+                                            u,
+                                            msg.stop_reason.as_deref(),
+                                            ext.timestamp,
+                                            i as u64,
+                                        ),
+                                    );
                                 }
                             }
                         }
@@ -320,7 +366,8 @@ pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
     // 用户手动标题（/title 命令写入的 custom-title）优先于 AI 生成标题
     let title = custom_title.or(title);
 
-    Some(SessionSummary {
+    let total_tokens = usage_ledger.total();
+    let summary = SessionSummary {
         id: session_id,
         title,
         first_user_message,
@@ -335,20 +382,24 @@ pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
         file_size,
         message_count,
         context_window,
-    })
+    };
+    Some((summary, usage_ledger))
 }
 
-/// 累计单个子 Agent 转录文件的 token 用量（轻量路径：只提取 assistant usage）。
-/// 与 parse_summary 同口径：同一 API 响应拆多行时按 message.id 去重只计首次。
-pub fn parse_subagent_usage(path: &Path) -> TokenUsage {
-    let mut total = TokenUsage::default();
+pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
+    parse_summary_with_usage(path, max_lines).map(|(summary, _)| summary)
+}
+
+/// 提取单个 JSONL 文件的 token 用量账本。
+/// 同一 message.id 可能先写零值占位、后写最终快照；账本保留质量最高的一份。
+pub fn parse_usage_ledger(path: &Path) -> UsageLedger {
+    let mut ledger = UsageLedger::default();
     let Ok(file) = File::open(path) else {
-        return total;
+        return ledger;
     };
     let reader = BufReader::with_capacity(64 * 1024, file);
-    let mut seen_usage_ids: HashSet<String> = HashSet::new();
 
-    for line in reader.lines() {
+    for (sequence, line) in reader.lines().enumerate() {
         let Ok(line) = line else { continue };
         if !line.contains("\"assistant\"") || !line.contains("\"usage\"") {
             continue;
@@ -360,16 +411,25 @@ pub fn parse_subagent_usage(path: &Path) -> TokenUsage {
             continue;
         }
         let Some(msg) = ext.message else { continue };
-        let Some(u) = msg.usage else { continue };
-        let first_seen = match &msg.id {
-            Some(id) => seen_usage_ids.insert(id.clone()),
-            None => true,
-        };
-        if first_seen {
-            total.accumulate(&u);
+        if msg.model.as_deref() == Some("<synthetic>") {
+            continue;
         }
+        let Some(usage) = msg.usage else { continue };
+        ledger.insert(
+            msg.id,
+            UsageSnapshot::new(
+                usage,
+                msg.stop_reason.as_deref(),
+                ext.timestamp,
+                sequence as u64,
+            ),
+        );
     }
-    total
+    ledger
+}
+
+pub fn parse_subagent_usage(path: &Path) -> TokenUsage {
+    parse_usage_ledger(path).total()
 }
 
 /// 从文件尾部搜索 ai-title 记录
@@ -437,32 +497,45 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn assistant_line(id: Option<&str>, output_tokens: u64) -> String {
+    fn assistant_line_with_stop(
+        id: Option<&str>,
+        input_tokens: u64,
+        output_tokens: u64,
+        stop_reason: Option<&str>,
+    ) -> String {
         let id_part = id.map(|i| format!("\"id\":\"{i}\",")).unwrap_or_default();
+        let stop_part = stop_reason
+            .map(|s| format!("\"stop_reason\":\"{s}\","))
+            .unwrap_or_default();
         format!(
-            "{{\"type\":\"assistant\",\"timestamp\":\"2026-06-11T10:00:00.000Z\",\"message\":{{{id_part}\"model\":\"claude-fable-5\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":{output_tokens},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}}}}"
+            "{{\"type\":\"assistant\",\"timestamp\":\"2026-06-11T10:00:00.000Z\",\"message\":{{{id_part}{stop_part}\"model\":\"claude-fable-5\",\"usage\":{{\"input_tokens\":{input_tokens},\"output_tokens\":{output_tokens},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}}}}"
         )
     }
 
-    /// FR-007：同一 message.id 多行只计一次 usage；无 id 行按行独立计。
-    /// 同时覆盖完整路径（前 max_lines）与轻量路径（之后）共享去重集
+    fn assistant_line(id: Option<&str>, output_tokens: u64) -> String {
+        assistant_line_with_stop(id, 10, output_tokens, None)
+    }
+
+    /// 同一 message.id 只计一次；后续最终快照替换零值占位。
+    /// 同时覆盖完整路径（前 max_lines）与轻量路径（之后）共享账本。
     #[test]
-    fn summary_dedups_usage_by_message_id() {
+    fn summary_selects_best_usage_snapshot() {
         let path = std::env::temp_dir().join("monet-test-dedup.jsonl");
         let mut f = fs::File::create(&path).unwrap();
-        // 完整路径内：同 id 两行 + 无 id 一行
-        writeln!(f, "{}", assistant_line(Some("msg_a"), 100)).unwrap();
-        writeln!(f, "{}", assistant_line(Some("msg_a"), 100)).unwrap();
+        writeln!(f, "{}", assistant_line_with_stop(Some("msg_a"), 0, 0, None)).unwrap();
         writeln!(f, "{}", assistant_line(None, 7)).unwrap();
-        // 轻量路径内（max_lines=3 之后）：msg_a 第三次出现 + 新 id 一次
-        writeln!(f, "{}", assistant_line(Some("msg_a"), 100)).unwrap();
         writeln!(f, "{}", assistant_line(Some("msg_b"), 50)).unwrap();
+        writeln!(
+            f,
+            "{}",
+            assistant_line_with_stop(Some("msg_a"), 100, 25, Some("tool_use"))
+        )
+        .unwrap();
+        writeln!(f, "{}", assistant_line_with_stop(Some("msg_a"), 0, 0, None)).unwrap();
         drop(f);
 
         let summary = parse_summary(&path, 3).unwrap();
-        // msg_a 计一次(110) + 无 id(17) + msg_b(60)
-        assert_eq!(summary.total_tokens.total(), 110 + 17 + 60);
-        // message_count 维持按行计数口径不变
+        assert_eq!(summary.total_tokens.total(), 125 + 17 + 60);
         assert_eq!(summary.message_count, 5);
         fs::remove_file(&path).ok();
     }
@@ -473,8 +546,13 @@ mod tests {
         let path = std::env::temp_dir().join("monet-test-subagent-usage.jsonl");
         let mut f = fs::File::create(&path).unwrap();
         writeln!(f, "{{\"type\":\"user\",\"message\":{{\"content\":\"hi assistant usage\"}}}}").unwrap();
-        writeln!(f, "{}", assistant_line(Some("msg_x"), 200)).unwrap();
-        writeln!(f, "{}", assistant_line(Some("msg_x"), 200)).unwrap();
+        writeln!(f, "{}", assistant_line_with_stop(Some("msg_x"), 0, 0, None)).unwrap();
+        writeln!(
+            f,
+            "{}",
+            assistant_line_with_stop(Some("msg_x"), 10, 200, Some("tool_use"))
+        )
+        .unwrap();
         writeln!(f, "{}", assistant_line(Some("msg_y"), 30)).unwrap();
         drop(f);
 

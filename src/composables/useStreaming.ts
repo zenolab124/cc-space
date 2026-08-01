@@ -1,7 +1,7 @@
 import { reactive, computed, ref, type Ref, type ComputedRef } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { ContentBlock } from '@/types'
+import { hasReportedUsage, shouldReplaceUsage, type ContentBlock } from '@/types'
 import { triggerMetaGeneration } from './useSessionMeta'
 import { useHtmlVisual, HTML_VISUAL_PROMPT } from '@/features'
 import type { EffortSetting } from './useSessionSettings'
@@ -53,9 +53,8 @@ export interface StreamingTurn {
   /** 该 API message 的 token 用量(assistant 快照自带,message 完成即到)——
    *  块级 usage 即时显示的数据源,与落账后 record 的 message.usage 同源同值 */
   usage?: Record<string, number>
+  stopReason?: string
 }
-
-/** 监控卡尾部行：普通文本 / 等宽工具行 / 错误行 */
 export interface TailLine {
   kind: 'text' | 'tool' | 'error'
   text: string
@@ -132,6 +131,7 @@ interface StreamEventPayload {
   model?: string
   /** assistant 快照携带的该 message token 用量 */
   usage?: Record<string, number>
+  stop_reason?: string
   // block_start / block_delta / block_stop
   index?: number
   content_block?: ContentBlock
@@ -785,8 +785,10 @@ export async function initStreamListeners(): Promise<void> {
           if (entry) {
             const existing = entry.turn
             if (!existing.model && payload.model) existing.model = payload.model
-            // usage 覆盖式更新:快照多次到达(空→部分→完整),最后一次为完整值
-            if (payload.usage) existing.usage = payload.usage
+            if (shouldReplaceUsage(existing.usage, existing.stopReason, payload.usage, payload.stop_reason)) {
+              existing.usage = payload.usage
+              existing.stopReason = payload.stop_reason
+            }
             let cursor = 0
             for (const incoming of payload.content) {
               let matched = -1
@@ -828,7 +830,8 @@ export async function initStreamListeners(): Promise<void> {
               messageId: mid,
               content: strippedContent,
               model: payload.model,
-              usage: payload.usage,
+              usage: hasReportedUsage(payload.usage) ? payload.usage : undefined,
+              stopReason: payload.stop_reason,
               live: true,
             })
             const reactiveTurn = state.streamingTurns[state.streamingTurns.length - 1]

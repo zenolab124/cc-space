@@ -5,7 +5,7 @@ import type { SubAgentState } from '@/composables/useSubAgents'
 import type { AsyncTaskItem, AsyncTaskState } from '@/composables/useAsyncTasks'
 import { isActive } from '@/composables/useAsyncTasks'
 import type { SubAgentMeta, SessionRecord, ContentBlock } from '@/types'
-import { shortModel, formatTokens } from '@/types'
+import { shortModel, formatTokens, hasReportedUsage } from '@/types'
 import { filterConsumedResults } from '@/utils/toolPair'
 import { IMAGE_LOCATOR, type ImageLocator } from '@/utils/ccimg'
 import AsyncTaskCard from './AsyncTaskCard.vue'
@@ -276,7 +276,7 @@ const messageGroups = computed<MessageGroup[]>(() =>
                       ({{ shortModel((resp as any).message.model) }})
                     </span>
                   </span>
-                  <span v-if="(resp as any).message?.usage" class="text-muted-foreground/70 font-normal tabular-nums">
+                  <span v-if="hasReportedUsage((resp as any).message?.usage)" class="text-muted-foreground/70 font-normal tabular-nums">
                     {{ formatTokens((resp as any).message.usage.input_tokens) }} in
                     · {{ formatTokens((resp as any).message.usage.output_tokens) }} out
                   </span>

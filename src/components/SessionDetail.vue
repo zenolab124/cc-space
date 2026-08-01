@@ -34,7 +34,7 @@ import {
 } from '@/composables/useSlashCommands'
 import { useWorkshop } from '@/composables/useWorkshop'
 import { useSessionMeta } from '@/composables/useSessionMeta'
-import { shortId, shortModel, formatTokens } from '@/types'
+import { shortId, shortModel, formatTokens, hasReportedUsage, shouldReplaceUsage } from '@/types'
 import { inferModel } from '@/utils/modelContext'
 import { cwdToProjectId, samePath } from '@/utils/path'
 import { ROLE_DISPLAY, resolveMappedRoles } from '@/utils/modelEnv'
@@ -885,10 +885,20 @@ const displayModelString = computed<string | null>(() => {
  * 的真实近似。不能用 SessionSummary.total_tokens 累加 4 类——那是计费统计量,
  * cache_read 累计会让长会话出现几十 M 的虚高。
  */
+const lastReportedAssistantUsage = computed(() => {
+  for (let i = records.value.length - 1; i >= 0; i--) {
+    const record = records.value[i]
+    if (record.type === 'assistant' && hasReportedUsage(record.message?.usage)) {
+      return record.message?.usage ?? null
+    }
+  }
+  return null
+})
+
 const lastAssistantContextSize = computed<number>(() => {
-  const u = lastAssistantRecord.value?.message?.usage
-  if (!u) return 0
-  return u.input_tokens + u.cache_read_input_tokens
+  const usage = lastReportedAssistantUsage.value
+  if (!usage) return 0
+  return usage.input_tokens + usage.cache_read_input_tokens
 })
 
 const pendingUserBlocks = computed<ContentBlock[]>(() => {
@@ -1032,7 +1042,10 @@ function mergeResponses(responses: VisibleRecord[]): VisibleRecord[] {
       const prevMsg = (prev as any).message
       const curMsg = (r as any).message
       prevMsg.content = [...prevMsg.content, ...curMsg.content]
-      if (curMsg.usage) prevMsg.usage = curMsg.usage
+      if (shouldReplaceUsage(prevMsg.usage, prevMsg.stop_reason, curMsg.usage, curMsg.stop_reason)) {
+        prevMsg.usage = curMsg.usage
+        prevMsg.stop_reason = curMsg.stop_reason
+      }
       // 合并块的 timestamp 是首行落盘时间(≈回复开始);末行时间(≈回复完成)另存,组末尾标注用
       ;(prev as any)._lastTs = (r as any).timestamp ?? (prev as any)._lastTs
     } else {
@@ -2745,13 +2758,13 @@ async function onReload() {
                    不等整轮结束;四段格式与历史区块头同款,换树前后像素等价 -->
               <span
                 class="text-muted-foreground/70 font-normal tabular-nums"
-                :style="{ visibility: turn.usage ? 'visible' : 'hidden' }"
+                :style="{ visibility: hasReportedUsage(turn.usage) ? 'visible' : 'hidden' }"
               >
-                <template v-if="turn.usage">
-                  {{ formatTokens(turn.usage.input_tokens ?? 0) }} in
-                  · {{ formatTokens(turn.usage.cache_read_input_tokens ?? 0) }} cache
-                  · {{ formatTokens(turn.usage.cache_creation_input_tokens ?? 0) }} new
-                  · {{ formatTokens(turn.usage.output_tokens ?? 0) }} out
+                <template v-if="hasReportedUsage(turn.usage)">
+                  {{ formatTokens(turn.usage?.input_tokens ?? 0) }} in
+                  · {{ formatTokens(turn.usage?.cache_read_input_tokens ?? 0) }} cache
+                  · {{ formatTokens(turn.usage?.cache_creation_input_tokens ?? 0) }} new
+                  · {{ formatTokens(turn.usage?.output_tokens ?? 0) }} out
                 </template>
                 <template v-else>&nbsp;</template>
               </span>
