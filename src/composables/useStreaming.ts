@@ -351,7 +351,7 @@ function isSessionSurfaceVisible(sessionId: string): boolean {
   return false
 }
 
-function renderIntervalForSession(sessionId: string): number {
+export function sessionRenderCadence(sessionId: string): number {
   const visible = isSessionSurfaceVisible(sessionId)
   const priority = resolveStreamRenderPriority(
     visible,
@@ -497,7 +497,7 @@ function pendingSessionIds(): Set<string> {
 function nextFlushDelay(now: number): number | null {
   let delay = Number.POSITIVE_INFINITY
   for (const sid of pendingSessionIds()) {
-    const interval = renderIntervalForSession(sid)
+    const interval = sessionRenderCadence(sid)
     const last = lastSessionFlushAt.get(sid)
     delay = Math.min(delay, last === undefined ? interval : Math.max(0, last + interval - now))
   }
@@ -520,7 +520,7 @@ function bump(forceReschedule = false) {
     const documentVisible = document.visibilityState === 'visible'
     let flushed = false
     for (const sid of pendingSessionIds()) {
-      const interval = renderIntervalForSession(sid)
+      const interval = sessionRenderCadence(sid)
       const last = lastSessionFlushAt.get(sid)
       if (last !== undefined && flushAt - last + 1 < interval) continue
       const elapsed = last === undefined ? interval : Math.max(interval, flushAt - last)

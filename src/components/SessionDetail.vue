@@ -18,6 +18,7 @@ import {
   setSessionRenderSurface,
   removeSessionRenderSurface,
   markSessionRenderActive,
+  sessionRenderCadence,
 } from '@/composables/useStreaming'
 import { useSessionSettings, type ChannelMark } from '@/composables/useSessionSettings'
 import { useRunConfig } from '@/composables/useRunConfig'
@@ -1217,9 +1218,10 @@ onMounted(() => {
     if (!sc) return
     const perfT0 = performance.now()
     let delta = 0
+    const compensateAnchor = !followStreaming.value
     for (const entry of entries) {
       const el = entry.target as HTMLElement
-      const newH = entry.borderBoxSize?.[0]?.blockSize ?? el.offsetHeight
+      const newH = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height
       const oldH = groupHeights.get(el)
       groupHeights.set(el, newH)
       if (oldH === undefined) continue // 首次观测：建立基线
@@ -1227,7 +1229,7 @@ onMounted(() => {
       if (diff === 0) continue
       // 仅补偿视口上方的组（分类由 posIO 免费维护，本回调零布局属性读——
       // 读 offsetTop 会在布局脏时强制同步 layout，实测 278ms，已废弃该写法）
-      if (groupAbove.get(el)) {
+      if (compensateAnchor && groupAbove.get(el)) {
         delta += diff
       }
     }
@@ -2004,31 +2006,55 @@ watch(() => stream.value.pendingUserMessage, (val) => {
 // 跟随不再挂数据事件(watch streamingTick/records 已删),改挂"内容高度变化"本身:
 // 打字机、晚到子 Agent turn、records 落账替换、图片加载、cv 组解冻、横幅出现,
 // 任何增高源统一在此贴底——新增数据链路无需再记得挂滚动。
-// RO 回调在 layout 后 paint 前执行:读 scrollHeight 无强制布局,写 scrollTop 同帧生效。
+// RO 回调只标记贴底请求；真正的几何读写按列刷新档位合并，避免七列同时写 scrollTop。
 let contentRO: ResizeObserver | null = null
+let followScrollTimer: number | null = null
+let followScrollScheduledAt = Number.POSITIVE_INFINITY
+let lastFollowScrollAt = 0
+
+function applyFollowScroll() {
+  followScrollTimer = null
+  followScrollScheduledAt = Number.POSITIVE_INFINITY
+  if (!followStreaming.value) return
+  // 用户刚有上滚意图:让手势先走,onScroll/onScrollWheel 正常完成脱离判定
+  if (performance.now() - wheelUpIntentAt < 150) return
+  const sc = scrollContainer.value
+  if (!sc) return
+  const target = Math.max(0, sc.scrollHeight - sc.clientHeight)
+  // 留出亚像素容差，防 WebKit 分数布局下对相同位置反复写 scrollTop。
+  if (target - sc.scrollTop > 0.5) sc.scrollTop = target
+  lastScrollTop = sc.scrollTop
+  lastSnapScrollTop = sc.scrollTop
+  lastFollowScrollAt = performance.now()
+}
+
+function scheduleFollowScroll(force = false) {
+  if (!followStreaming.value) return
+  const sid = effectiveSessionId.value
+  const interval = sid ? sessionRenderCadence(sid) : 66
+  const now = performance.now()
+  const delay = force ? 0 : Math.max(0, lastFollowScrollAt + interval - now)
+  const nextAt = now + delay
+  if (followScrollTimer !== null && followScrollScheduledAt <= nextAt + 1) return
+  if (followScrollTimer !== null) window.clearTimeout(followScrollTimer)
+  followScrollScheduledAt = nextAt
+  followScrollTimer = window.setTimeout(applyFollowScroll, delay)
+}
+
 watch(scrollContentEl, (el) => {
   contentRO?.disconnect()
   if (!el) return
   if (!contentRO) {
-    contentRO = new ResizeObserver(() => {
-      if (!followStreaming.value) return
-      // 用户刚有上滚意图:让手势先走,onScroll/onScrollWheel 正常完成脱离判定
-      if (performance.now() - wheelUpIntentAt < 150) return
-      const sc = scrollContainer.value
-      if (!sc) return
-      const target = sc.scrollHeight - sc.clientHeight
-      if (sc.scrollTop < target) {
-        sc.scrollTop = target
-      }
-      // 基线无条件同步:内容净缩时浏览器把 scrollTop 向上钳位,
-      // 该位移若漏进 onScroll 的手势 delta,会被误判为用户上滚而关闭跟随
-      lastScrollTop = sc.scrollTop
-      lastSnapScrollTop = sc.scrollTop
-    })
+    contentRO = new ResizeObserver(() => scheduleFollowScroll())
   }
   contentRO.observe(el)
 }, { immediate: true })
-onUnmounted(() => { contentRO?.disconnect(); contentRO = null })
+onUnmounted(() => {
+  contentRO?.disconnect()
+  contentRO = null
+  if (followScrollTimer !== null) window.clearTimeout(followScrollTimer)
+  followScrollTimer = null
+})
 
 // ====== 流式结束 → 延迟清理（零 DOM 重建方案）======
 // 核心思路：streaming→false 后 records 和 streamingTurns 都不动——DOM 零变化 = 零跳动。
