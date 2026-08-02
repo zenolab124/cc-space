@@ -43,8 +43,9 @@ import { inferModel } from '@/utils/modelContext'
 import { cwdToProjectId, samePath } from '@/utils/path'
 import { ROLE_DISPLAY, resolveMappedRoles } from '@/utils/modelEnv'
 import { filterConsumedResults, type ToolResultData } from '@/utils/toolPair'
+import { findPendingPermissionToolUseId } from '@/utils/toolDisplay'
 import type { SessionRecord, SessionSummary, ContentBlock } from '@/types'
-import MessageBlock from './MessageBlock.vue'
+import ContentBlockList from './ContentBlockList.vue'
 import MessageGroup from './MessageGroup.vue'
 import SystemEventRow from './SystemEventRow.vue'
 import DividerMark from './DividerMark.vue'
@@ -78,6 +79,12 @@ import RunnerPanel from './runner/RunnerPanel.vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
 import { useRunners } from '@/composables/useRunners'
+import {
+  TOOL_EXECUTION_CONTEXT,
+  TOOL_FOLD_INTERACTION,
+  provideToolFoldState,
+  useToolDisplayMode,
+} from '@/composables/useToolDisplay'
 
 /**
  * 会话详情。两种宿主形态(v2.1.0 FR-004/009,档案馆分屏已下线):
@@ -216,6 +223,9 @@ const toolResultMap = computed(() => {
 })
 provide('toolResultMap', toolResultMap)
 
+const toolFoldState = provideToolFoldState()
+const { toolDisplayMode } = useToolDisplayMode()
+
 // --- 异步任务面板（后台 Bash / Agent / Workflow / Monitor / Wakeup）---
 const {
   allAgents: subAgentList,
@@ -251,6 +261,13 @@ const asyncTasks = computed<AsyncTaskItem[]>(() => {
   )
 })
 const asyncActiveCount = computed(() => asyncTasks.value.filter(isActive).length)
+const asyncToolStates = computed(() => {
+  const states = new Map<string, AsyncTaskItem['state']>()
+  for (const item of asyncTasks.value) {
+    if (item.toolUseId) states.set(item.toolUseId, item.state)
+  }
+  return states
+})
 
 /** 自持长活进程忙 = 自发轮在途(live turn 在播):此窗口发消息应排队而非直发——
  *  CLI 串行,直发会打断在播轮渲染且排队"没有回应"(审计遗留①)。
@@ -578,6 +595,7 @@ function onInputChange() {
 // 会话切换时复位 /clear 与 /help 的视图标志,滚动恢复跟随
 // (流式区已按会话隔离,无需也不应清流式数据——切回时继续展示)
 watch(effectiveSessionId, () => {
+  toolFoldState.reset()
   hideHistory.value = false
   showHelpCard.value = false
   slashNotice.value = null
@@ -593,6 +611,24 @@ watch(effectiveSessionId, () => {
 // --- 权限请求(仅工作台列交互;档案馆只读不渲染) ---
 const permissionRequest = currentForSession(effectiveSessionId)
 const { respondRequest, denyAllForSession } = usePermissionRequests()
+
+const permissionToolUseId = computed(() => findPendingPermissionToolUseId(
+  stream.value.streamingTurns.map(turn => turn.content),
+  permissionRequest.value,
+  toolResultMap.value,
+))
+
+provide(TOOL_EXECUTION_CONTEXT, {
+  results: toolResultMap,
+  asyncStates: asyncToolStates,
+  permissionRequest: computed(() => permissionRequest.value
+    ? {
+        toolUseId: permissionToolUseId.value,
+        toolName: permissionRequest.value.toolName,
+        input: permissionRequest.value.input,
+      }
+    : null),
+})
 
 /** 按工具分发卡片:提问/计划批准走专用交互卡,其余走通用权限卡 */
 const requestCard = computed(() => {
@@ -1239,6 +1275,7 @@ const messageVirtualizer = useVirtualizer(
 // scrollTop 不触发重排，视口内容保持视觉稳定）。
 const groupHeights = new WeakMap<Element, number>()
 let anchorRO: ResizeObserver | null = null
+let suppressAnchorCompensation = false
 
 // ---- 组位置分类（锚定补偿的零布局读数据源）----
 // 历史教训（HUD 长帧归因实测）：cv 的手工 hidden/visible 管理在 WebKit 上是
@@ -1291,7 +1328,12 @@ onMounted(() => {
       if (diff === 0) continue
       // 仅补偿视口上方的组（分类由 posIO 免费维护，本回调零布局属性读——
       // 读 offsetTop 会在布局脏时强制同步 layout，实测 278ms，已废弃该写法）
-      if (compensateAnchor && groupAbove.get(el)) {
+      if (
+        compensateAnchor
+        && !suppressAnchorCompensation
+        && !el.hasAttribute('data-virtual-anchor')
+        && groupAbove.get(el)
+      ) {
         delta += diff
       }
     }
@@ -1803,6 +1845,9 @@ function onInputKeydown(e: KeyboardEvent) {
 }
 
 const followStreaming = ref(true)
+provide(TOOL_FOLD_INTERACTION, () => {
+  followStreaming.value = false
+})
 let lastScrollTop = 0
 let lastSnapScrollTop = 0
 let resumedAt = 0
@@ -1988,11 +2033,12 @@ function onAnchorScrollToIndex(index: number) {
 }
 
 function locateToolUse(toolUseId: string) {
-  // 三层收敛(虚拟化后 tool_use 目标可能不在 DOM 里,必须先 scrollToIndex 让它渲染出来):
+  // 工具摘要锚点始终存在；grouped 模式下先按稳定 ID 展开所属组和单项，再定位。
   // 1. 反查 tool_use 所在的组 gi,虚拟窗口内 scrollToIndex 到大致偏移
   // 2. rAF×2 后精调 scrollIntoView 到 tool_use 元素(第一帧让 virtualizer 布局落定,第二帧让 measureElement 校准真高)
   // 兼顾旧行为:目标已在 DOM(如末组或已渲染的窗口内)则同帧直接 scrollIntoView,避免多余延迟
   followStreaming.value = false
+  toolFoldState.requestReveal(toolUseId)
   const gi = messageGroups.value.findIndex(g =>
     g.responses.some(r => {
       const content = (r as any).message?.content
@@ -2006,11 +2052,18 @@ function locateToolUse(toolUseId: string) {
   }
   const tryImmediate = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`)
   if (tryImmediate) {
-    tryImmediate.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    highlight(tryImmediate)
+    nextTick(() => requestAnimationFrame(() => {
+      const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`) ?? tryImmediate
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      highlight(el)
+      toolFoldState.clearRevealRequest(toolUseId)
+    }))
     return
   }
-  if (gi < 0) return
+  if (gi < 0) {
+    toolFoldState.clearRevealRequest(toolUseId)
+    return
+  }
   // Step 1: 目标不在 DOM → 用 virtualizer 滚到目标组附近
   if (gi < renderGroups.value.length) {
     messageVirtualizer.value.scrollToIndex(gi, { align: 'center' })
@@ -2018,11 +2071,46 @@ function locateToolUse(toolUseId: string) {
   // Step 2: rAF×2 后精调
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`)
-    if (!el) return
+    if (!el) {
+      toolFoldState.clearRevealRequest(toolUseId)
+      return
+    }
     el.scrollIntoView({ block: 'center', behavior: 'smooth' })
     highlight(el)
+    toolFoldState.clearRevealRequest(toolUseId)
   }))
 }
+
+watch(toolDisplayMode, async () => {
+  const sc = scrollContainer.value
+  if (!sc) return
+  const wasFollowing = followStreaming.value
+  const scTop = sc.getBoundingClientRect().top
+  const candidates = [...sc.querySelectorAll<HTMLElement>('[data-anchor-index]')]
+  const anchor = candidates.find(el => el.getBoundingClientRect().bottom > scTop) ?? null
+  const anchorIndex = anchor?.dataset.anchorIndex ?? null
+  const anchorOffset = anchor ? anchor.getBoundingClientRect().top - scTop : 0
+
+  suppressAnchorCompensation = true
+  await nextTick()
+  messageVirtualizer.value.measure()
+  await nextTick()
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (wasFollowing) {
+      scrollToBottom(true)
+    } else if (anchorIndex !== null) {
+      const nextAnchor = scrollContainer.value?.querySelector<HTMLElement>(`[data-anchor-index="${CSS.escape(anchorIndex)}"]`)
+      if (nextAnchor && scrollContainer.value) {
+        const nextTop = nextAnchor.getBoundingClientRect().top - scrollContainer.value.getBoundingClientRect().top
+        scrollContainer.value.scrollTop += nextTop - anchorOffset
+        lastScrollTop = scrollContainer.value.scrollTop
+        lastSnapScrollTop = scrollContainer.value.scrollTop
+      }
+    }
+    suppressAnchorCompensation = false
+    observeAnchorGroups()
+  }))
+})
 
 function resumeFollow() {
   followStreaming.value = true
@@ -2776,6 +2864,7 @@ async function onReload() {
             :ref="(el) => el && messageVirtualizer.measureElement(el as Element)"
             :data-anchor-index="vitem.index"
             :data-index="vitem.index"
+            data-virtual-anchor="true"
             :style="{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vitem.start}px)` }"
             class="space-y-4"
           >
@@ -2906,14 +2995,10 @@ async function onReload() {
                 <template v-else>&nbsp;</template>
               </span>
             </div>
-            <TransitionGroup name="block-fade" tag="div" appear>
-              <MessageBlock
-                v-for="(block, i) in filterConsumedResults(turn.content)"
-                :key="`${turn.messageId}-${i}-${block.type}`"
-                :block="block"
-                :streaming="stream.streaming || !!turn.live"
-              />
-            </TransitionGroup>
+            <ContentBlockList
+              :blocks="filterConsumedResults(turn.content)"
+              :streaming="!!turn.live"
+            />
           </div>
         </div>
 

@@ -31,6 +31,7 @@ import { useWorkbench } from '@/composables/useWorkbench'
 import { useZoom } from '@/composables/useZoom'
 import { useHtmlVisual } from '@/features'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
+import { TOOL_DISPLAY_MODES, useToolDisplayMode, type ToolDisplayMode } from '@/composables/useToolDisplay'
 import { useUpdater } from '@/composables/useUpdater'
 import { MODELS } from '@/utils/modelContext'
 
@@ -56,6 +57,7 @@ const { minColumnWidth, setMinColumnWidth } = useWorkbench()
 const { zoomLevel, setZoom, MIN_ZOOM, MAX_ZOOM, STEP } = useZoom()
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
+const { toolDisplayMode, setToolDisplayMode } = useToolDisplayMode()
 const { status: updateStatus, newVersion: updateVersion, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
 loadChannel()
 
@@ -702,6 +704,25 @@ function onSaved() {
                   <p v-if="translateError" class="text-[11px] text-destructive mt-1">{{ translateError }}</p>
                 </div>
               </div>
+            </div>
+            <div class="setting-cell setting-cell-wide">
+              <div class="setting-label">{{ $t('settings.toolDisplayMode') }}</div>
+              <div class="tool-display-options" role="radiogroup" :aria-label="$t('settings.toolDisplayMode')">
+                <button
+                  v-for="mode in TOOL_DISPLAY_MODES"
+                  :key="mode"
+                  type="button"
+                  class="tool-display-option"
+                  :class="{ active: toolDisplayMode === mode }"
+                  role="radio"
+                  :aria-checked="toolDisplayMode === mode"
+                  @click="setToolDisplayMode(mode as ToolDisplayMode)"
+                >
+                  <span class="tool-display-option-title">{{ $t(`settings.toolDisplayMode_${mode}`) }}</span>
+                  <span class="tool-display-option-hint">{{ $t(`settings.toolDisplayMode_${mode}Hint`) }}</span>
+                </button>
+              </div>
+              <div class="setting-hint">{{ $t('settings.toolDisplayModeHint') }}</div>
             </div>
             <div class="setting-cell">
               <div class="setting-label">{{ $t('settings.zoomLevel') }}</div>
@@ -1599,6 +1620,37 @@ function onSaved() {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.setting-cell-wide { grid-column: 1 / -1; }
+.tool-display-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.tool-display-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  background: var(--card);
+  text-align: left;
+  transition: border-color 150ms, background 150ms, color 150ms, transform 150ms;
+}
+.tool-display-option:hover { color: var(--foreground); transform: translateY(-1px); }
+.tool-display-option.active {
+  border-color: var(--primary);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
+}
+.tool-display-option-title { font-size: 11.5px; font-weight: 600; }
+.tool-display-option-hint { font-size: 10.5px; line-height: 1.4; }
+@media (max-width: 760px) {
+  .tool-display-options { grid-template-columns: 1fr; }
 }
 .setting-label {
   font-size: 12px;

@@ -8,8 +8,11 @@ import { ref, onMounted, computed, provide } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import MessageBlock from './MessageBlock.vue'
+import ContentBlockList from './ContentBlockList.vue'
 import { shortId } from '@/types'
 import type { ToolResultData } from '@/utils/toolPair'
+import { buildAsyncLedger } from '@/composables/useAsyncTasks'
+import { TOOL_EXECUTION_CONTEXT } from '@/composables/useToolDisplay'
 import type { SessionRecord, ContentBlock } from '@/types'
 
 const props = defineProps<{
@@ -72,7 +75,19 @@ const toolResultMap = computed(() => {
   }
   return map
 })
+const asyncToolStates = computed(() => {
+  const states = new Map<string, ReturnType<typeof buildAsyncLedger>[number]['state']>()
+  for (const item of buildAsyncLedger(records.value, [], false)) {
+    if (item.toolUseId) states.set(item.toolUseId, item.state)
+  }
+  return states
+})
+
 provide('toolResultMap', toolResultMap)
+provide(TOOL_EXECUTION_CONTEXT, {
+  results: toolResultMap,
+  asyncStates: asyncToolStates,
+})
 
 /** 纯 tool_result 的 user 记录不单独渲染——结果已配对进对应工具卡 */
 function isToolResultOnly(r: MessageRecord): boolean {
@@ -142,7 +157,12 @@ function openDir() {
               {{ r.type === 'assistant' ? $t('session.claude') : $t('common.systemPrompt') }}
             </div>
             <div class="pl-3 border-l-2" :class="r.type === 'assistant' ? 'border-claude/40' : 'border-border'">
-              <template v-for="(block, bi) in contentBlocks(r)" :key="bi">
+              <ContentBlockList
+                v-if="r.type === 'assistant'"
+                :blocks="contentBlocks(r)"
+                :record-uuid="r.uuid"
+              />
+              <template v-else v-for="(block, bi) in contentBlocks(r)" :key="bi">
                 <div
                   v-if="isPlainTextBlock(r, block)"
                   class="text-sm whitespace-pre-wrap break-words"

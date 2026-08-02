@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "كلمات البحث",
     "agentFeature_search_summarize": "ملخص البحث",
     "agentSessionDirMissing": "لا توجد جلسات محفوظة بعد (لم يُنشأ المجلد)",
-    "updateRestarting": "تم التثبيت، جارٍ إعادة التشغيل…"
+    "updateRestarting": "تم التثبيت، جارٍ إعادة التشغيل…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude يسأل",
@@ -1112,6 +1120,19 @@
       "title": "إرسال ملف",
       "openFile": "فتح الملف",
       "revealInFinder": "إظهار في Finder"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

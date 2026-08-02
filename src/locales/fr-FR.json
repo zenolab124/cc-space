@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "Termes de recherche",
     "agentFeature_search_summarize": "Synthèse de recherche",
     "agentSessionDirMissing": "Aucune session persistée (répertoire non créé)",
-    "updateRestarting": "Installé, redémarrage en cours…"
+    "updateRestarting": "Installé, redémarrage en cours…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude pose une question",
@@ -1112,6 +1120,19 @@
       "title": "Envoyer un fichier",
       "openFile": "Ouvrir le fichier",
       "revealInFinder": "Afficher dans le Finder"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

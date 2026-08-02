@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "검색 키워드",
     "agentFeature_search_summarize": "검색 요약",
     "agentSessionDirMissing": "저장된 세션 없음(디렉토리 미생성)",
-    "updateRestarting": "설치 완료, 재시작 중…"
+    "updateRestarting": "설치 완료, 재시작 중…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude가 질문 중",
@@ -1112,6 +1120,19 @@
       "title": "파일 전송",
       "openFile": "파일 열기",
       "revealInFinder": "Finder에서 표시"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

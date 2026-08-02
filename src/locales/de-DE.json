@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "Suchbegriffe",
     "agentFeature_search_summarize": "Suchzusammenfassung",
     "agentSessionDirMissing": "Keine gespeicherten Sitzungen (Verzeichnis noch nicht erstellt)",
-    "updateRestarting": "Installiert, Neustart läuft…"
+    "updateRestarting": "Installiert, Neustart läuft…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude stellt eine Frage",
@@ -1112,6 +1120,19 @@
       "title": "Datei senden",
       "openFile": "Datei öffnen",
       "revealInFinder": "Im Finder anzeigen"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

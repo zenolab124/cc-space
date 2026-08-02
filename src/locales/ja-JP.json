@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "検索キーワード",
     "agentFeature_search_summarize": "検索総括",
     "agentSessionDirMissing": "永続化セッションはまだありません（ディレクトリ未作成）",
-    "updateRestarting": "インストール完了。再起動中…"
+    "updateRestarting": "インストール完了。再起動中…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude が質問中",
@@ -1112,6 +1120,19 @@
       "title": "ファイル送信",
       "openFile": "ファイルを開く",
       "revealInFinder": "Finder で表示"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

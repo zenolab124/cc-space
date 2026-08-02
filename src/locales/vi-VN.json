@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "Từ khóa tìm kiếm",
     "agentFeature_search_summarize": "Tổng hợp tìm kiếm",
     "agentSessionDirMissing": "Chưa có phiên lưu trữ (thư mục chưa được tạo)",
-    "updateRestarting": "Đã cài đặt, đang khởi động lại…"
+    "updateRestarting": "Đã cài đặt, đang khởi động lại…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude dang hoi",
@@ -1112,6 +1120,19 @@
       "title": "Gửi tệp",
       "openFile": "Mở tệp",
       "revealInFinder": "Hiện trong Finder"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

@@ -909,7 +909,15 @@
     "agentFeature_search_terms": "搜索关键词",
     "agentFeature_search_summarize": "搜索综述",
     "agentSessionDirMissing": "暂无落盘会话（目录尚未创建）",
-    "updateRestarting": "安装完成，正在重启…"
+    "updateRestarting": "安装完成，正在重启…",
+    "toolDisplayMode": "工具调用显示",
+    "toolDisplayModeHint": "选择所有会话中的工具调用展示方式；展开状态不会修改原始会话数据。",
+    "toolDisplayMode_cards": "完整卡片",
+    "toolDisplayMode_cardsHint": "保持当前方式，直接显示所有工具卡片。",
+    "toolDisplayMode_individual": "逐项折叠",
+    "toolDisplayMode_individualHint": "每个工具默认显示为一行摘要。",
+    "toolDisplayMode_grouped": "合并折叠",
+    "toolDisplayMode_groupedHint": "连续工具先合并为执行过程，再逐项展开。"
   },
   "notification": {
     "claudeAsking": "Claude 在提问",
@@ -1167,6 +1175,19 @@
       "title": "发送文件",
       "openFile": "打开文件",
       "revealInFinder": "在访达中显示"
+    },
+    "toolFold": {
+      "process": "执行过程",
+      "count": "{count} 项",
+      "running": "运行中",
+      "runningProgress": "{current}/{total} · 运行中",
+      "permission": "等待授权",
+      "failed": "失败",
+      "failedCount": "{count} 项失败",
+      "failedAndPermission": "{count} 项失败 · 等待授权",
+      "background": "后台运行",
+      "interrupted": "已中断",
+      "done": "完成"
     }
   },
   "image": {

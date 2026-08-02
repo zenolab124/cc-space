@@ -861,7 +861,15 @@
     "agentFeature_search_terms": "Поисковые запросы",
     "agentFeature_search_summarize": "Обзор поиска",
     "agentSessionDirMissing": "Сохранённых сессий пока нет (директория не создана)",
-    "updateRestarting": "Установлено, перезапуск…"
+    "updateRestarting": "Установлено, перезапуск…",
+    "toolDisplayMode": "Tool call display",
+    "toolDisplayModeHint": "Choose how tool calls appear across conversations. Expanding never changes the underlying session data.",
+    "toolDisplayMode_cards": "Full cards",
+    "toolDisplayMode_cardsHint": "Keep every tool card visible.",
+    "toolDisplayMode_individual": "Collapsed items",
+    "toolDisplayMode_individualHint": "Show one summary line per tool.",
+    "toolDisplayMode_grouped": "Grouped process",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items."
   },
   "notification": {
     "claudeAsking": "Claude задаёт вопрос",
@@ -1112,6 +1120,19 @@
       "title": "Отправить файл",
       "openFile": "Открыть файл",
       "revealInFinder": "Показать в Finder"
+    },
+    "toolFold": {
+      "process": "Tool process",
+      "count": "{count} items",
+      "running": "Running",
+      "runningProgress": "{current}/{total} · Running",
+      "permission": "Waiting for permission",
+      "failed": "Failed",
+      "failedCount": "{count} failed",
+      "failedAndPermission": "{count} failed · Waiting for permission",
+      "background": "Background",
+      "interrupted": "Interrupted",
+      "done": "Done"
     }
   },
   "image": {

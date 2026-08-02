@@ -4,13 +4,14 @@ import { useI18n } from 'vue-i18n'
 import type { SubAgentState } from '@/composables/useSubAgents'
 import type { AsyncTaskItem, AsyncTaskState } from '@/composables/useAsyncTasks'
 import { isActive } from '@/composables/useAsyncTasks'
+import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import type { SubAgentMeta, SessionRecord, ContentBlock } from '@/types'
 import { shortModel, formatTokens, hasReportedUsage } from '@/types'
 import { filterConsumedResults } from '@/utils/toolPair'
 import { IMAGE_LOCATOR, type ImageLocator } from '@/utils/ccimg'
 import AsyncTaskCard from './AsyncTaskCard.vue'
 import AsyncTaskDetail from './AsyncTaskDetail.vue'
-import MessageBlock from './MessageBlock.vue'
+import ContentBlockList from './ContentBlockList.vue'
 import MsgClamp from './MsgClamp.vue'
 import UserMsgContent from './UserMsgContent.vue'
 
@@ -30,6 +31,8 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const toolFoldState = provideToolFoldState()
+provide(TOOL_FOLD_INTERACTION, () => {})
 
 const imageLocator = computed<ImageLocator | null>(() => {
   if (!props.projectId || !props.sessionId || !props.activeTabId) return null
@@ -53,6 +56,7 @@ const selectedTask = computed(() =>
 watch(() => props.sessionId, () => {
   view.value = 'list'
   selectedKey.value = null
+  toolFoldState.reset()
 })
 // 任务重算后 key 失配（孤儿 key 漂移/records 换血）：自动回列表兜底
 watch(selectedTask, (t) => {
@@ -282,10 +286,8 @@ const messageGroups = computed<MessageGroup[]>(() =>
                   </span>
                 </div>
                 <div>
-                  <MessageBlock
-                    v-for="(block, bi) in contentBlocks(resp as any)"
-                    :key="bi"
-                    :block="block"
+                  <ContentBlockList
+                    :blocks="contentBlocks(resp as any)"
                     :record-uuid="(resp as any).uuid"
                   />
                 </div>
