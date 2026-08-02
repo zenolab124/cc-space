@@ -386,6 +386,7 @@ pub fn parse_summary_with_usage(
     Some((summary, usage_ledger))
 }
 
+#[cfg(test)]
 pub fn parse_summary(path: &Path, max_lines: usize) -> Option<SessionSummary> {
     parse_summary_with_usage(path, max_lines).map(|(summary, _)| summary)
 }
@@ -428,6 +429,7 @@ pub fn parse_usage_ledger(path: &Path) -> UsageLedger {
     ledger
 }
 
+#[cfg(test)]
 pub fn parse_subagent_usage(path: &Path) -> TokenUsage {
     parse_usage_ledger(path).total()
 }

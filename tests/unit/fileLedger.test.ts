@@ -132,10 +132,19 @@ describe('NFR-001 性能基准', () => {
         { type: 'text', text: 'lorem '.repeat(50) },
       ], `2026-07-16T10:${String(i % 60).padStart(2, '0')}:00Z`))
     }
-    const t0 = performance.now()
-    const led = buildFileLedger(recs, [])
-    const dt = performance.now() - t0
+    // 先预热 JIT，再取 5 次中位数；单次冷启动墙钟会把共享 CI runner 的
+    // 调度/JIT 抖动误判为算法退化，无法稳定表达这条性能契约。
+    buildFileLedger(recs, [])
+    const samples: number[] = []
+    let led = buildFileLedger(recs, [])
+    for (let i = 0; i < 5; i++) {
+      const t0 = performance.now()
+      led = buildFileLedger(recs, [])
+      samples.push(performance.now() - t0)
+    }
+    samples.sort((a, b) => a - b)
+    const median = samples[Math.floor(samples.length / 2)]
     expect(led.length).toBe(40)
-    expect(dt).toBeLessThanOrEqual(10)
+    expect(median).toBeLessThanOrEqual(10)
   })
 })
