@@ -18,6 +18,7 @@ mod proc_scan;
 pub mod probe;
 mod cron_expr;
 mod path_env;
+mod session_capabilities;
 mod streaming;
 mod menu;
 pub mod usage_stats;

@@ -510,7 +510,7 @@ pub async fn start_streaming(
     extra_args: Option<String>,
     images: Option<Vec<serde_json::Value>>,
     permission_mode: Option<String>,
-    append_system_prompt: Option<String>,
+    session_capabilities: Option<Vec<crate::session_capabilities::SessionCapabilityId>>,
     force_new: Option<bool>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -528,7 +528,7 @@ pub async fn start_streaming(
             extra_args.as_deref(),
             images.as_deref(),
             permission_mode.as_deref(),
-            append_system_prompt.as_deref(),
+            session_capabilities.unwrap_or_default(),
             force_new.unwrap_or(false),
         )
     })
@@ -564,6 +564,7 @@ pub async fn toggle_remote_control(
     extra_args: Option<String>,
     enabled: bool,
     permission_mode: Option<String>,
+    session_capabilities: Option<Vec<crate::session_capabilities::SessionCapabilityId>>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         streaming::toggle_remote_control(
@@ -579,6 +580,7 @@ pub async fn toggle_remote_control(
             extra_args.as_deref(),
             enabled,
             permission_mode.as_deref(),
+            session_capabilities.unwrap_or_default(),
         )
     })
     .await

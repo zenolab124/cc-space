@@ -13,6 +13,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
 import { displayTitle } from '@/types'
 import { fileName } from '@/utils/path'
+import { collectSessionCapabilities } from '@/features'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 
 const { getMeta } = useSessionMeta()
@@ -65,6 +66,7 @@ async function onToggleRC() {
       extraArgs: settings.value.extraArgs || null,
       enabled: enabling,
       permissionMode: settings.value.permissionMode ?? null,
+      sessionCapabilities: collectSessionCapabilities(),
     })
     // 按钮状态与成败 toast 均由 CLI 判决(rc-status 事件)驱动,此处只负责把请求发出去
   } catch (e) {

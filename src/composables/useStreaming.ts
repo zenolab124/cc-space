@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { hasReportedUsage, shouldReplaceUsage, type ContentBlock } from '@/types'
 import { triggerMetaGeneration } from './useSessionMeta'
-import { useHtmlVisual, HTML_VISUAL_PROMPT } from '@/features'
+import { collectSessionCapabilities } from '@/features'
 import type { EffortSetting } from './useSessionSettings'
 import { frameWatchRetain, frameWatchRelease, probeFinishFlip } from '@/utils/perfProbe'
 import { useConfirm } from './useConfirm'
@@ -40,8 +40,6 @@ export interface SendOptions {
   permissionMode?: string
   /** 跳过断链校验，强制以新会话语义打开（用户确认"仍新建"后重发时置 true） */
   forceNew?: boolean
-  /** 自定义系统提示注入（Agent 搜索等场景），优先级高于 HTML Visual 默认注入 */
-  appendSystemPrompt?: string
 }
 
 export interface StreamingTurn {
@@ -1219,7 +1217,6 @@ async function sendMessage(
   state.activeTool = null
   state.tail = []
   state.lastSent = { cwd, message, opts }
-  const { enabled: htmlVisualEnabled } = useHtmlVisual()
   try {
     await invoke('start_streaming', {
       sessionId,
@@ -1234,7 +1231,7 @@ async function sendMessage(
       extraArgs: opts.extraArgs || null,
       images: opts.images?.length ? opts.images : null,
       permissionMode: opts.permissionMode ?? null,
-      appendSystemPrompt: opts.appendSystemPrompt ?? (htmlVisualEnabled.value ? HTML_VISUAL_PROMPT : null),
+      sessionCapabilities: collectSessionCapabilities(),
       forceNew: opts.forceNew ?? false,
     })
   } catch (e) {

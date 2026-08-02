@@ -13,6 +13,9 @@ use tauri::{AppHandle, Emitter};
 
 use crate::models::ContentBlock;
 use crate::permission::PermissionService;
+use crate::session_capabilities::{
+    needs_restart as capability_needs_restart, SessionCapabilityBundle, SessionCapabilityId,
+};
 
 /// 按 Claude Code 优先级链读取 permissions.defaultMode
 /// Local (.claude/settings.local.json) > Project (.claude/settings.json) > User (~/.claude/settings.local.json) > User (~/.claude/settings.json)
@@ -48,6 +51,8 @@ struct SessionProcess {
     chrome: bool,
     /// spawn 时的用户自定义 CLI 参数原始串(逃生舱,变更只能重启生效)
     extra_args: String,
+    /// Monet 专属启动能力的稳定指纹；变化只能通过重启 Claude 进程生效
+    capability_fingerprint: String,
     /// 进程启动墙钟时刻(epoch ms)。异步账本的进程代际判据:启动早于本时刻的
     /// 无终态任务属于已死的前代进程,终态通知永远不会来,不得再判"进行中"
     started_at_ms: i64,
@@ -609,7 +614,7 @@ fn open_session(
     fork_source: Option<&str>,
     extra_args: Option<&str>,
     permission_mode: Option<&str>,
-    append_system_prompt: Option<&str>,
+    capability_bundle: &SessionCapabilityBundle,
     force_new: bool,
 ) -> Result<(), String> {
     if !std::path::Path::new(cwd).is_dir() {
@@ -755,7 +760,7 @@ fn open_session(
         args.push("--permission-mode".to_string());
         args.push(mode.clone());
     }
-    if let Some(prompt) = append_system_prompt.filter(|s| !s.is_empty()) {
+    if let Some(prompt) = capability_bundle.append_system_prompt() {
         args.push("--append-system-prompt".to_string());
         args.push(prompt.to_string());
     }
@@ -920,6 +925,7 @@ fn open_session(
         advisor,
         chrome,
         extra_args: extra_args.unwrap_or("").to_string(),
+        capability_fingerprint: capability_bundle.fingerprint().to_string(),
         started_at_ms,
     }));
     ACTIVE_PROCESSES
@@ -959,9 +965,10 @@ pub fn send_message(
     extra_args: Option<&str>,
     images: Option<&[serde_json::Value]>,
     permission_mode: Option<&str>,
-    append_system_prompt: Option<&str>,
+    session_capabilities: Vec<SessionCapabilityId>,
     force_new: bool,
 ) -> Result<(), String> {
+    let capability_bundle = SessionCapabilityBundle::new(session_capabilities);
     let mut exists = ACTIVE_PROCESSES
         .lock()
         .unwrap()
@@ -987,16 +994,18 @@ pub fn send_message(
                     || sp.chrome != chrome
                     // 自定义 CLI 参数同为启动参数,变更只能重启生效
                     || sp.extra_args != extra_args.unwrap_or("")
+                    // Monet 专属能力由启动参数注入,集合变化只能重启生效
+                    || capability_needs_restart(&sp.capability_fingerprint, &capability_bundle)
             });
         if needs_restart {
-            eprintln!("[long-lived] 渠道/effort/advisor/chrome/模型回落变更，重启进程 会话={}", &session_id[..session_id.len().min(8)]);
+            eprintln!("[long-lived] 启动配置变更，重启进程 会话={}", &session_id[..session_id.len().min(8)]);
             close_session(session_id);
             exists = false;
         }
     }
 
     if !exists {
-        open_session(app, session_id, cwd, model, effort, channel, advisor, chrome, fork_source, extra_args, permission_mode, append_system_prompt, force_new)?;
+        open_session(app, session_id, cwd, model, effort, channel, advisor, chrome, fork_source, extra_args, permission_mode, &capability_bundle, force_new)?;
     }
 
     let process = ACTIVE_PROCESSES
@@ -1064,15 +1073,37 @@ pub fn toggle_remote_control(
     extra_args: Option<&str>,
     enabled: bool,
     permission_mode: Option<&str>,
+    session_capabilities: Vec<SessionCapabilityId>,
 ) -> Result<(), String> {
-    let exists = ACTIVE_PROCESSES
+    let capability_bundle = SessionCapabilityBundle::new(session_capabilities);
+    let mut exists = ACTIVE_PROCESSES
         .lock()
         .unwrap()
         .as_ref()
         .is_some_and(|m| m.contains_key(session_id));
 
+    if exists {
+        let needs_restart = ACTIVE_PROCESSES
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(session_id).cloned())
+            .is_some_and(|arc| {
+                let sp = arc.lock().unwrap();
+                capability_needs_restart(&sp.capability_fingerprint, &capability_bundle)
+            });
+        if needs_restart {
+            eprintln!(
+                "[long-lived] 会话能力变更，重启 Remote Control 进程 会话={}",
+                &session_id[..session_id.len().min(8)]
+            );
+            close_session(session_id);
+            exists = false;
+        }
+    }
+
     if !exists {
-        open_session(app, session_id, cwd, model, effort, channel, advisor, chrome, fork_source, extra_args, permission_mode, None, false)?;
+        open_session(app, session_id, cwd, model, effort, channel, advisor, chrome, fork_source, extra_args, permission_mode, &capability_bundle, false)?;
     }
 
     let process = ACTIVE_PROCESSES
