@@ -1,5 +1,4 @@
 import { ref, computed, watch, type Ref, type ComputedRef } from 'vue'
-import { useCliDefaults } from './useCliDefaults'
 import { readMigratedStorage } from '../utils/storageMigrate'
 
 /**
@@ -45,23 +44,14 @@ export interface SessionSettings {
   /** 自定义 CLI 参数原始串(逃生舱:Monet 未原生支持的 flag 用户自行追加);
    *  协议级参数由 Rust 端黑名单剔除,变更经 needs_restart 重启生效 */
   extraArgs: string
-  /** 权限模式:运行时热切换,通过 control_request 发给 CLI */
-  permissionMode: PermissionMode
+  /** null = 跟随 CLI/项目配置；具体模式 = Monet 会话显式覆盖 */
+  permissionMode: PermissionMode | null
 }
 
 // effort 为 null = 本会话未设置 → 按应用默认行为发送。应用默认当前实现为「不传
 // --effort,由 CLI 自行决定」;将来由设置页配置(可选值含跟随 CLI/具体档位,见
 // docs/settings-backlog.md),「跟随 CLI/默认值」不出现在会话级选项中
 const VALID_PERMISSION_MODES: PermissionMode[] = ['default', 'plan', 'acceptEdits', 'auto', 'bypassPermissions', 'dontAsk']
-
-function getDefaultPermissionMode(): PermissionMode {
-  const { cliDefaults } = useCliDefaults()
-  const mode = cliDefaults.value.permission_mode
-  if (mode && VALID_PERMISSION_MODES.includes(mode as PermissionMode)) {
-    return mode as PermissionMode
-  }
-  return 'default'
-}
 
 export const DEFAULT_SETTINGS: SessionSettings = {
   modelId: null,
@@ -71,7 +61,7 @@ export const DEFAULT_SETTINGS: SessionSettings = {
   advisor: false,
   chrome: false,
   extraArgs: '',
-  permissionMode: 'default',
+  permissionMode: null,
 }
 
 /** 顾问模式锁定的主模型(硬编码,未来设置页全局配置——见 docs/settings-backlog.md 第 3 条) */
@@ -113,7 +103,7 @@ function sanitizeMarks(raw: unknown): ChannelMark[] {
 function loadFromStorage(sid: string): SessionSettings {
   try {
     const raw = readMigratedStorage(storageKey(sid), legacyStorageKey(sid))
-    if (!raw) return { ...structuredClone(DEFAULT_SETTINGS), permissionMode: getDefaultPermissionMode() }
+    if (!raw) return structuredClone(DEFAULT_SETTINGS)
     const parsed = JSON.parse(raw) as Partial<SessionSettings>
     const effort: EffortSetting = parsed.effort && VALID_STORED.includes(parsed.effort)
       ? parsed.effort
@@ -124,10 +114,10 @@ function loadFromStorage(sid: string): SessionSettings {
     const channelId = typeof parsed.channelId === 'string' && parsed.channelId.length > 0
       ? parsed.channelId
       : null
-    const permissionMode: PermissionMode =
+    const permissionMode: PermissionMode | null =
       typeof parsed.permissionMode === 'string' && VALID_PERMISSION_MODES.includes(parsed.permissionMode as PermissionMode)
         ? parsed.permissionMode as PermissionMode
-        : getDefaultPermissionMode()
+        : null
     return {
       modelId,
       effort,
@@ -139,7 +129,7 @@ function loadFromStorage(sid: string): SessionSettings {
       permissionMode,
     }
   } catch (_) {
-    return { ...structuredClone(DEFAULT_SETTINGS), permissionMode: getDefaultPermissionMode() }
+    return structuredClone(DEFAULT_SETTINGS)
   }
 }
 
@@ -183,7 +173,6 @@ export function inheritRunSettings(fromSid: string, toSid: string): void {
   if (src.modelId === null && src.effort === null && src.channelId === null && !src.advisor) return
   saveToStorage(toSid, {
     ...structuredClone(DEFAULT_SETTINGS),
-    permissionMode: getDefaultPermissionMode(),
     modelId: src.modelId,
     effort: src.effort,
     channelId: src.channelId,
@@ -209,8 +198,8 @@ export interface UseSessionSettingsReturn {
   setChrome: (chrome: boolean) => void
   /** 设置自定义 CLI 参数 */
   setExtraArgs: (extraArgs: string) => void
-  /** 切换权限模式 */
-  setPermissionMode: (mode: PermissionMode) => void
+  /** 切换权限模式；null 表示恢复跟随 CLI */
+  setPermissionMode: (mode: PermissionMode | null) => void
   /** 重置为默认并清除 localStorage */
   reset: () => void
 }
@@ -282,7 +271,7 @@ export function useSessionSettings(sessionId: Ref<string | null>): UseSessionSet
     internal.value = { ...internal.value, extraArgs: extraArgs.trim() }
   }
 
-  function setPermissionMode(mode: PermissionMode) {
+  function setPermissionMode(mode: PermissionMode | null) {
     internal.value = { ...internal.value, permissionMode: mode }
   }
 

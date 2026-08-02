@@ -10,14 +10,14 @@ import {
   OFFICIAL_DIRECT_CHANNEL_ID,
 } from '@/composables/useChannels'
 import { useModelOptions } from '@/composables/useModelOptions'
-import { useCliDefaults, refreshCliDefaults } from '@/composables/useCliDefaults'
+import { useCliDefaults } from '@/composables/useCliDefaults'
 import { useUiState } from '@/composables/useUiState'
 import { inferModel, effortCapabilities } from '@/utils/modelContext'
 import { ROLE_DISPLAY, resolveMappedRoles } from '@/utils/modelEnv'
 
 /**
  * 运行配置胶囊(二期,原型冻结基准 docs/prototypes/run-config-capsule.html):
- * 渠道/模型/强度三段一枚胶囊,常显解析值(与发送同源);点哪段从哪层开渐进面板——
+ * 渠道/模型/强度三段一枚胶囊，常显当前有效值；点哪段从哪层开渐进面板——
  * 强度一列 / 模型两列 / 渠道三列全景(窄列渠道段收起,点任意段直接开全景)。
  * 面板列表只放纯候选项:选中 = 解析值所在项;默认值右侧小字「默认」;
  * 不支持档右侧小字「不支持」(软提示不拦截,能力名单可能随 CLI 更新过时);
@@ -27,6 +27,7 @@ const props = defineProps<{
   /** 会话覆盖原值(重置钮显隐/顾问开关状态判定) */
   settings: Pick<SessionSettings, 'modelId' | 'effort' | 'channelId' | 'chrome' | 'extraArgs'>
   runConfig: ResolvedRunConfig
+  cwd: string | null
   /** 窄列:胶囊收起渠道段,点任意段开全景 */
   narrow?: boolean
 }>()
@@ -41,7 +42,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const { channels, defaultSessionChannel } = useChannels()
-const { cliDefaults } = useCliDefaults()
+const capsuleCwd = computed(() => props.cwd)
+const { refreshCliDefaults } = useCliDefaults(capsuleCwd)
 
 // ---- 面板开合(渐进层级) ----
 
@@ -86,8 +88,8 @@ function openFrom(layer: Layer) {
   if (openLayer.value) {
     placePanel()
     // 渠道文件/settings.json 都是活文件:开面板即重读,不显示过期值
-    refreshChannels()
-    refreshCliDefaults()
+    void refreshChannels()
+    void refreshCliDefaults()
   }
 }
 
@@ -158,19 +160,19 @@ function modelKeyOf(modelStr: string | null | undefined): string | null {
   return lower
 }
 
-const selectedModelKey = computed(() => modelKeyOf(props.runConfig.model ?? cliDefaults.value.model))
+const selectedModelKey = computed(() => modelKeyOf(props.runConfig.display.model))
 const defaultModelKey = computed(() =>
-  modelKeyOf(props.runConfig.channelDefaultModel ?? cliDefaults.value.model),
+  modelKeyOf(props.runConfig.channelDefaultModel ?? props.runConfig.cliDefaultModel),
 )
-const modelOverridden = computed(() => props.runConfig.modelSource === 'session')
-const advisorLocked = computed(() => props.runConfig.modelSource === 'advisor')
+const modelOverridden = computed(() => props.runConfig.display.modelSource === 'session')
+const advisorLocked = computed(() => props.runConfig.display.modelSource === 'advisor')
 
 /** 会话在用清单外模型时附加为候选(原名展示,与旧 ModelDropdown 行为一致) */
 const modelListItems = computed(() => {
   const base = modelItems.value
   const sel = selectedModelKey.value
   if (sel && !base.some(m => m.id === sel)) {
-    return [...base, { id: sel, label: props.runConfig.model ?? sel, contextWindow: 0 }]
+    return [...base, { id: sel, label: props.runConfig.display.model ?? sel, contextWindow: 0 }]
   }
   return base
 })
@@ -190,24 +192,17 @@ const EFFORT_OPTIONS: { value: NonNullable<EffortSetting>; label: string }[] = [
   { value: 'ultracode' as const, label: 'Ultracode' },
 ]
 
-/** CLI 层读数(ultracode 独立开关生效时覆盖 effortLevel) */
-const cliEffortValue = computed<NonNullable<EffortSetting> | null>(() => {
-  if (cliDefaults.value.ultracode) return 'ultracode'
-  const lv = cliDefaults.value.effort_level
-  return lv && lv in EFFORT_LABELS ? (lv as EffortLevel) : null
-})
-
 const selectedEffort = computed<NonNullable<EffortSetting> | null>(
-  () => props.runConfig.effort ?? cliEffortValue.value,
+  () => props.runConfig.display.effort ?? null,
 )
 const defaultEffort = computed<NonNullable<EffortSetting> | null>(
-  () => props.runConfig.channelDefaultEffort ?? cliEffortValue.value,
+  () => props.runConfig.channelDefaultEffort ?? props.runConfig.cliDefaultEffort,
 )
-const effortOverridden = computed(() => props.runConfig.effortSource === 'session')
+const effortOverridden = computed(() => props.runConfig.display.effortSource === 'session')
 
 /** 强度能力标注:基于当前解析模型 + 渠道声明(软提示,不拦截) */
 const effortCaps = computed(() =>
-  effortCapabilities(props.runConfig.model ?? cliDefaults.value.model, activeModelEnv.value),
+  effortCapabilities(props.runConfig.display.model ?? null, activeModelEnv.value),
 )
 function effortUnsupported(value: NonNullable<EffortSetting>): boolean {
   if (value === 'xhigh') return effortCaps.value.xhigh === false
@@ -229,14 +224,12 @@ const channelSegLabel = computed(() => {
 })
 
 const modelSegLabel = computed(() => {
-  const resolved = props.runConfig.model
+  const resolved = props.runConfig.display.model
   if (resolved) {
     const key = modelKeyOf(resolved)
     const hit = key ? modelListItems.value.find(m => m.id === key) : null
     return hit?.label ?? resolved
   }
-  const m = cliDefaults.value.model
-  if (m) return inferModel(m)?.label ?? m
   return t('topbar.modelDefault')
 })
 
@@ -245,7 +238,7 @@ const modelSegTier = computed<string | null>(() => {
   const key = selectedModelKey.value
   const hit = key ? modelListItems.value.find(m => m.id === key) : null
   if (hit?.mappedRole) return ROLE_DISPLAY[hit.mappedRole]
-  const roles = resolveMappedRoles(props.runConfig.model, activeModelEnv.value)
+  const roles = resolveMappedRoles(props.runConfig.display.model, activeModelEnv.value)
   return roles.length ? roles.map(r => ROLE_DISPLAY[r]).join('/') : null
 })
 
@@ -324,7 +317,7 @@ function openSettings() {
         type="button"
         class="capsule-seg seg-sep"
         :class="[
-          runConfig.modelSource === 'session' || runConfig.modelSource === 'advisor' ? 'seg-overridden' : 'seg-inherited',
+          runConfig.display.modelSource === 'session' || runConfig.display.modelSource === 'advisor' ? 'seg-overridden' : 'seg-inherited',
           narrow ? 'seg-first' : '',
         ]"
         :title="$t('topbar.modelTitle', { name: modelSegTitleName })"
@@ -381,7 +374,7 @@ function openSettings() {
       <div v-if="visibleCols.includes('model')" class="rc-col">
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.modelLabel') }}</span>
-          <span class="rc-src">{{ advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig.modelSource) }}</span>
+          <span class="rc-src">{{ advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig.display.modelSource) }}</span>
           <button v-if="modelOverridden" class="rc-reset" @click="emit('modelChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
         <div class="rc-list" :class="{ 'opacity-45 pointer-events-none': advisorLocked }" :title="advisorLocked ? $t('topbar.modelAdvisorLocked') : ''">
@@ -404,7 +397,7 @@ function openSettings() {
       <div v-if="visibleCols.includes('effort')" class="rc-col">
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.effortLabel') }}</span>
-          <span class="rc-src">{{ srcLabel(runConfig.effortSource) }}</span>
+          <span class="rc-src">{{ srcLabel(runConfig.display.effortSource) }}</span>
           <button v-if="effortOverridden" class="rc-reset" @click="emit('effortChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
         <div class="rc-list">

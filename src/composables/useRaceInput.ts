@@ -4,7 +4,8 @@ import { useWorkbench } from './useWorkbench'
 import { inheritRunSettings } from './useSessionSettings'
 import { useStreaming, getStream } from './useStreaming'
 import { useImageInput } from './useImageInput'
-import { refreshChannels } from './useChannels'
+import { refreshChannels, useChannels } from './useChannels'
+import { refreshCliDefaults, readCliDefaults } from './useCliDefaults'
 import { resolveRunConfig } from './useRunConfig'
 import { getSessionSettings } from './useSessionSettings'
 import { parseCommand } from './useSlashCommands'
@@ -19,6 +20,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
 
   const { sendMessage, stopStreaming } = useStreaming()
   const { addRaceLane, forkSourceOf } = useWorkbench()
+  const { channels, defaultSessionChannel } = useChannels()
 
   const anyStreaming = computed(() => {
     const race = tab.value.race
@@ -51,21 +53,26 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
 
     const images = imageInput.images.value.length ? await imageInput.toImageBlocks() : undefined
     imageInput.clearImages()
-    await refreshChannels()
+    await Promise.all([refreshChannels(), refreshCliDefaults(race.cwd)])
+    const snapshot = {
+      channels: channels.value,
+      defaultSessionChannel: defaultSessionChannel.value,
+      cliSettings: readCliDefaults(race.cwd),
+    }
 
     const promises = race.lanes.map(lane => {
       const settings = getSessionSettings(lane.sessionId)
-      const rc = resolveRunConfig(settings)
+      const rc = resolveRunConfig(settings, snapshot)
       return sendMessage(lane.sessionId, race.cwd, text, {
-        model: rc.model,
-        effort: rc.effort ?? null,
+        model: rc.launch.model,
+        effort: rc.launch.effort ?? null,
         channel: rc.channelId,
         advisor: settings.advisor,
         chrome: settings.chrome,
         forkSource: forkSourceOf(lane.sessionId) ?? undefined,
         extraArgs: settings.extraArgs || undefined,
         images,
-        permissionMode: settings.permissionMode,
+        permissionMode: rc.launch.permissionMode ?? undefined,
       })
     })
     await Promise.allSettled(promises)

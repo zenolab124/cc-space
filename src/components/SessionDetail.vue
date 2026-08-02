@@ -683,8 +683,14 @@ async function onStop() {
 // --- 会话级设置(模型 / 努力等级 / 渠道) ---
 const { settings, setModel, setEffort, setChannel, setChrome, setExtraArgs, setPermissionMode: persistPermissionMode } = useSessionSettings(effectiveSessionId)
 
-// 运行配置同源解析:顶栏展示与发送参数共用同一解析结果(会话覆盖 > 渠道默认 > CLI 默认)
-const { runConfig } = useRunConfig(settings)
+// 运行配置同源解析：CLI/项目值只供 display，Monet 显式意图才进入 launch
+const runConfigCwd = computed(() => {
+  const sid = effectiveSessionId.value
+  if (!sid) return null
+  const session = projects.value.flatMap(project => project.sessions).find(item => item.id === sid)
+  return session?.cwd ?? draftCwd(sid) ?? null
+})
+const { runConfig } = useRunConfig(settings, runConfigCwd)
 
 function onModelChange(modelId: string | null) {
   setModel(modelId)
@@ -731,7 +737,7 @@ function onExtraArgsChange(extraArgs: string) {
   slashNotice.value = t('session.extraArgsChanged')
 }
 
-function onPermissionModeChange(mode: import('@/composables/useSessionSettings').PermissionMode) {
+function onPermissionModeChange(mode: import('@/composables/useSessionSettings').PermissionMode | null) {
   persistPermissionMode(mode)
 }
 
@@ -1819,15 +1825,15 @@ async function handleSend() {
   await refreshChannels()
   const rc = runConfig.value
   const opts = {
-    model: rc.model,
-    effort: rc.effort ?? null,
+    model: rc.launch.model,
+    effort: rc.launch.effort ?? null,
     channel: rc.channelId,
     advisor,
     chrome: settings.value.chrome,
     forkSource: forkSourceOf(cs.summary.id) ?? undefined,
     extraArgs: settings.value.extraArgs || undefined,
     images,
-    permissionMode: settings.value.permissionMode,
+    permissionMode: rc.launch.permissionMode ?? undefined,
   }
   if (externalRunning.value || ownProcessBusy.value) {
     stream.value.pendingQueue.push({ message: text, opts })

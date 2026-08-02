@@ -17,24 +17,6 @@ use crate::session_capabilities::{
     needs_restart as capability_needs_restart, SessionCapabilityBundle, SessionCapabilityId,
 };
 
-/// 按 Claude Code 优先级链读取 permissions.defaultMode
-/// Local (.claude/settings.local.json) > Project (.claude/settings.json) > User (~/.claude/settings.local.json) > User (~/.claude/settings.json)
-pub fn resolve_default_permission_mode(cwd: &str) -> Option<String> {
-    let read_mode = |path: PathBuf| -> Option<String> {
-        let text = std::fs::read_to_string(&path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("permissions")?.get("defaultMode")?.as_str().map(String::from)
-    };
-    let cwd_path = std::path::Path::new(cwd);
-    let candidates = [
-        cwd_path.join(".claude/settings.local.json"),
-        cwd_path.join(".claude/settings.json"),
-        crate::config::claude_root().join("settings.local.json"),
-        crate::config::claude_root().join("settings.json"),
-    ];
-    candidates.into_iter().find_map(read_mode)
-}
-
 /// 长活进程会话实例（进程跨轮复用，不杀不重启）
 struct SessionProcess {
     child: Child,
@@ -45,6 +27,9 @@ struct SessionProcess {
     /// 进程当前生效的模型(spawn --model / set_model 下达值;None = CLI 默认)。
     /// 复用判定用:意图回落 None 而进程钉着旧值时必须重启,set_model 无法"切回默认"
     model: Option<String>,
+    /// Monet 显式下发的权限覆盖；None 表示由 CLI 从磁盘配置继承。
+    /// control protocol 无法撤销覆盖，Some → None 时必须重启进程。
+    permission_mode: Option<String>,
     /// spawn 时的顾问开关(advisor 经 --settings 注入,变更只能重启生效)
     advisor: bool,
     /// spawn 时的 Chrome 集成开关(--chrome 是启动参数,变更只能重启生效)
@@ -600,6 +585,80 @@ fn find_session_elsewhere(session_id: &str, expected: &Path) -> Option<PathBuf> 
     None
 }
 
+fn normalized_override(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.is_empty())
+}
+
+fn permission_change_requires_restart(current: Option<&str>, requested: Option<&str>) -> bool {
+    current.is_some() && normalized_override(requested).is_none()
+}
+
+fn append_explicit_run_args(
+    args: &mut Vec<String>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    permission_mode: Option<&str>,
+) {
+    if let Some(model) = normalized_override(model) {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = normalized_override(effort).filter(|value| *value != "ultracode") {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    if let Some(mode) = normalized_override(permission_mode) {
+        args.extend(["--permission-mode".to_string(), mode.to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod explicit_run_args_tests {
+    use super::{append_explicit_run_args, permission_change_requires_restart};
+
+    #[test]
+    fn empty_overrides_add_no_cli_flags() {
+        let mut args = vec!["--verbose".to_string()];
+        append_explicit_run_args(&mut args, None, None, None);
+        assert_eq!(args, vec!["--verbose"]);
+    }
+
+    #[test]
+    fn adds_only_explicit_overrides() {
+        let mut args = Vec::new();
+        append_explicit_run_args(
+            &mut args,
+            Some("claude-opus-5"),
+            Some("high"),
+            Some("plan"),
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--model",
+                "claude-opus-5",
+                "--effort",
+                "high",
+                "--permission-mode",
+                "plan",
+            ]
+        );
+    }
+
+    #[test]
+    fn ultracode_is_not_emitted_as_effort_flag() {
+        let mut args = Vec::new();
+        append_explicit_run_args(&mut args, None, Some("ultracode"), None);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn clearing_permission_override_requires_restart() {
+        assert!(permission_change_requires_restart(Some("plan"), None));
+        assert!(permission_change_requires_restart(Some("plan"), Some("")));
+        assert!(!permission_change_requires_restart(Some("plan"), Some("default")));
+        assert!(!permission_change_requires_restart(None, None));
+    }
+}
+
 /// 打开会话进程：spawn 长活 CLI + 初始化握手 + 启动 stdout 读取线程
 #[allow(clippy::too_many_arguments)] // 会话参数透传，拆结构体收益不大
 fn open_session(
@@ -744,22 +803,7 @@ fn open_session(
             }
         };
 
-    if let Some(m) = model.filter(|s| !s.is_empty()) {
-        args.push("--model".to_string());
-        args.push(m.to_string());
-    }
-    if let Some(e) = effort.filter(|s| !s.is_empty() && *s != "ultracode") {
-        args.push("--effort".to_string());
-        args.push(e.to_string());
-    }
-    let effective_mode = permission_mode
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .or_else(|| resolve_default_permission_mode(cwd));
-    if let Some(ref mode) = effective_mode {
-        args.push("--permission-mode".to_string());
-        args.push(mode.clone());
-    }
+    append_explicit_run_args(&mut args, model, effort, permission_mode);
     if let Some(prompt) = capability_bundle.append_system_prompt() {
         args.push("--append-system-prompt".to_string());
         args.push(prompt.to_string());
@@ -921,7 +965,8 @@ fn open_session(
         request_counter: 1,
         channel: channel.map(|s| s.to_string()),
         effort: effort.map(|s| s.to_string()),
-        model: model.filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        model: normalized_override(model).map(str::to_owned),
+        permission_mode: normalized_override(permission_mode).map(str::to_owned),
         advisor,
         chrome,
         extra_args: extra_args.unwrap_or("").to_string(),
@@ -990,6 +1035,11 @@ pub fn send_message(
                     // 模型意图回落默认(None)而进程钉着上次 set_model 的具体值:
                     // set_model 无法"切回默认",不重启就是旧模型粘滞(界面默认、实跑旧值)
                     || (model.is_none() && sp.model.is_some())
+                    // set_permission_mode 无法撤销覆盖并重新读取磁盘配置。
+                    || permission_change_requires_restart(
+                        sp.permission_mode.as_deref(),
+                        permission_mode,
+                    )
                     // --chrome 是启动参数,开关变更(含关闭卸载浏览器工具省上下文)只能重启生效
                     || sp.chrome != chrome
                     // 自定义 CLI 参数同为启动参数,变更只能重启生效
@@ -1031,7 +1081,7 @@ pub fn send_message(
         }
     }
 
-    if let Some(mode) = permission_mode.filter(|m| !m.is_empty()) {
+    if let Some(mode) = normalized_override(permission_mode) {
         sp.request_counter += 1;
         let req_id = format!("set-perm-mode-{}", sp.request_counter);
         let ctrl = json!({
@@ -1039,7 +1089,8 @@ pub fn send_message(
             "request_id": req_id,
             "request": {"subtype": "set_permission_mode", "permission_mode": mode}
         });
-        let _ = write_stdin(&mut sp.stdin, &ctrl);
+        write_stdin(&mut sp.stdin, &ctrl)?;
+        sp.permission_mode = Some(mode.to_string());
     }
     let mut content: Vec<serde_json::Value> = Vec::new();
     if let Some(imgs) = images {
@@ -1090,11 +1141,15 @@ pub fn toggle_remote_control(
             .and_then(|m| m.get(session_id).cloned())
             .is_some_and(|arc| {
                 let sp = arc.lock().unwrap();
-                capability_needs_restart(&sp.capability_fingerprint, &capability_bundle)
+                permission_change_requires_restart(sp.permission_mode.as_deref(), permission_mode)
+                    || capability_needs_restart(
+                        &sp.capability_fingerprint,
+                        &capability_bundle,
+                    )
             });
         if needs_restart {
             eprintln!(
-                "[long-lived] 会话能力变更，重启 Remote Control 进程 会话={}",
+                "[long-lived] Remote Control 启动配置变更，重启进程 会话={}",
                 &session_id[..session_id.len().min(8)]
             );
             close_session(session_id);
@@ -1114,6 +1169,19 @@ pub fn toggle_remote_control(
         .ok_or("会话进程不存在")?;
 
     let mut sp = process.lock().unwrap();
+    if exists {
+        if let Some(mode) = normalized_override(permission_mode) {
+            sp.request_counter += 1;
+            let req_id = format!("set-perm-mode-{}", sp.request_counter);
+            let ctrl = json!({
+                "type": "control_request",
+                "request_id": req_id,
+                "request": {"subtype": "set_permission_mode", "permission_mode": mode}
+            });
+            write_stdin(&mut sp.stdin, &ctrl)?;
+            sp.permission_mode = Some(mode.to_string());
+        }
+    }
     eprintln!("[long-lived] Remote Control enabled={} PID={} 会话={}", enabled, sp.child.id(), &session_id[..session_id.len().min(8)]);
     sp.request_counter += 1;
     // 语义编进 request_id：CLI 的 response 不含 enabled 值，read_stream 只能靠它还原请求意图
@@ -1169,7 +1237,9 @@ pub fn set_permission_mode(session_id: &str, mode: &str) -> Result<(), String> {
                 "request_id": req_id,
                 "request": {"subtype": "set_permission_mode", "permission_mode": mode}
             });
-            write_stdin(&mut sp.stdin, &msg)
+            write_stdin(&mut sp.stdin, &msg)?;
+            sp.permission_mode = Some(mode.to_string());
+            Ok(())
         }
         None => Err("会话进程不存在".to_string()),
     }

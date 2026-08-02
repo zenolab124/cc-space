@@ -9,6 +9,7 @@ import { useSessionStatus } from '@/composables/useSessionStatus'
 import { useSessionSettings, inheritRunSettings } from '@/composables/useSessionSettings'
 import { useRunConfig } from '@/composables/useRunConfig'
 import { refreshChannels } from '@/composables/useChannels'
+import { refreshCliDefaults } from '@/composables/useCliDefaults'
 import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
 import { displayTitle } from '@/types'
@@ -52,20 +53,21 @@ async function onToggleRC() {
     const session = projects.value.flatMap(p => p.sessions).find(s => s.id === props.column.sessionId)
     // 与发消息同源解析渠道/模型/effort:进程未启动时本调用会用这套配置起进程,
     // 硬编码 null(=官方)会让 RC 判决对着错误的渠道,发消息时又因渠道不一致重启进程
-    await refreshChannels()
+    const cwd = session?.cwd ?? draftCwd(props.column.sessionId) ?? ''
+    await Promise.all([refreshChannels(), refreshCliDefaults(cwd)])
     const rc = runConfig.value
     await invoke('toggle_remote_control', {
       sessionId: props.column.sessionId,
-      cwd: session?.cwd ?? draftCwd(props.column.sessionId) ?? '',
-      model: rc.model ?? null,
-      effort: rc.effort ?? null,
+      cwd,
+      model: rc.launch.model ?? null,
+      effort: rc.launch.effort ?? null,
       channel: rc.channelId,
       advisor: settings.value.advisor,
       chrome: settings.value.chrome,
       forkSource: forkSourceOf(props.column.sessionId) ?? null,
       extraArgs: settings.value.extraArgs || null,
       enabled: enabling,
-      permissionMode: settings.value.permissionMode ?? null,
+      permissionMode: rc.launch.permissionMode,
       sessionCapabilities: collectSessionCapabilities(),
     })
     // 按钮状态与成败 toast 均由 CLI 判决(rc-status 事件)驱动,此处只负责把请求发出去
@@ -89,7 +91,12 @@ const stream = useSessionStream(sid)
 const status = useSessionStatus(sid)
 // RC 开关与发消息同源的运行配置(渠道/模型/effort/advisor)
 const { settings, setChrome } = useSessionSettings(sid)
-const { runConfig } = useRunConfig(settings)
+const runConfigCwd = computed(() => {
+  const session = projects.value.flatMap(project => project.sessions)
+    .find(item => item.id === props.column.sessionId)
+  return session?.cwd ?? draftCwd(props.column.sessionId) ?? null
+})
+const { runConfig } = useRunConfig(settings, runConfigCwd)
 
 const projectName = computed(() => {
   for (const p of projects.value) {

@@ -8,7 +8,6 @@ import { ROLE_DISPLAY, resolveMappedRoles } from '@/utils/modelEnv'
 import { useChannels } from '@/composables/useChannels'
 import { ADVISOR_MAIN_MODEL, type EffortSetting } from '@/composables/useSessionSettings'
 import type { ResolvedRunConfig } from '@/composables/useRunConfig'
-import { useCliDefaults, refreshCliDefaults } from '@/composables/useCliDefaults'
 import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
 import { useRunners } from '@/composables/useRunners'
@@ -49,7 +48,7 @@ const props = defineProps<{
   selectedChannelId: string | null
   /** 解析后的最终注入渠道 id(null = 官方):终端恢复带渠道用 */
   resolvedChannelId: string | null
-  /** 运行配置同源解析结果(下拉显示与发送参数共用,见 useRunConfig) */
+  /** 运行配置同源解析结果（display 用于回显，launch 用于发送，见 useRunConfig） */
   runConfig: ResolvedRunConfig
   /** 顾问模式开关状态 */
   selectedAdvisor: boolean
@@ -57,8 +56,8 @@ const props = defineProps<{
   selectedChrome: boolean
   /** 自定义 CLI 参数 */
   selectedExtraArgs: string
-  /** 权限模式 */
-  selectedPermissionMode: PermissionMode
+  /** null 表示跟随 CLI/项目配置 */
+  selectedPermissionMode: PermissionMode | null
   /** 会话累计 token 用量(已含子 Agent/工作流) */
   totalTokens: TokenUsage
   /** 其中子 Agent/工作流分项(totalTokens 已含) */
@@ -71,7 +70,7 @@ const emit = defineEmits<{
   (e: 'channelChange', channelId: string | null): void
   (e: 'chromeChange', chrome: boolean): void
   (e: 'extraArgsChange', extraArgs: string): void
-  (e: 'permissionModeChange', mode: PermissionMode): void
+  (e: 'permissionModeChange', mode: PermissionMode | null): void
   (e: 'reload'): void
   (e: 'deleted'): void
 }>()
@@ -110,10 +109,6 @@ const effectiveModel = computed(() => {
   return oneMVariant
 })
 
-const { cliDefaults } = useCliDefaults()
-// 顶栏挂载即拉一次 CLI 默认值(settings.json 活文件,下拉打开时还会各自重读)
-onMounted(() => refreshCliDefaults(props.cwd ?? undefined))
-
 const { channels } = useChannels()
 
 /** 真实跑过模型的伪装等级(按当前解析渠道的映射反查;官方渠道/无映射恒 null) */
@@ -129,7 +124,7 @@ const realModelTier = computed<string | null>(() => {
 const capacity = computed(() =>
   props.realContextWindow
     ?? effectiveModel.value?.contextWindow
-    ?? getContextWindow(props.runConfig.model ?? cliDefaults.value.model),
+    ?? getContextWindow(props.runConfig.display.model ?? null),
 )
 
 // --- 窄列折叠(胶囊化后仅一档) ---
@@ -271,7 +266,7 @@ function onEffortChange(level: EffortSetting) {
 function onChannelChange(channelId: string | null) {
   emit('channelChange', channelId)
 }
-function onPermissionModeChange(mode: PermissionMode) {
+function onPermissionModeChange(mode: PermissionMode | null) {
   emit('permissionModeChange', mode)
 }
 </script>
@@ -285,6 +280,7 @@ function onPermissionModeChange(mode: PermissionMode) {
     <RunConfigCapsule
       :settings="capsuleSettings"
       :run-config="runConfig"
+      :cwd="cwd"
       :narrow="!showChannel"
       @model-change="onModelChange"
       @effort-change="onEffortChange"
@@ -295,7 +291,8 @@ function onPermissionModeChange(mode: PermissionMode) {
 
     <!-- 权限模式 -->
     <PermissionModeDropdown
-      :current="selectedPermissionMode"
+      :selected="selectedPermissionMode"
+      :effective="runConfig.display.permissionMode"
       @select="onPermissionModeChange"
     />
 

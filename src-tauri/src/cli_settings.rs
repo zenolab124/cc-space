@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -23,6 +23,251 @@ fn schema_cache_path() -> PathBuf {
 
 fn claude_settings_path() -> PathBuf {
     config::claude_root().join("settings.json")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct CliSettings {
+    pub model: Option<String>,
+    pub effort_level: Option<String>,
+    pub ultracode: bool,
+    pub permission_mode: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CliSettingsLayer {
+    model: Option<String>,
+    effort_level: Option<String>,
+    ultracode: Option<bool>,
+    permission_mode: Option<String>,
+}
+
+fn read_settings_layer(path: &Path) -> CliSettingsLayer {
+    let json: Option<Value> = fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    CliSettingsLayer {
+        model: json
+            .as_ref()
+            .and_then(|value| value.get("model"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        effort_level: json
+            .as_ref()
+            .and_then(|value| value.get("effortLevel"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        ultracode: json
+            .as_ref()
+            .and_then(|value| value.get("ultracode"))
+            .and_then(Value::as_bool),
+        permission_mode: json
+            .as_ref()
+            .and_then(|value| value.get("permissions"))
+            .and_then(|value| value.get("defaultMode"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    }
+}
+
+fn merge_settings_layers(layers: impl IntoIterator<Item = CliSettingsLayer>) -> CliSettings {
+    let mut merged = CliSettingsLayer::default();
+    for layer in layers {
+        if layer.model.is_some() {
+            merged.model = layer.model;
+        }
+        if layer.effort_level.is_some() {
+            merged.effort_level = layer.effort_level;
+        }
+        if layer.ultracode.is_some() {
+            merged.ultracode = layer.ultracode;
+        }
+        if layer.permission_mode.is_some() {
+            merged.permission_mode = layer.permission_mode;
+        }
+    }
+    CliSettings {
+        model: merged.model,
+        effort_level: merged.effort_level,
+        ultracode: merged.ultracode.unwrap_or(false),
+        permission_mode: merged.permission_mode,
+    }
+}
+
+fn settings_candidates_for_roots(
+    user_settings: PathBuf,
+    cwd: &Path,
+    roots: crate::git_utils::SettingsRoots,
+) -> Vec<PathBuf> {
+    let mut paths = vec![
+        user_settings,
+        roots.project.join(".claude/settings.json"),
+    ];
+    let repository_local = roots.local.join(".claude/settings.local.json");
+    let legacy_local = cwd.join(".claude/settings.local.json");
+    if legacy_local != repository_local {
+        paths.push(legacy_local);
+    }
+    paths.push(repository_local);
+    paths
+}
+
+fn settings_candidates(cwd: Option<&Path>) -> Vec<PathBuf> {
+    let user_settings = claude_settings_path();
+    let Some(cwd) = cwd else {
+        return vec![user_settings];
+    };
+    settings_candidates_for_roots(
+        user_settings,
+        cwd,
+        crate::git_utils::settings_roots(cwd),
+    )
+}
+
+pub fn get_cli_settings(cwd: Option<&Path>) -> CliSettings {
+    merge_settings_layers(
+        settings_candidates(cwd)
+            .into_iter()
+            .map(|path| read_settings_layer(&path)),
+    )
+}
+
+#[cfg(test)]
+mod settings_summary_tests {
+    use super::{
+        merge_settings_layers, read_settings_layer, settings_candidates_for_roots, CliSettings,
+        CliSettingsLayer,
+    };
+    use crate::git_utils::SettingsRoots;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempSettingsFile {
+        path: PathBuf,
+        dir: PathBuf,
+    }
+
+    impl TempSettingsFile {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempSettingsFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn temp_file(name: &str, content: &str) -> TempSettingsFile {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("monet-cli-settings-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, content).unwrap();
+        TempSettingsFile { path, dir }
+    }
+
+    #[test]
+    fn orders_user_project_legacy_and_repository_local() {
+        let paths = settings_candidates_for_roots(
+            PathBuf::from("/home/me/.claude/settings.json"),
+            std::path::Path::new("/repo/main/packages/app"),
+            SettingsRoots {
+                project: PathBuf::from("/repo/worktree"),
+                local: PathBuf::from("/repo/main"),
+            },
+        );
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/home/me/.claude/settings.json"),
+                PathBuf::from("/repo/worktree/.claude/settings.json"),
+                PathBuf::from("/repo/main/packages/app/.claude/settings.local.json"),
+                PathBuf::from("/repo/main/.claude/settings.local.json"),
+            ]
+        );
+    }
+
+    #[test]
+    fn omits_duplicate_legacy_local_candidate() {
+        let paths = settings_candidates_for_roots(
+            PathBuf::from("/home/me/.claude/settings.json"),
+            std::path::Path::new("/repo/main"),
+            SettingsRoots {
+                project: PathBuf::from("/repo/main"),
+                local: PathBuf::from("/repo/main"),
+            },
+        );
+        assert_eq!(paths.len(), 3);
+        assert_eq!(
+            paths[2],
+            PathBuf::from("/repo/main/.claude/settings.local.json")
+        );
+    }
+
+    #[test]
+    fn merges_each_scalar_by_layer_priority() {
+        let merged = merge_settings_layers([
+            CliSettingsLayer {
+                model: Some("user-model".into()),
+                effort_level: Some("medium".into()),
+                ultracode: Some(true),
+                permission_mode: Some("default".into()),
+            },
+            CliSettingsLayer {
+                model: Some("project-model".into()),
+                permission_mode: Some("plan".into()),
+                ..Default::default()
+            },
+            CliSettingsLayer {
+                effort_level: Some("high".into()),
+                ultracode: Some(false),
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            merged,
+            CliSettings {
+                model: Some("project-model".into()),
+                effort_level: Some("high".into()),
+                ultracode: false,
+                permission_mode: Some("plan".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_json_and_wrong_types_leave_fields_unset() {
+        let invalid = temp_file("invalid.json", "{oops");
+        assert_eq!(read_settings_layer(invalid.path()), CliSettingsLayer::default());
+
+        let wrong = temp_file(
+            "wrong.json",
+            r#"{"model":3,"effortLevel":false,"ultracode":"yes","permissions":{"defaultMode":[]}}"#,
+        );
+        assert_eq!(read_settings_layer(wrong.path()), CliSettingsLayer::default());
+    }
+
+    #[test]
+    fn reads_supported_fields_only() {
+        let path = temp_file(
+            "settings.json",
+            r#"{"model":"opus","effortLevel":"max","ultracode":true,"permissions":{"defaultMode":"dontAsk","allow":["Bash"]},"env":{"SECRET":"ignored"}}"#,
+        );
+        assert_eq!(
+            read_settings_layer(path.path()),
+            CliSettingsLayer {
+                model: Some("opus".into()),
+                effort_level: Some("max".into()),
+                ultracode: Some(true),
+                permission_mode: Some("dontAsk".into()),
+            }
+        );
+    }
 }
 
 /// 读取 schema：内存缓存 → 磁盘缓存 → 远程 fetch

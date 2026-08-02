@@ -617,52 +617,11 @@ pub fn respond_permission(
     }
 }
 
-/// CLI 全局配置摘要(~/.claude/settings.json):顶栏「默认」项展示真值用
-#[derive(serde::Serialize)]
-pub struct CliSettings {
-    pub model: Option<String>,
-    pub effort_level: Option<String>,
-    pub ultracode: bool,
-    pub permission_mode: Option<String>,
-}
-
-/// 读取 CLI settings.json 的模型/努力默认值。
-/// settings.json 是活文件(CLI 内 /effort 等实时改写),每次调用现读现解析、
-/// 绝不进程级缓存,见 docs/knowledge/pitfalls/cli-settings-live-rewrite.md
-///
-/// cwd 可选：传入时 permission_mode 按 Claude Code 优先级链读取
-/// (Local > Project > User)，不传时只读 ~/.claude/settings.json
+/// 读取当前工作目录的受限 CLI 设置摘要。
+/// 文件内容不缓存，确保 CLI 实时改写 settings.json 后下一次读取立即生效。
 #[tauri::command]
-pub fn get_cli_settings(cwd: Option<String>) -> CliSettings {
-    let path = crate::config::claude_root().join("settings.json");
-    let json: Option<serde_json::Value> = fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok());
-    let get_str = |key: &str| {
-        json.as_ref()
-            .and_then(|j| j.get(key))
-            .and_then(|v| v.as_str())
-            .map(String::from)
-    };
-    let perm_mode = cwd.as_deref()
-        .and_then(crate::streaming::resolve_default_permission_mode)
-        .or_else(|| {
-            json.as_ref()
-                .and_then(|j| j.get("permissions"))
-                .and_then(|p| p.get("defaultMode"))
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        });
-    CliSettings {
-        model: get_str("model"),
-        effort_level: get_str("effortLevel"),
-        ultracode: json
-            .as_ref()
-            .and_then(|j| j.get("ultracode"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        permission_mode: perm_mode,
-    }
+pub fn get_cli_settings(cwd: Option<String>) -> crate::cli_settings::CliSettings {
+    crate::cli_settings::get_cli_settings(cwd.as_deref().map(std::path::Path::new))
 }
 
 /// 外部会话进程信息：是否在跑 + 归属应用（父进程链解析），横幅与停止确认共用
@@ -1218,43 +1177,23 @@ pub struct GitWorktreeSnapshot {
 
 const GIT_SNAPSHOT_MAX_ENTRIES: usize = 200;
 
-fn run_git_readonly_blocking(cwd: &str, args: &[&str]) -> Result<std::process::Output, String> {
-    use crate::proc_ext::HideConsole;
-    use std::process::{Command, Stdio};
-    // git 位于 /usr/bin,系统命令允许裸调(spawn 铁律豁免清单);
-    // 3s 超时防网络挂载盘等场景挂起(项目无 tokio 直依赖,try_wait 轮询实现)
-    let mut child = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .hide_console()
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(_) => return child.wait_with_output().map_err(|e| e.to_string()),
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                return Err("git timeout".to_string());
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(30)),
-        }
-    }
-}
-
 /// 工作区 git 只读快照:是否仓库 + 未提交条目(porcelain v1 -z 解析)。
 /// 白名单仅 rev-parse 与 status 两条只读子命令——本 command 永不扩展写操作
 /// (NFR-002 代码审查口径:实现中不得出现任何修改工作区/暂存区的 git 子命令)。
 #[tauri::command]
 pub async fn git_worktree_snapshot(cwd: String) -> Result<GitWorktreeSnapshot, String> {
     let (probe, out) = tauri::async_runtime::spawn_blocking(move || {
-        let probe = run_git_readonly_blocking(&cwd, &["rev-parse", "--is-inside-work-tree"])?;
+        let probe = crate::git_utils::run_git_readonly_blocking(
+            std::path::Path::new(&cwd),
+            &["rev-parse", "--is-inside-work-tree"],
+        )?;
         if !probe.status.success() || String::from_utf8_lossy(&probe.stdout).trim() != "true" {
             return Ok::<_, String>((probe, None));
         }
-        let out = run_git_readonly_blocking(&cwd, &["status", "--porcelain=v1", "-z"])?;
+        let out = crate::git_utils::run_git_readonly_blocking(
+            std::path::Path::new(&cwd),
+            &["status", "--porcelain=v1", "-z"],
+        )?;
         Ok((probe, Some(out)))
     })
     .await
