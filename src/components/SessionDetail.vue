@@ -192,6 +192,8 @@ const effectiveSessionId = computed(() => {
 
 // per-session 流式状态(v2.1.0:多会话并行,各列独立)
 const stream = useSessionStream(effectiveSessionId)
+// 异步任务账本在 setup 早期就会被 watch 求值，外部运行态必须先完成初始化。
+const externalRunning = ref(false)
 
 // --- tool_result 全局查找表(跨消息配对:tool_use 在 assistant、tool_result 在 user) ---
 const toolResultMap = computed(() => {
@@ -2469,9 +2471,6 @@ watch(autoTurnLanded, async () => {
 // stdout 管道已不可重接。改走伪流式:探测到该会话仍有 CLI 进程在跑(命令行含
 // session-id)时,周期静默 reload jsonl 落账记录 + 保持滚动跟随,进程退出后做
 // 一次收尾 reload。整段追加无打字机,但进度不再需要手动刷新。
-// 注意:声明须在下方 immediate watch 之前(其回调在 setup 同步阶段就会执行)。
-
-const externalRunning = ref(false)
 /** typing-dots 显隐总闸:false 时点从 DOM 摘除(infinite 动画在 opacity:0 下仍持续产帧,唤醒合成器) */
 const typingActive = computed(() => stream.value.streaming || externalRunning.value || hasLiveTurn.value)
 /** 外部进程归属应用（父进程链解析,如 Terminal / 其他 GUI 工具),横幅与停止确认共用 */
