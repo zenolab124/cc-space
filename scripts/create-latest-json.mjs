@@ -16,7 +16,7 @@ if (!version || !tarball || !outPath) {
 }
 
 // 默认按正式发版的 v<version> tag 取资产；nightly 走固定的滚动 tag，
-// 经 RELEASE_TAG 覆盖（版本号里已含日期，tag 无需再区分）
+// 经 RELEASE_TAG 覆盖（滚动 Release 始终使用同一个 nightly tag）
 const tag = process.env.RELEASE_TAG || `v${version}`
 const releaseUrl = (file) =>
   `https://github.com/zenolab124/monet/releases/download/${tag}/${basename(file)}`

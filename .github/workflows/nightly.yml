@@ -6,7 +6,7 @@ name: Nightly
 # 与 release.yml 的关键差异：
 #   · 版本号在 CI 内临时改，不 commit（pnpm version 那套只服务正式发版）
 #   · 用固定的滚动 tag「nightly」，每次强制覆盖，避免 release 列表被日期 tag 淹掉
-#   · 正式版 Publish 后自动刷新到下一个 patch，避免 Nightly 与当前正式版重叠
+#   · 与正式版共用全局递增版本序列，渠道不预占固定的奇偶号或相邻号
 #   · 发 prerelease，产 nightly.json
 #   · 仅 macOS：nightly 主要服务开发者自测，Windows 用户走稳定版
 #
@@ -17,21 +17,20 @@ on:
   schedule:
     - cron: '0 18 * * *' # UTC 18:00 = 北京时间 02:00
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: write
 
+concurrency:
+  group: nightly-package
+  cancel-in-progress: false
+
 jobs:
   build-macos:
-    # release 事件也包含 prerelease；这里只响应 v* 正式版，避免 Nightly 自己触发递归构建。
-    if: ${{ github.event_name != 'release' || (github.event.release.prerelease == false && startsWith(github.event.release.tag_name, 'v')) }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
           fetch-depth: 0 # 需要历史来判断有无新提交
 
       # 定时触发时若 24h 内无提交就跳过，避免天天发同一份包
@@ -71,17 +70,28 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: brew install xcodegen
 
-      # 版本号取「下一个 patch 的预发布」：1.0.4 → 1.0.5-nightly.20260803.42。
-      # run number 保证同一天多次构建仍有不同且单调递增的 semver。
-      # semver 上它 > 1.0.4 且 < 1.0.5，于是 nightly 用户持续收 nightly，
-      # 正式版 Publish 后本 workflow 会立即再跑一次，让 Nightly 前进到后续 patch。
+      # 正式 tag、package.json 与当前 Nightly 共同构成版本账本。每次成功打包消耗
+      # 一个新的数字版本，不论渠道：1.0.4 stable → 1.0.5 nightly → 1.0.6 stable。
       - name: Compute nightly version
         if: steps.check.outputs.skip == 'false'
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          NEXT=$(node -p "const [a,b,c]=require('./package.json').version.split('.'); \`\${a}.\${b}.\${Number(c)+1}\`")
-          VERSION="${NEXT}-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          CANDIDATES=("$(node -p "require('./package.json').version")")
+          while IFS= read -r tag; do
+            CANDIDATES+=("${tag#v}")
+          done < <(git tag --list 'v[0-9]*')
+
+          ASSET_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+            --jq '.assets[] | select(.name == "nightly.json") | .id')
+          test -n "$ASSET_ID"
+          NIGHTLY_VERSION=$(gh api -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" --jq '.version')
+          CANDIDATES+=("$NIGHTLY_VERSION")
+
+          VERSION=$(node scripts/next-build-version.mjs patch "${CANDIDATES[@]}")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "nightly 版本: $VERSION"
 
