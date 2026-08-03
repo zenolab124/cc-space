@@ -1,8 +1,5 @@
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
@@ -13,7 +10,9 @@ use super::{
     ProviderQuota, ProviderQuotaError, QuotaCredits, QuotaGroup, QuotaItem, QuotaItemKind,
     RefreshIntent, PROVIDER_CACHE_TTL_SECS,
 };
-use crate::proc_ext::HideConsole;
+use crate::engines::codex::app_server::{
+    AppServerClient, AppServerError, AppServerErrorKind,
+};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(24);
@@ -242,7 +241,7 @@ fn stale_or_error(error: CodexError) -> ProviderQuota {
 fn fetch_quota() -> Result<ProviderQuota, CodexError> {
     let path = crate::codex_locator::locate()
         .map_err(|_| CodexError::new("cli_not_found", "Codex CLI is not installed"))?;
-    let mut server = AppServer::spawn(&path)?;
+    let mut server = AppServerClient::spawn(&path).map_err(map_app_server_error)?;
     let deadline = Instant::now() + TOTAL_TIMEOUT;
 
     server.request(
@@ -256,15 +255,21 @@ fn fetch_quota() -> Result<ProviderQuota, CodexError> {
             }
         }),
         deadline,
-    )?;
-    server.notify("initialized", json!({}))?;
+        REQUEST_TIMEOUT,
+    )
+    .map_err(map_app_server_error)?;
+    server
+        .notify("initialized", json!({}))
+        .map_err(map_app_server_error)?;
 
     let account_value = server.request(
         1,
         "account/read",
         json!({ "refreshToken": false }),
         deadline,
-    )?;
+        REQUEST_TIMEOUT,
+    )
+    .map_err(map_app_server_error)?;
     let account: AccountReadResult = serde_json::from_value(account_value)
         .map_err(|_| CodexError::new("protocol", "Codex returned invalid account data"))?;
     if account.requires_openai_auth && account.account.is_none() {
@@ -274,275 +279,50 @@ fn fetch_quota() -> Result<ProviderQuota, CodexError> {
         ));
     }
 
-    let limits_value = server.request(2, "account/rateLimits/read", json!({}), deadline)?;
+    let limits_value = server
+        .request(
+            2,
+            "account/rateLimits/read",
+            json!({}),
+            deadline,
+            REQUEST_TIMEOUT,
+        )
+        .map_err(map_app_server_error)?;
     let limits: RateLimitsReadResult = serde_json::from_value(limits_value)
         .map_err(|_| CodexError::new("protocol", "Codex returned invalid quota data"))?;
 
     map_quota(account, limits)
 }
 
-struct AppServer {
-    stdin: BufWriter<ChildStdin>,
-    stdout_rx: Receiver<String>,
-    _process: AppServerProcess,
-}
-
-struct AppServerProcess {
-    child: Child,
-    #[cfg(unix)]
-    process_group_id: i32,
-    #[cfg(windows)]
-    job: Option<JobHandle>,
-}
-
-impl AppServerProcess {
-    fn new(child: Child) -> Self {
-        #[cfg(unix)]
-        let process_group_id = child.id() as i32;
-        #[cfg(windows)]
-        let job = create_job_for_child(child.id());
-        Self {
-            child,
-            #[cfg(unix)]
-            process_group_id,
-            #[cfg(windows)]
-            job,
+fn map_app_server_error(error: AppServerError) -> CodexError {
+    let mut mapped = match error.kind() {
+        AppServerErrorKind::Spawn => {
+            CodexError::new("spawn", "Codex app-server could not be started")
         }
+        AppServerErrorKind::Protocol => {
+            CodexError::new("protocol", "Codex app-server returned an invalid response")
+        }
+        AppServerErrorKind::Timeout => {
+            CodexError::new("timeout", "Codex quota request timed out")
+        }
+        AppServerErrorKind::Io => {
+            CodexError::new("io", "Codex app-server connection was closed")
+        }
+        AppServerErrorKind::Eof => {
+            CodexError::new("eof", "Codex app-server stopped unexpectedly")
+        }
+        AppServerErrorKind::Rpc => {
+            CodexError::new("rpc", "Codex app-server rejected the quota request")
+        }
+    };
+    if let Some(seconds) = error
+        .rpc_error()
+        .and_then(|rpc_error| rpc_error.data.as_ref())
+        .and_then(explicit_retry_after)
+    {
+        mapped = mapped.with_retry(seconds);
     }
-}
-
-impl AppServer {
-    fn spawn(path: &std::path::Path) -> Result<Self, CodexError> {
-        let mut command = Command::new(path);
-        command
-            .args(["app-server", "--listen", "stdio://"])
-            .env("PATH", crate::path_env::enhanced_path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .hide_console();
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-
-        let child = command
-            .spawn()
-            .map_err(|_| CodexError::new("spawn", "Codex app-server could not be started"))?;
-        let mut process = AppServerProcess::new(child);
-
-        let stdin = process
-            .child
-            .stdin
-            .take()
-            .ok_or_else(|| CodexError::new("spawn", "Codex app-server stdin is unavailable"))?;
-        let stdout =
-            process.child.stdout.take().ok_or_else(|| {
-                CodexError::new("spawn", "Codex app-server stdout is unavailable")
-            })?;
-        let stderr = process.child.stderr.take();
-
-        let (stdout_tx, stdout_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if stdout_tx.send(line).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        if let Some(stderr) = stderr {
-            std::thread::spawn(move || {
-                let mut reader = BufReader::new(stderr);
-                let mut sink = String::new();
-                while reader.read_line(&mut sink).unwrap_or(0) > 0 {
-                    if sink.len() > 16 * 1024 {
-                        sink.drain(..8 * 1024);
-                    }
-                }
-            });
-        }
-
-        Ok(Self {
-            stdin: BufWriter::new(stdin),
-            stdout_rx,
-            _process: process,
-        })
-    }
-
-    fn notify(&mut self, method: &str, params: Value) -> Result<(), CodexError> {
-        self.write_message(&json!({ "jsonrpc": "2.0", "method": method, "params": params }))
-    }
-
-    fn request(
-        &mut self,
-        id: i64,
-        method: &str,
-        params: Value,
-        total_deadline: Instant,
-    ) -> Result<Value, CodexError> {
-        self.write_message(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        }))?;
-
-        let request_deadline = (Instant::now() + REQUEST_TIMEOUT).min(total_deadline);
-        loop {
-            let remaining = request_deadline
-                .checked_duration_since(Instant::now())
-                .ok_or_else(|| CodexError::new("timeout", "Codex quota request timed out"))?;
-            match self.stdout_rx.recv_timeout(remaining) {
-                Ok(line) => {
-                    let value: Value = serde_json::from_str(&line).map_err(|_| {
-                        CodexError::new("protocol", "Codex app-server returned invalid JSON")
-                    })?;
-                    let Some(response_id) = value.get("id") else {
-                        continue;
-                    };
-                    if response_id.as_i64() != Some(id) {
-                        return Err(CodexError::new(
-                            "protocol",
-                            "Codex app-server returned an unexpected response",
-                        ));
-                    }
-                    if let Some(error) = value.get("error") {
-                        let mut failure =
-                            CodexError::new("rpc", "Codex app-server rejected the quota request");
-                        if let Some(seconds) = explicit_retry_after(error) {
-                            failure = failure.with_retry(seconds);
-                        }
-                        return Err(failure);
-                    }
-                    return value.get("result").cloned().ok_or_else(|| {
-                        CodexError::new("protocol", "Codex app-server returned no result")
-                    });
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(CodexError::new("timeout", "Codex quota request timed out"));
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(CodexError::new(
-                        "eof",
-                        "Codex app-server stopped unexpectedly",
-                    ));
-                }
-            }
-        }
-    }
-
-    fn write_message(&mut self, value: &Value) -> Result<(), CodexError> {
-        serde_json::to_writer(&mut self.stdin, value)
-            .map_err(|_| CodexError::new("protocol", "Codex request could not be encoded"))?;
-        self.stdin
-            .write_all(b"\n")
-            .and_then(|_| self.stdin.flush())
-            .map_err(|_| CodexError::new("io", "Codex app-server connection was closed"))
-    }
-}
-
-#[cfg(unix)]
-fn process_group_exists(process_group_id: i32) -> bool {
-    let result = unsafe { libc::kill(-process_group_id, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-}
-
-impl Drop for AppServerProcess {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-self.process_group_id, libc::SIGTERM);
-        }
-        #[cfg(windows)]
-        {
-            let _ = self.child.kill();
-            self.job.take();
-        }
-
-        let deadline = Instant::now() + Duration::from_millis(350);
-        #[cfg(unix)]
-        while process_group_exists(self.process_group_id) && Instant::now() < deadline {
-            let _ = self.child.try_wait();
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        #[cfg(not(unix))]
-        while Instant::now() < deadline {
-            match self.child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => break,
-            }
-        }
-
-        #[cfg(unix)]
-        if process_group_exists(self.process_group_id) {
-            unsafe {
-                libc::kill(-self.process_group_id, libc::SIGKILL);
-            }
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-#[cfg(windows)]
-struct JobHandle(windows_sys::Win32::Foundation::HANDLE);
-
-#[cfg(windows)]
-impl Drop for JobHandle {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.0);
-        }
-    }
-}
-
-#[cfg(windows)]
-unsafe impl Send for JobHandle {}
-
-#[cfg(windows)]
-fn create_job_for_child(pid: u32) -> Option<JobHandle> {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::JobObjects::*;
-    use windows_sys::Win32::System::Threading::*;
-
-    unsafe {
-        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if job.is_null() {
-            return None;
-        }
-        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let configured = SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info as *const _ as *const _,
-            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        );
-        if configured == 0 {
-            CloseHandle(job);
-            return None;
-        }
-        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
-        if process.is_null() {
-            CloseHandle(job);
-            return None;
-        }
-        let assigned = AssignProcessToJobObject(job, process);
-        CloseHandle(process);
-        if assigned == 0 {
-            CloseHandle(job);
-            return None;
-        }
-        Some(JobHandle(job))
-    }
+    mapped
 }
 
 fn explicit_retry_after(value: &Value) -> Option<i64> {
@@ -784,45 +564,6 @@ mod tests {
     fn account_read_never_requests_refresh() {
         let params = json!({ "refreshToken": false });
         assert_eq!(params.get("refreshToken"), Some(&Value::Bool(false)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn process_guard_kills_descendant_after_group_leader_exits() {
-        use std::os::unix::process::CommandExt;
-
-        let output = Command::new("/bin/sh")
-            .args([
-                "-c",
-                "trap '' TERM; while :; do sleep 1; done & child=$!; echo $child; trap 'exit 0' TERM; wait",
-            ])
-            .process_group(0)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn process group fixture");
-        let mut process = AppServerProcess::new(output);
-        let stdout = process.child.stdout.take().expect("fixture stdout");
-        let mut line = String::new();
-        BufReader::new(stdout)
-            .read_line(&mut line)
-            .expect("read descendant pid");
-        let descendant_pid = line.trim().parse::<i32>().expect("valid descendant pid");
-
-        drop(process);
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while unsafe { libc::kill(descendant_pid, 0) } == 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert_eq!(
-            unsafe { libc::kill(descendant_pid, 0) },
-            -1,
-            "descendant process survived AppServerProcess::drop"
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
     }
 
     #[test]

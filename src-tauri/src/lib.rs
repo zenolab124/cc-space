@@ -7,6 +7,7 @@ pub mod claude_locator;
 pub mod config;
 mod commands;
 mod discovery;
+pub mod engines;
 mod git_utils;
 mod image_protocol;
 pub mod models;

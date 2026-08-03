@@ -1,0 +1,190 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::{
+    EngineFuture, EngineResult, InteractionKind, ItemStatus, ProjectRef, Segment, SessionRef,
+    SubscriptionHandle,
+};
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct RuntimeId(pub String);
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnRef {
+    pub session: SessionRef,
+    pub runtime_id: RuntimeId,
+    pub native_turn_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum InputItem {
+    Text { text: String },
+    Image { media_type: String, data: String },
+    File { path: String },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionRequest {
+    pub project: ProjectRef,
+    pub cwd: Option<String>,
+    pub options: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachOptions {
+    pub options: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnRequest {
+    pub input: Vec<InputItem>,
+    pub options: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSession {
+    pub session: SessionRef,
+    pub runtime_id: RuntimeId,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnHandle {
+    pub reference: TurnRef,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionRef {
+    pub session: SessionRef,
+    pub runtime_id: RuntimeId,
+    pub request_id: String,
+    pub turn_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionOption {
+    pub id: String,
+    pub label: String,
+    pub dangerous: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionRequest {
+    pub reference: InteractionRef,
+    pub kind: InteractionKind,
+    pub title: Option<String>,
+    pub payload: Value,
+    pub options: Vec<InteractionOption>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionResponse {
+    pub decision: String,
+    pub payload: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnStatus {
+    Completed,
+    Interrupted,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum NormalizedRuntimeEvent {
+    SessionAttached,
+    SessionDetached,
+    TurnStarted {
+        turn_id: String,
+    },
+    ItemStarted {
+        turn_id: String,
+        item_id: String,
+        status: ItemStatus,
+    },
+    ItemDelta {
+        turn_id: String,
+        item_id: String,
+        segment: Segment,
+    },
+    ItemCompleted {
+        turn_id: String,
+        item_id: String,
+        status: ItemStatus,
+    },
+    InteractionRequested {
+        request: InteractionRequest,
+    },
+    InteractionResolved {
+        reference: InteractionRef,
+        decision: String,
+    },
+    TurnCompleted {
+        turn_id: String,
+        status: TurnStatus,
+        error: Option<String>,
+    },
+    RuntimeError {
+        message: String,
+        retryable: bool,
+    },
+    RuntimeExited,
+    CapabilitiesChanged,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEventEnvelope {
+    pub session: SessionRef,
+    pub runtime_id: RuntimeId,
+    pub generation: u64,
+    pub sequence: u64,
+    pub timestamp: String,
+    pub event: NormalizedRuntimeEvent,
+}
+
+pub type RuntimeEventSink = Arc<dyn Fn(RuntimeEventEnvelope) + Send + Sync>;
+
+pub trait AgentRuntime: Send + Sync {
+    fn create_session(&self, request: CreateSessionRequest) -> EngineFuture<'_, RuntimeSession>;
+
+    fn attach_session(
+        &self,
+        session: SessionRef,
+        options: AttachOptions,
+    ) -> EngineFuture<'_, RuntimeSession>;
+
+    fn start_turn(&self, session: SessionRef, request: TurnRequest)
+        -> EngineFuture<'_, TurnHandle>;
+
+    fn steer_turn(&self, turn: TurnRef, input: Vec<InputItem>) -> EngineFuture<'_, ()>;
+
+    fn interrupt_turn(&self, turn: TurnRef) -> EngineFuture<'_, ()>;
+
+    fn respond(
+        &self,
+        request: InteractionRef,
+        response: InteractionResponse,
+    ) -> EngineFuture<'_, ()>;
+
+    fn close_session(&self, session: SessionRef) -> EngineFuture<'_, ()>;
+
+    fn subscribe_events(&self, sink: RuntimeEventSink) -> EngineResult<SubscriptionHandle>;
+}
