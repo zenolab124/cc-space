@@ -53,50 +53,70 @@ fn binary_name() -> &'static str {
     }
 }
 
+fn absolute_root(path: PathBuf, home: Option<&Path>) -> Option<PathBuf> {
+    if path.is_absolute() {
+        return Some(path);
+    }
+    let suffix = path.strip_prefix("~").ok()?;
+    Some(home?.join(suffix))
+}
+
 fn candidate_paths() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_default();
+    let home = dirs::home_dir().filter(|path| path.is_absolute());
     let mut candidates: Vec<PathBuf> = std::env::split_paths(&crate::path_env::enhanced_path())
+        .filter_map(|directory| absolute_root(directory, home.as_deref()))
         .map(|directory| directory.join(binary_name()))
         .collect();
 
-    candidates.extend([
-        home.join(".local").join("bin").join(binary_name()),
-        home.join(".cargo").join("bin").join(binary_name()),
-        home.join(".volta").join("bin").join(binary_name()),
-        home.join(".bun").join("bin").join(binary_name()),
-    ]);
+    if let Some(home) = home.as_deref() {
+        candidates.extend([
+            home.join(".local").join("bin").join(binary_name()),
+            home.join(".cargo").join("bin").join(binary_name()),
+            home.join(".volta").join("bin").join(binary_name()),
+            home.join(".bun").join("bin").join(binary_name()),
+        ]);
+    }
 
     #[cfg(target_os = "macos")]
-    candidates.extend([
-        PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/usr/local/bin/codex"),
-        home.join("Library").join("pnpm").join("codex"),
-    ]);
+    {
+        candidates.extend([
+            PathBuf::from("/opt/homebrew/bin/codex"),
+            PathBuf::from("/usr/local/bin/codex"),
+        ]);
+        if let Some(home) = home.as_deref() {
+            candidates.push(home.join("Library").join("pnpm").join("codex"));
+        }
+    }
 
     #[cfg(target_os = "linux")]
-    candidates.extend([
-        PathBuf::from("/usr/local/bin/codex"),
-        PathBuf::from("/usr/bin/codex"),
-        home.join(".local").join("share").join("pnpm").join("codex"),
-    ]);
+    {
+        candidates.extend([
+            PathBuf::from("/usr/local/bin/codex"),
+            PathBuf::from("/usr/bin/codex"),
+        ]);
+        if let Some(home) = home.as_deref() {
+            candidates.push(home.join(".local").join("share").join("pnpm").join("codex"));
+        }
+    }
 
     #[cfg(windows)]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
-            candidates.push(PathBuf::from(appdata).join("npm").join(binary_name()));
+            if let Some(root) = absolute_root(PathBuf::from(appdata), home.as_deref()) {
+                candidates.push(root.join("npm").join(binary_name()));
+            }
         }
         if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
-            candidates.push(
-                PathBuf::from(localappdata)
-                    .join("Programs")
-                    .join("Codex")
-                    .join(binary_name()),
-            );
+            if let Some(root) = absolute_root(PathBuf::from(localappdata), home.as_deref()) {
+                candidates.push(root.join("Programs").join("Codex").join(binary_name()));
+            }
         }
     }
 
-    if let Some(path) = nvm_latest_bin(&home) {
-        candidates.push(path);
+    if let Some(home) = home.as_deref() {
+        if let Some(path) = nvm_latest_bin(home) {
+            candidates.push(path);
+        }
     }
     candidates
 }
@@ -142,6 +162,19 @@ mod tests {
     #[test]
     fn candidates_are_absolute() {
         assert!(candidate_paths().iter().all(|path| path.is_absolute()));
+    }
+
+    #[test]
+    fn expands_tilde_and_rejects_other_relative_roots() {
+        let home = std::env::current_dir().unwrap();
+        assert_eq!(
+            absolute_root(PathBuf::from("~").join("bin"), Some(&home)),
+            Some(home.join("bin")),
+        );
+        assert_eq!(
+            absolute_root(PathBuf::from("relative/bin"), Some(&home)),
+            None
+        );
     }
 
     #[cfg(windows)]
