@@ -10,7 +10,7 @@
 |--------|--------|
 | Monet 版本 | `defaults read /Applications/Monet.app/Contents/Info.plist CFBundleShortVersionString` |
 | macOS 版本 / 架构 | `sw_vers -productVersion` 与 `uname -m`（须为 `arm64`） |
-| Claude Code CLI | `claude --version` |
+| Agent CLI | `claude --version` 与 `codex --version`（按已安装项收集） |
 | 安装方式 | `brew list --cask --versions monet` 成功 → Homebrew，否则为直装 `.dmg` |
 | app 在跑吗 | `pgrep -x Monet` |
 | 后台服务 | `launchctl list \| grep io.github.zenolab124.monet` |
@@ -23,9 +23,11 @@
 
 ## 常见问题
 
-**启动被拦（「已损坏」/ 无法验证开发者）。** Gatekeeper 对已签名未公证 app 的反应。修复：`xattr -cr /Applications/Monet.app` 后重开。一次性操作；之后应用内更新静默完成。
+**启动被拦（无法验证开发者）。** 首先尝试打开一次，再进入「系统设置 → 隐私与安全性」，找到 Monet 的提示并点「仍要打开」，按系统要求确认。不要通过移除 quarantine 属性绕过系统提示。
 
-**看不到会话 / 项目。** Monet 默认读 `~/.claude/projects/`。确认目录存在且有内容。用户若迁移过 Claude Code 数据（`CLAUDE_CONFIG_DIR`），在 `~/.monet/settings.json` 设置 `claudeRoot`（见 install.zh-CN.md）后重启。从没跑过 Claude Code 的机器上档案馆是空的——正常。
+**看不到会话 / 项目。** 先看设置 → 引擎中心：它会区分 CLI 未安装、数据源不可用和运行协议连接失败。Claude Code 默认读 `~/.claude/projects/`；若通过 `CLAUDE_CONFIG_DIR` 迁移过数据，在 `~/.monet/settings.json` 设置 `claudeRoot` 后重启。Codex 的历史读取与运行交互都由官方 Codex CLI 的 App Server 提供，因此要求 CLI 已登录且 App Server 可启动；Monet 不直接扫描 rollout。从未使用对应 Agent 的机器上该引擎为空是正常的。
+
+**某个引擎异常，但其他引擎正常。** 这是预期的故障隔离。到设置 → 引擎中心单独检查该引擎；需要提报时从同一页导出诊断文件。诊断只含引擎标识、版本、健康状态和脱敏错误，不含会话正文、提示词或凭据。
 
 **菜单栏图标不见了。** 查 `launchctl list | grep io.github.zenolab124.monet.tray`。重启 app（启动时会重新注册 tray）。查 `~/.monet/tray.log` 找报错。
 
@@ -41,7 +43,7 @@
 
 自诊断的结论是「这是软件缺陷」时就提 issue——你能写出比手填模板好得多的报告。
 
-**1. 收集**（用上面的诊断基础）：Monet 版本、macOS 版本 + 架构、CLI 版本、安装方式、现象 vs 预期、最小复现步骤、以及*相关的*日志行（不要整个文件）。
+**1. 收集**（用上面的诊断基础）：Monet 版本、macOS 版本 + 架构、相关 Agent CLI 版本、安装方式、引擎中心导出的诊断、现象 vs 预期、最小复现步骤、以及*相关的*日志行（不要整个文件）。
 
 **2. 脱敏——硬规则，任何内容离开这台机器前执行：**
 
@@ -51,7 +53,7 @@
 
 **3. 用户过目。** 把最终的 issue 标题和正文给用户看、拿到明确同意——你是在替他公开发言。
 
-**4. 提交**——按顺序选第一个可用的通道。正文两种通道都按仓库 bug 模板组织：Monet 版本 / macOS 版本 / CLI 版本 / 现象 / 复现步骤 / 预期行为 / 日志。
+**4. 提交**——按顺序选第一个可用的通道。正文两种通道都按仓库 bug 模板组织：Monet 版本 / macOS 版本 / 引擎与 CLI 版本 / 现象 / 复现步骤 / 预期行为 / 脱敏诊断与日志。
 
 **通道 A——GitHub CLI**（`gh auth status` 成功）。issue 归属用户账号，能收到回复通知：
 

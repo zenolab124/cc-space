@@ -4,6 +4,7 @@ import { useSessionStream } from './useStreaming'
 import { queueForSession } from './usePermissionRequests'
 import { useNotifications } from './useNotifications'
 import { signalFor } from './useTurnSignals'
+import { useEngineRuntimeState } from '@/engines/runtimeState'
 
 /**
  * 会话运行状态派生(FR-003 状态枚举):监控卡状态行与右区列头共用。
@@ -54,18 +55,22 @@ export function useSessionStatus(
   const stream = useSessionStream(sessionId)
   const perms = queueForSession(sessionId)
   const { persistentToasts } = useNotifications()
+  const engineRuntime = useEngineRuntimeState(sessionId)
 
   return computed<SessionStatus>(() => {
     const sid = sessionId.value
     let key: SessionStatusKey = 'idle'
-    if (perms.value.length > 0) {
+    const enginePhase = engineRuntime.value.snapshot?.phase
+    if (perms.value.length > 0 || enginePhase === 'awaitingInteraction') {
       key = 'waiting_permission'
     } else if (
       stream.value.streamError ||
       (sid && persistentToasts.value.some(t => t.kind === 'error' && t.sessionId === sid))
     ) {
       key = 'error'
-    } else if (stream.value.streaming || stream.value.streamingTurns.some(t => t.live)) {
+    } else if (enginePhase === 'failed' || enginePhase === 'exited') {
+      key = 'error'
+    } else if (enginePhase === 'running' || stream.value.streaming || stream.value.streamingTurns.some(t => t.live)) {
       // live turn:CLI 自发轮(task-notification 后台任务收尾轮)在 streaming=false
       // 下进行中——内容正在流入,不应显示空闲(审计遗留②)
       const tool = stream.value.activeTool

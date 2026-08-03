@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
+use base64::Engine as _;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -86,11 +87,37 @@ pub struct MetaLite {
     pub deleted: Option<bool>,
 }
 
+#[derive(Default, Deserialize)]
+struct MetadataV2Lite {
+    #[serde(default)]
+    instances: HashMap<String, InstanceMetaLite>,
+}
+
+#[derive(Default, Deserialize)]
+struct InstanceMetaLite {
+    #[serde(default)]
+    sessions: HashMap<String, MetaLite>,
+}
+
 fn load_meta() -> HashMap<String, MetaLite> {
-    let path = config::data_dir().join("metadata.json");
-    fs::read_to_string(path)
+    let data_dir = config::data_dir();
+    let v2_path = data_dir.join("metadata-v2.json");
+    if v2_path.is_file() {
+        let instance_key = format!(
+            "ei1.{}.{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("claude-code"),
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("default"),
+        );
+        return fs::read_to_string(v2_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<MetadataV2Lite>(&content).ok())
+            .and_then(|mut document| document.instances.remove(&instance_key))
+            .map(|instance| instance.sessions)
+            .unwrap_or_default();
+    }
+    fs::read_to_string(data_dir.join("metadata.json"))
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .and_then(|content| serde_json::from_str(&content).ok())
         .unwrap_or_default()
 }
 
@@ -143,8 +170,12 @@ fn file_stamp(meta: &fs::Metadata) -> (u64, u32, u64, f64) {
 fn collect_main_sessions() -> Vec<(PathBuf, String, String)> {
     let mut out = Vec::new();
     let root = projects_root();
-    if !root.is_dir() { return out; }
-    let Ok(projects) = fs::read_dir(&root) else { return out };
+    if !root.is_dir() {
+        return out;
+    }
+    let Ok(projects) = fs::read_dir(&root) else {
+        return out;
+    };
     // 内置 Agent 工作目录不入索引（防旧版残留污染搜索）
     let agent_dirs = crate::config::agent_project_dirs();
     for project in projects.filter_map(|e| e.ok()) {
@@ -158,7 +189,9 @@ fn collect_main_sessions() -> Vec<(PathBuf, String, String)> {
         if agent_dirs.contains(&pid) {
             continue;
         }
-        let Ok(files) = fs::read_dir(&dir) else { continue };
+        let Ok(files) = fs::read_dir(&dir) else {
+            continue;
+        };
         for file in files.filter_map(|e| e.ok()) {
             let path = file.path();
             // map_or 而非 is_none_or:后者 1.82 才稳定,项目 MSRV 1.77.2
@@ -285,13 +318,14 @@ fn extract_file(path: &Path, project_id: &str, session_id: &str) -> Option<Sessi
         // 预筛：非目标行直接跳过，省去大行（file-history-snapshot 等）的 JSON 解析
         let maybe_message =
             line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"");
-        let maybe_title =
-            line.contains("\"ai-title\"") || line.contains("\"custom-title\"");
+        let maybe_title = line.contains("\"ai-title\"") || line.contains("\"custom-title\"");
         if !maybe_message && !maybe_title {
             continue;
         }
 
-        let Ok(ext) = serde_json::from_str::<LineExtract>(&line) else { continue };
+        let Ok(ext) = serde_json::from_str::<LineExtract>(&line) else {
+            continue;
+        };
         match ext.record_type.as_deref() {
             Some("user") | Some("assistant") => {
                 if ext.is_sidechain == Some(true) {
@@ -306,7 +340,11 @@ fn extract_file(path: &Path, project_id: &str, session_id: &str) -> Option<Sessi
                 }
                 messages.push(SearchMessage {
                     uuid: ext.uuid,
-                    role: if ext.record_type.as_deref() == Some("user") { 0 } else { 1 },
+                    role: if ext.record_type.as_deref() == Some("user") {
+                        0
+                    } else {
+                        1
+                    },
                     timestamp: ext.timestamp,
                     text,
                 });
@@ -404,7 +442,9 @@ pub fn warm() -> SearchStatus {
             pids.into_iter()
                 .flat_map(|pid| {
                     load_shard(pid).into_values().map(|e| {
-                        let path = root.join(&e.project_id).join(format!("{}.jsonl", e.session_id));
+                        let path = root
+                            .join(&e.project_id)
+                            .join(format!("{}.jsonl", e.session_id));
                         (path, e)
                     })
                 })
@@ -428,7 +468,9 @@ pub fn warm() -> SearchStatus {
         files
             .iter()
             .filter(|(path, _, _)| {
-                let Ok(meta) = fs::metadata(path) else { return false };
+                let Ok(meta) = fs::metadata(path) else {
+                    return false;
+                };
                 let (secs, nanos, size, _) = file_stamp(&meta);
                 stamps.get(path) != Some(&(secs, nanos, size))
             })
@@ -439,9 +481,7 @@ pub fn warm() -> SearchStatus {
     // 并行重提取
     let fresh: Vec<(PathBuf, SessionEntry)> = stale
         .par_iter()
-        .filter_map(|(path, pid, sid)| {
-            extract_file(path, pid, sid).map(|e| (path.clone(), e))
-        })
+        .filter_map(|(path, pid, sid)| extract_file(path, pid, sid).map(|e| (path.clone(), e)))
         .collect();
 
     // 删除已消失的会话（文件被删/项目移除）
@@ -487,7 +527,12 @@ pub fn status() -> SearchStatus {
 /// 获取会话命中消息的完整文本 + 前后 context_n 条上下文（喂给归纳 Agent）。
 /// 等价于 recall 的 ±3 上下文窗口。返回 (role_label, full_text) 列表。
 #[allow(dead_code)] // lib 侧使用，部分 bin 编译时未引用
-pub fn get_hit_context(session_id: &str, terms: &[Regex], context_n: usize, max_chars: usize) -> Vec<(String, String)> {
+pub fn get_hit_context(
+    session_id: &str,
+    terms: &[Regex],
+    context_n: usize,
+    max_chars: usize,
+) -> Vec<(String, String)> {
     with_state(|s| {
         let entry = s.entries.values().find(|e| e.session_id == session_id);
         let entry = match entry {
@@ -531,7 +576,9 @@ pub fn get_hit_context(session_id: &str, terms: &[Regex], context_n: usize, max_
             let text = msg.text.clone();
             total_chars += text.len();
             result.push((label, text));
-            if total_chars > max_chars { break; }
+            if total_chars > max_chars {
+                break;
+            }
         }
         result
     })
@@ -685,7 +732,11 @@ pub fn query(raw_query: &str, filter: &SearchFilter) -> SearchResult {
     let t0 = std::time::Instant::now();
     let terms = compile_terms(raw_query);
     if terms.is_empty() {
-        return SearchResult { hits: vec![], total_hits: 0, elapsed_ms: 0 };
+        return SearchResult {
+            hits: vec![],
+            total_hits: 0,
+            elapsed_ms: 0,
+        };
     }
 
     if !with_state(|s| s.ready) {
@@ -806,10 +857,16 @@ fn match_session(
     // 片段排序：user 消息加权（人的问题/需求比 AI 回复有更高搜索价值），
     // 再按命中词数、位置（靠后=更新）排序
     let user_bonus = |idx: usize| -> usize {
-        if entry.messages[idx].role == 0 { 100 } else { 0 }
+        if entry.messages[idx].role == 0 {
+            100
+        } else {
+            0
+        }
     };
     msg_scores.sort_unstable_by(|a, b| {
-        (b.1 + user_bonus(b.0)).cmp(&(a.1 + user_bonus(a.0))).then(b.0.cmp(&a.0))
+        (b.1 + user_bonus(b.0))
+            .cmp(&(a.1 + user_bonus(a.0)))
+            .then(b.0.cmp(&a.0))
     });
     let total_matches = msg_scores.len();
     let snippets: Vec<SearchSnippet> = msg_scores
@@ -830,17 +887,13 @@ fn match_session(
     let display_title = if !title.is_empty() {
         Some(title.to_string())
     } else {
-        entry
-            .messages
-            .iter()
-            .find(|m| m.role == 0)
-            .map(|m| {
-                let mut t: String = m.text.chars().take(60).collect();
-                if m.text.chars().count() > 60 {
-                    t.push('…');
-                }
-                t
-            })
+        entry.messages.iter().find(|m| m.role == 0).map(|m| {
+            let mut t: String = m.text.chars().take(60).collect();
+            if m.text.chars().count() > 60 {
+                t.push('…');
+            }
+            t
+        })
     };
 
     Some(SearchHit {
@@ -932,8 +985,18 @@ mod tests {
             size: 0,
             last_modified: 0.0,
             messages: vec![
-                SearchMessage { uuid: Some("u1".into()), role: 0, timestamp: None, text: "流式渲染出现闪烁".into() },
-                SearchMessage { uuid: Some("a1".into()), role: 1, timestamp: None, text: "定位到 useStreaming 的问题".into() },
+                SearchMessage {
+                    uuid: Some("u1".into()),
+                    role: 0,
+                    timestamp: None,
+                    text: "流式渲染出现闪烁".into(),
+                },
+                SearchMessage {
+                    uuid: Some("a1".into()),
+                    role: 1,
+                    timestamp: None,
+                    text: "定位到 useStreaming 的问题".into(),
+                },
             ],
         };
         let terms = compile_terms("闪烁 USESTREAMING");
@@ -989,7 +1052,10 @@ mod tests {
             status.indexed_sessions,
             text_bytes as f64 / 1e6
         );
-        println!("query 死锁: {q1:?} → {} hits · query 流式+闪烁: {q2:?} → {} hits", r1.total_hits, r2.total_hits);
+        println!(
+            "query 死锁: {q1:?} → {} hits · query 流式+闪烁: {q2:?} → {} hits",
+            r1.total_hits, r2.total_hits
+        );
         fs::remove_dir_all(&tmp).ok();
     }
 

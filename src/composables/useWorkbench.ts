@@ -4,6 +4,8 @@ import i18n from '../locales'
 import { evictSessionTransients } from './useStreaming'
 import { useRunners } from './useRunners'
 import { readMigratedStorage } from '../utils/storageMigrate'
+import { resolveSessionRef } from '@/engines/directory'
+import type { ProjectRef, SessionRef } from '@/engines/types'
 
 /**
  * 工作台状态模型（v2.1.0 FR-001/002/004 + NFR-002）
@@ -46,6 +48,13 @@ export interface WorkbenchTab {
   race?: RaceConfig
 }
 
+export interface EngineDraft {
+  reference: SessionRef
+  project: ProjectRef
+  engineName: string
+  cwd: string
+}
+
 interface WorkbenchState {
   tabs: WorkbenchTab[]
   activeTabId: string
@@ -59,6 +68,8 @@ interface WorkbenchState {
    * 落盘前各视图据此合成「新会话」占位显示。
    */
   drafts: Record<string, string>
+  /** 已由通用 runtime 创建、但 source 尚未返回摘要的新会话。 */
+  engineDrafts: Record<string, EngineDraft>
   /**
    * 分叉意图(分叉出的 sessionId → 源 sessionId)。分叉不再预复制 JSONL,
    * 首条消息由 Rust 端以 --resume 源 --fork-session --session-id 新 spawn,
@@ -144,7 +155,7 @@ function createTabObject(seq: number): WorkbenchTab {
 
 function createInitialState(): WorkbenchState {
   const tab = createTabObject(1)
-  return { tabs: [tab], activeTabId: tab.id, tabSeq: 1, openSeq: 0, drafts: {}, forkIntents: {} }
+  return { tabs: [tab], activeTabId: tab.id, tabSeq: 1, openSeq: 0, drafts: {}, engineDrafts: {}, forkIntents: {} }
 }
 
 // ---- 持久化(NFR-002):任一变更后同步落盘;损坏时回退默认并提示 ----
@@ -239,6 +250,19 @@ function loadState(): WorkbenchState | null {
         if (typeof v === 'string' && v) drafts[k] = sanitizeCwd(v)
       }
     }
+    const engineDrafts: Record<string, EngineDraft> = {}
+    if (parsed.engineDrafts && typeof parsed.engineDrafts === 'object' && !Array.isArray(parsed.engineDrafts)) {
+      for (const [key, value] of Object.entries(parsed.engineDrafts)) {
+        const draft = value as Partial<EngineDraft>
+        if (draft && typeof draft.cwd === 'string' && typeof draft.engineName === 'string'
+          && draft.reference && typeof draft.reference.nativeId === 'string'
+          && draft.reference.engine && typeof draft.reference.engine.engineId === 'string'
+          && typeof draft.reference.engine.instanceId === 'string'
+          && draft.project && typeof draft.project.nativeId === 'string') {
+          engineDrafts[key] = { ...draft, cwd: sanitizeCwd(draft.cwd) } as EngineDraft
+        }
+      }
+    }
     // forkIntents 同为增量字段,同款宽松解析
     const forkIntents: Record<string, string> = {}
     if (parsed.forkIntents && typeof parsed.forkIntents === 'object' && !Array.isArray(parsed.forkIntents)) {
@@ -252,6 +276,7 @@ function loadState(): WorkbenchState | null {
       tabSeq: typeof parsed.tabSeq === 'number' ? parsed.tabSeq : tabs.length,
       openSeq: typeof parsed.openSeq === 'number' ? parsed.openSeq : 0,
       drafts,
+      engineDrafts,
       forkIntents,
     }
   } catch (_) {
@@ -537,6 +562,15 @@ function createDraftSession(cwd: string): string {
   return sessionId
 }
 
+function registerEngineDraft(sessionId: string, draft: EngineDraft) {
+  state.value.engineDrafts[sessionId] = draft
+  openSession(sessionId)
+}
+
+function engineDraft(sessionId: string): EngineDraft | null {
+  return state.value.engineDrafts[sessionId] ?? null
+}
+
 /** 草稿会话的 cwd(非草稿返回 null)。各视图据此合成「新会话」占位 */
 function draftCwd(sessionId: string): string | null {
   return state.value.drafts[sessionId] ?? null
@@ -564,6 +598,11 @@ function pruneDrafts(isPersisted: (sessionId: string) => boolean) {
   for (const sid of Object.keys(state.value.drafts)) {
     if (isPersisted(sid) || !findSession(sid)) {
       delete state.value.drafts[sid]
+    }
+  }
+  for (const sid of Object.keys(state.value.engineDrafts)) {
+    if (isPersisted(sid) || !findSession(sid)) {
+      delete state.value.engineDrafts[sid]
     }
   }
   for (const sid of Object.keys(state.value.forkIntents)) {
@@ -699,10 +738,13 @@ function updateColumnSize(tabId: string, index: number, desiredLeftWidth: number
 function teardownSession(sessionId: string) {
   const stillReferenced = state.value.tabs.some(t => t.sessionIds.includes(sessionId))
   if (!stillReferenced) {
-    invoke('close_session', { sessionId }).catch(() => {})
+    const engineSession = resolveSessionRef(sessionId) ?? state.value.engineDrafts[sessionId]?.reference
+    if (engineSession) invoke('engine_close_session', { session: engineSession }).catch(() => {})
+    else invoke('close_session', { sessionId }).catch(() => {})
     // 会话彻底离开工作台 = 关闭语义:其挂载的运行命令一并停止(切走/收起不触发)
     useRunners().stopAllForSession(sessionId).catch(() => {})
     evictSessionTransients(sessionId)
+    delete state.value.engineDrafts[sessionId]
   }
 }
 
@@ -739,6 +781,8 @@ export function useWorkbench() {
     reorderSessions,
     openSession,
     createDraftSession,
+    registerEngineDraft,
+    engineDraft,
     draftCwd,
     registerFork,
     forkSourceOf,

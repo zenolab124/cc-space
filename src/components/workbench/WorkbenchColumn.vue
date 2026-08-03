@@ -16,9 +16,12 @@ import { displayTitle } from '@/types'
 import { fileName } from '@/utils/path'
 import { collectSessionCapabilities } from '@/features'
 import { useSessionMeta } from '@/composables/useSessionMeta'
+import { usesNativeSessionSurface } from '@/engines/integration'
+import type { SessionSummary } from '@/types'
 
 const { getMeta } = useSessionMeta()
 import SessionDetail from '../SessionDetail.vue'
+import EngineSessionDetail from '../engine/EngineSessionDetail.vue'
 
 const props = defineProps<{
   column: WorkbenchColumn
@@ -33,7 +36,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const { projects } = useProjects()
-const { collapseColumn, removeSession, removeRaceLane, draftCwd, findLane, state, openSession, createDraftSession, registerFork, forkSourceOf } = useWorkbench()
+const { collapseColumn, removeSession, removeRaceLane, draftCwd, engineDraft, findLane, state, openSession, createDraftSession, registerFork, forkSourceOf } = useWorkbench()
 
 provide('columnIndex', computed(() => props.index))
 provide('tabId', computed(() => props.tabId))
@@ -45,6 +48,36 @@ const lane = computed(() => tab.value ? findLane(tab.value, props.column.session
 const isRace = computed(() => !!lane.value)
 
 const rcLoading = ref(false)
+const sessionSummary = computed<SessionSummary | null>(() => {
+  const persisted = projects.value
+    .flatMap(project => project.sessions)
+    .find(session => session.id === props.column.sessionId)
+  if (persisted) return persisted
+  const draft = engineDraft(props.column.sessionId)
+  if (!draft) return null
+  return {
+    id: props.column.sessionId,
+    native_id: draft.reference.nativeId,
+    reference: draft.reference,
+    project_reference: draft.project,
+    engine: draft.reference.engine,
+    engine_name: draft.engineName,
+    title: t('session.newSessionTitle'),
+    first_user_message: null,
+    model: null,
+    git_branch: null,
+    cwd: draft.cwd,
+    version: null,
+    timestamp: null,
+    last_modified: 0,
+    total_tokens: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    subagent_tokens: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    file_size: 0,
+    message_count: 0,
+    context_window: null,
+  }
+})
+const useNativeDetail = computed(() => !sessionSummary.value?.engine || usesNativeSessionSurface(sessionSummary.value.engine))
 
 async function onToggleRC() {
   const enabling = !stream.value.rcActive
@@ -104,7 +137,7 @@ const projectName = computed(() => {
       return fileName(p.display_path)
   }
   const cwd = draftCwd(props.column.sessionId)
-  return cwd ? fileName(cwd) : null
+  return cwd ? fileName(cwd) : engineDraft(props.column.sessionId)?.cwd ? fileName(engineDraft(props.column.sessionId)!.cwd) : null
 })
 
 const title = computed(() => {
@@ -112,7 +145,7 @@ const title = computed(() => {
     const s = p.sessions.find(s => s.id === props.column.sessionId)
     if (s) return displayTitle(s, getMeta(s.id)?.title)
   }
-  if (draftCwd(props.column.sessionId)) return t('session.newSessionTitle')
+  if (draftCwd(props.column.sessionId) || engineDraft(props.column.sessionId)) return t('session.newSessionTitle')
   return props.column.sessionId.slice(0, 8)
 })
 
@@ -181,6 +214,7 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         <span class="flex-1 min-w-0 truncate text-xs font-semibold">{{ title }}</span>
       </template>
       <button
+        v-if="useNativeDetail"
         :disabled="rcLoading"
         class="icon-btn icon-btn-sm disabled:opacity-40"
         :class="stream.rcActive ? 'border-primary! text-primary!' : ''"
@@ -191,6 +225,7 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         <span class="i-carbon-remote-connection w-3 h-3" />
       </button>
       <button
+        v-if="useNativeDetail"
         class="icon-btn icon-btn-sm"
         :class="settings.chrome ? 'border-primary! text-primary!' : ''"
         v-tooltip="settings.chrome ? $t('workbench.column.chromeEnabled') : $t('workbench.column.chromeEnable')"
@@ -200,7 +235,7 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         <span class="i-app-chrome w-3 h-3" />
       </button>
       <!-- 普通模式:赛马 + 分叉 + 新建 + 收起 + 关闭 -->
-      <template v-if="!isRace">
+      <template v-if="!isRace && useNativeDetail">
         <button
           class="icon-btn icon-btn-sm"
           v-tooltip="$t('workbench.race.startRace')"
@@ -242,6 +277,24 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
           <span class="i-carbon-close w-3 h-3" />
         </button>
       </template>
+      <template v-else-if="!isRace">
+        <button
+          class="icon-btn icon-btn-sm"
+          v-tooltip="$t('workbench.column.collapseToRail')"
+          @pointerdown.stop
+          @click="onCollapse"
+        >
+          <span class="i-carbon-chevron-left w-3 h-3" />
+        </button>
+        <button
+          class="icon-btn icon-btn-sm icon-btn-danger"
+          v-tooltip="$t('workbench.column.closeExit')"
+          @pointerdown.stop
+          @click="onClose"
+        >
+          <span class="i-carbon-close w-3 h-3" />
+        </button>
+      </template>
       <!-- 赛马模式:关闭赛道 -->
       <button
         v-else
@@ -255,7 +308,8 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
     </div>
 
     <div class="flex-1 min-h-0">
-      <SessionDetail mode="workbench" :session-id="column.sessionId" :hide-input="isRace" />
+      <SessionDetail v-if="useNativeDetail" mode="workbench" :session-id="column.sessionId" :hide-input="isRace" />
+      <EngineSessionDetail v-else-if="sessionSummary" :session="sessionSummary" mode="workbench" :hide-input="isRace" />
     </div>
   </div>
 </template>

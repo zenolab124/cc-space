@@ -11,6 +11,8 @@ pub struct FixtureEngine {
     descriptor: EngineDescriptor,
     project: CoreProject,
     session: CoreSessionSummary,
+    second_project: CoreProject,
+    second_session: CoreSessionSummary,
     timeline: Vec<ConversationRecord>,
     event_sinks: Mutex<Vec<RuntimeEventSink>>,
     sequence: AtomicU64,
@@ -21,9 +23,12 @@ impl FixtureEngine {
         let instance = EngineInstanceId::new("fixture", "default").unwrap();
         let project_ref = ProjectRef::new(instance.clone(), "fixture-project").unwrap();
         let session_ref = SessionRef::new(instance.clone(), "fixture-session").unwrap();
+        let second_project_ref = ProjectRef::new(instance.clone(), "fixture-project-two").unwrap();
+        let second_session_ref = SessionRef::new(instance.clone(), "fixture-session-two").unwrap();
         let descriptor = EngineDescriptor {
             instance: instance.clone(),
             display_name: "Fixture Engine".into(),
+            enabled: true,
             capabilities: EngineCapabilities {
                 history: HistoryCapabilities {
                     pagination: HistoryPagination::Native,
@@ -47,6 +52,12 @@ impl FixtureEngine {
                 }),
                 facets: FacetCapabilities::default(),
             },
+            ui: EngineUiIntegration {
+                identity: UiIdentityMode::Structured,
+                session_surface: SessionSurface::Standard,
+                install_guide_url: None,
+                configuration_guide_url: None,
+            },
         };
         let project = CoreProject {
             reference: project_ref.clone(),
@@ -69,7 +80,27 @@ impl FixtureEngine {
                 output_tokens: 5,
                 total_tokens: Some(15),
                 cached_input_tokens: None,
+                cache_creation_input_tokens: None,
             }),
+            source_meta: SourceMetadata::default(),
+        };
+        let second_project = CoreProject {
+            reference: second_project_ref.clone(),
+            display_name: "Fixture Project Two".into(),
+            display_path: Some("/workspace/fixture-two".into()),
+            session_count: 1,
+            last_active: Some("2026-01-02T00:00:00Z".into()),
+        };
+        let second_session = CoreSessionSummary {
+            reference: second_session_ref,
+            project: second_project_ref,
+            title: Some("Second fixture session".into()),
+            preview: Some("Second synthetic conversation".into()),
+            cwd: Some("/workspace/fixture-two".into()),
+            model: Some("fixture-model".into()),
+            created_at: Some("2026-01-02T00:00:00Z".into()),
+            updated_at: Some("2026-01-02T00:00:01Z".into()),
+            usage: None,
             source_meta: SourceMetadata::default(),
         };
         let timeline = vec![ConversationRecord {
@@ -105,6 +136,8 @@ impl FixtureEngine {
             descriptor,
             project,
             session,
+            second_project,
+            second_session,
             timeline,
             event_sinks: Mutex::new(Vec::new()),
             sequence: AtomicU64::new(0),
@@ -131,8 +164,9 @@ impl FixtureEngine {
         let sinks = self
             .event_sinks
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        for sink in sinks.iter() {
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        for sink in &sinks {
             sink(envelope.clone());
         }
     }
@@ -165,9 +199,14 @@ impl EngineAdapter for FixtureEngine {
             Ok(EngineHealth {
                 instance: self.descriptor.instance.clone(),
                 status: EngineHealthStatus::Available,
+                installed: true,
+                authenticated: Some(true),
                 version: Some("fixture".into()),
+                version_supported: Some(true),
+                executable_path: None,
                 source: CapabilityHealth::available(),
                 runtime: CapabilityHealth::available(),
+                diagnostics: Vec::new(),
             })
         })
     }
@@ -182,11 +221,16 @@ impl EngineAdapter for FixtureEngine {
 }
 
 impl SessionSource for FixtureEngine {
-    fn list_projects(&self, _query: ProjectQuery) -> EngineFuture<'_, ProjectPage> {
+    fn list_projects(&self, query: ProjectQuery) -> EngineFuture<'_, ProjectPage> {
         Box::pin(async move {
+            let (projects, next_cursor) = paginate(
+                vec![self.project.clone(), self.second_project.clone()],
+                query.cursor,
+                query.limit,
+            );
             Ok(ProjectPage {
-                projects: vec![self.project.clone()],
-                next_cursor: None,
+                projects,
+                next_cursor,
             })
         })
     }
@@ -194,20 +238,24 @@ impl SessionSource for FixtureEngine {
     fn list_sessions(
         &self,
         project: ProjectRef,
-        _query: SessionQuery,
+        query: SessionQuery,
     ) -> EngineFuture<'_, SessionPage> {
         Box::pin(async move {
-            if project == self.project.reference {
-                Ok(SessionPage {
-                    sessions: vec![self.session.clone()],
-                    next_cursor: None,
-                })
+            let sessions = if project == self.project.reference {
+                vec![self.session.clone()]
+            } else if project == self.second_project.reference {
+                vec![self.second_session.clone()]
             } else {
-                Err(EngineError::new(
+                return Err(EngineError::new(
                     EngineErrorKind::NotFound,
                     "fixture project not found",
-                ))
-            }
+                ));
+            };
+            let (sessions, next_cursor) = paginate(sessions, query.cursor, query.limit);
+            Ok(SessionPage {
+                sessions,
+                next_cursor,
+            })
         })
     }
 
@@ -218,15 +266,24 @@ impl SessionSource for FixtureEngine {
     ) -> EngineFuture<'_, ConversationPage> {
         Box::pin(async move {
             self.owns_session(&session)?;
+            let timeline: Vec<_> = self
+                .timeline
+                .iter()
+                .cloned()
+                .map(|mut record| {
+                    record.session = session.clone();
+                    record
+                })
+                .collect();
             let start = page
                 .cursor
                 .as_deref()
                 .and_then(|cursor| cursor.parse::<usize>().ok())
                 .unwrap_or(0);
-            let end = (start + page.limit).min(self.timeline.len());
-            let next_cursor = (end < self.timeline.len()).then(|| end.to_string());
+            let end = (start + page.limit).min(timeline.len());
+            let next_cursor = (end < timeline.len()).then(|| end.to_string());
             Ok(ConversationPage {
-                records: self.timeline[start..end].to_vec(),
+                records: timeline[start..end].to_vec(),
                 next_cursor,
             })
         })
@@ -239,9 +296,19 @@ impl SessionSource for FixtureEngine {
     fn build_search_document(&self, session: SessionRef) -> EngineFuture<'_, SearchDocument> {
         Box::pin(async move {
             self.owns_session(&session)?;
+            if session.native_id() == "fixture-failure-session" {
+                return Err(EngineError::new(
+                    EngineErrorKind::Protocol,
+                    "fixture simulated source failure",
+                ));
+            }
             Ok(SearchDocument {
+                title: if session == self.second_session.reference {
+                    self.second_session.title.clone()
+                } else {
+                    self.session.title.clone()
+                },
                 session,
-                title: self.session.title.clone(),
                 text: "Fixture response Fixture reasoning fixture_tool".into(),
             })
         })
@@ -264,11 +331,31 @@ impl SessionSource for FixtureEngine {
                 resume: ActionAvailability::available(),
                 fork: ActionAvailability::unavailable("fixture.noFork"),
                 send: ActionAvailability::available(),
+                steer: ActionAvailability::available(),
                 interrupt: ActionAvailability::available(),
                 open_cwd: ActionAvailability::available(),
             })
         })
     }
+}
+
+fn paginate<T>(
+    values: Vec<T>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> (Vec<T>, Option<String>) {
+    let start = cursor
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(values.len());
+    let end = start
+        .saturating_add(limit.unwrap_or(values.len()).max(1))
+        .min(values.len());
+    let next_cursor = (end < values.len()).then(|| end.to_string());
+    (
+        values.into_iter().skip(start).take(end - start).collect(),
+        next_cursor,
+    )
 }
 
 impl AgentRuntime for FixtureEngine {
@@ -450,14 +537,22 @@ mod tests {
         let mut registry = EngineRegistry::new();
         registry.register(engine).unwrap();
 
-        let projects = resolve_ready(
-            registry
-                .source_for(&session)
-                .unwrap()
-                .list_projects(ProjectQuery::default()),
-        )
+        let first_page = resolve_ready(registry.source_for(&session).unwrap().list_projects(
+            ProjectQuery {
+                cursor: None,
+                limit: Some(1),
+            },
+        ))
         .unwrap();
-        assert_eq!(projects.projects.len(), 1);
+        assert_eq!(first_page.projects.len(), 1);
+        let second_page = resolve_ready(registry.source_for(&session).unwrap().list_projects(
+            ProjectQuery {
+                cursor: first_page.next_cursor,
+                limit: Some(1),
+            },
+        ))
+        .unwrap();
+        assert_eq!(second_page.projects.len(), 1);
         assert!(registry.runtime_for(&session).is_ok());
     }
 
@@ -470,6 +565,37 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.kind, EngineErrorKind::Conflict);
+    }
+
+    #[test]
+    fn disabled_registration_keeps_catalog_without_constructing_runtime_access() {
+        let engine = FixtureEngine::new();
+        let instance = engine.descriptor.instance.clone();
+        let mut registry = EngineRegistry::new();
+        registry.register_disabled(engine.descriptor()).unwrap();
+
+        let descriptor = registry.descriptor(&instance).unwrap();
+        assert!(!descriptor.enabled);
+        assert!(!registry.is_enabled(&instance));
+        assert_eq!(
+            registry.adapter(&instance).err().unwrap().kind,
+            EngineErrorKind::Unavailable
+        );
+    }
+
+    #[test]
+    fn failed_initialization_keeps_an_enabled_but_unavailable_catalog_entry() {
+        let engine = FixtureEngine::new();
+        let instance = engine.descriptor.instance.clone();
+        let mut registry = EngineRegistry::new();
+        registry.register_unavailable(engine.descriptor()).unwrap();
+
+        assert!(registry.is_enabled(&instance));
+        assert!(!registry.is_available(&instance));
+        assert_eq!(
+            registry.adapter(&instance).err().unwrap().message,
+            "engine instance failed to initialize"
+        );
     }
 
     #[test]
@@ -495,6 +621,18 @@ mod tests {
         assert!(search.text.contains("fixture_tool"));
         assert!(actions.send.available);
         assert_eq!(asset.bytes, b"fixture asset");
+    }
+
+    #[test]
+    fn source_contract_keeps_failures_structured() {
+        let engine = FixtureEngine::new();
+        let failure = SessionRef::new(
+            engine.descriptor.instance.clone(),
+            "fixture-failure-session",
+        )
+        .unwrap();
+        let error = resolve_ready(engine.build_search_document(failure)).unwrap_err();
+        assert_eq!(error.kind, EngineErrorKind::Protocol);
     }
 
     #[test]

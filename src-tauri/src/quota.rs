@@ -276,6 +276,19 @@ fn load_bundle(intent: RefreshIntent) -> QuotaBundle {
     }
 }
 
+/// 引擎层按 provider 隔离读取配额，避免通用 IPC 依赖聚合 bundle 的固定顺序。
+pub fn load_provider_quota(provider_id: &str, force_refresh: bool) -> Option<ProviderQuota> {
+    let intent = if force_refresh {
+        RefreshIntent::Immediate
+    } else {
+        RefreshIntent::Normal
+    };
+    PROVIDERS
+        .iter()
+        .find(|provider| provider.id() == provider_id)
+        .map(|provider| load_provider(*provider, intent))
+}
+
 #[tauri::command]
 pub fn get_quota_bundle() -> QuotaBundle {
     load_bundle(RefreshIntent::Normal)

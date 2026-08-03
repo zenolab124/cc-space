@@ -149,9 +149,7 @@ fn parse_request(req: &Request<Vec<u8>>) -> Option<ParsedRequest> {
     let img_index_str = &segments[3];
 
     // 白名单校验（防目录穿越）
-    if !is_safe_segment(project_id)
-        || !is_safe_segment(session_id)
-        || !is_safe_segment(record_uuid)
+    if !is_safe_segment(project_id) || !is_safe_segment(session_id) || !is_safe_segment(record_uuid)
     {
         return None;
     }
@@ -384,7 +382,10 @@ fn has_exif_app1(bytes: &[u8]) -> bool {
         }
         let seg_len = ((bytes[i + 2] as usize) << 8) | bytes[i + 3] as usize;
         if marker == 0xE1 {
-            return bytes.get(i + 4..i + 10).map(|m| m == b"Exif\0\0").unwrap_or(false);
+            return bytes
+                .get(i + 4..i + 10)
+                .map(|m| m == b"Exif\0\0")
+                .unwrap_or(false);
         }
         i += 2 + seg_len;
     }
@@ -420,6 +421,31 @@ fn resolve_image(parsed: &ParsedRequest) -> Option<CachedImage> {
         c.put(cache_key, img.clone());
     }
     Some(img)
+}
+
+/// 中立 Engine asset 路由对 Claude 图片的兼容入口。
+/// 仅返回解码后的原始字节，不暴露 projects 目录拼接给 Core。
+pub fn resolve_engine_image(
+    project_id: &str,
+    session_id: &str,
+    record_uuid: &str,
+    img_index: usize,
+) -> Option<(String, Vec<u8>)> {
+    if !is_safe_segment(project_id) || !is_safe_segment(session_id) || !is_safe_segment(record_uuid)
+    {
+        return None;
+    }
+    let jsonl_path = projects_dir()
+        .join(project_id)
+        .join(format!("{session_id}.jsonl"));
+    let parsed = ParsedRequest {
+        cache_scope: jsonl_path.to_string_lossy().to_string(),
+        jsonl_path,
+        record_uuid: record_uuid.to_string(),
+        img_index,
+        full: true,
+    };
+    resolve_image(&parsed).map(|image| (image.media_type, image.bytes))
 }
 
 /// 200 响应（含 Content-Type 与长缓存头）
@@ -586,7 +612,10 @@ mod tests {
             );
         }
         let mut c = 0usize;
-        assert!(walk_blocks_find(&raw, 5, &mut c).is_none(), "两侧图片总数必须一致");
+        assert!(
+            walk_blocks_find(&raw, 5, &mut c).is_none(),
+            "两侧图片总数必须一致"
+        );
     }
 
     /// 白名单放宽后的回归：非 ASCII 段（中文项目目录）放行，穿越与残留 % 仍拒
@@ -659,7 +688,13 @@ mod tests {
 
     /// 构造与前端 convertFileSrc(encodeURIComponent(path), 'ccimg') 完全一致的请求。
     /// 关键：四段间的 `/` 被 encodeURIComponent 编成 `%2F`，整条 path 是单个 segment。
-    fn ccimg_request(project: &str, session: &str, uuid: &str, idx: u32, agent: Option<&str>) -> Request<Vec<u8>> {
+    fn ccimg_request(
+        project: &str,
+        session: &str,
+        uuid: &str,
+        idx: u32,
+        agent: Option<&str>,
+    ) -> Request<Vec<u8>> {
         let inner = format!("{}/{}/{}/{}", project, session, uuid, idx).replace('/', "%2F");
         let url = match agent {
             Some(a) => format!("ccimg://localhost/{}?agent={}", inner, a),

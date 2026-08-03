@@ -6,10 +6,11 @@ import { useAgentSearch } from '@/composables/useAgentSearch'
 import { useProjects } from '@/composables/useProjects'
 import { useUiState } from '@/composables/useUiState'
 import { fileName } from '@/utils/path'
+import { instanceKey } from '@/engines/identity'
 
 const { t } = useI18n()
 const {
-  query, days30, titleOnly, projectFilter,
+  query, days30, titleOnly, projectFilter, engineFilter,
   result, searching, searchError, indexStatus,
   runSearch, refreshStatus, goToHit,
 } = useSearch()
@@ -26,6 +27,14 @@ const inputEl = ref<HTMLInputElement | null>(null)
 const projectMenuOpen = ref(false)
 /** 搜索模式：keyword=关键词(默认) / agent=智能搜索 */
 const mode = ref<'keyword' | 'agent'>('keyword')
+
+const engineOptions = computed(() => {
+  const options = new Map<string, string>()
+  for (const project of projects.value) {
+    if (project.engine) options.set(instanceKey(project.engine), project.engine_name ?? project.engine.engineId)
+  }
+  return [...options].map(([id, name]) => ({ id, name }))
+})
 
 // 进域时聚焦搜索框 + 刷新索引状态
 watch(activeSection, async (s) => {
@@ -149,6 +158,16 @@ function onSubmit() {
         <span class="w-px h-3.5 bg-border mx-1" />
 
         <template v-if="mode === 'keyword'">
+          <button
+            v-for="engine in engineOptions"
+            :key="engine.id"
+            class="px-2 py-0.5 text-xs rounded transition-colors"
+            :class="engineFilter === engine.id ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground'"
+            @click="engineFilter = engineFilter === engine.id ? null : engine.id"
+          >{{ engine.name }}</button>
+
+          <span v-if="engineOptions.length" class="w-px h-3.5 bg-border mx-1" />
+
           <div class="relative">
             <button
               class="px-2 py-0.5 text-xs rounded transition-colors flex items-center gap-1"
@@ -257,6 +276,7 @@ function onSubmit() {
             <span v-if="hit.totalMatches > 0" class="text-xs text-muted-foreground shrink-0">
               {{ t('search.matchCount', { n: hit.totalMatches }) }}
             </span>
+            <span v-if="hit.engineName" class="ml-auto shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ hit.engineName }}</span>
           </div>
           <div class="mt-1.5 flex flex-col gap-1">
             <div

@@ -2,6 +2,11 @@ import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useSessions } from './useSessions'
 import { useUiState } from './useUiState'
+import { listEngines } from '@/engines/client'
+import { instanceKey } from '@/engines/identity'
+import { projectUiId, sessionUiId } from '@/engines/integration'
+import { resolveSession } from '@/engines/directory'
+import type { EngineInstanceId, SessionRef } from '@/engines/types'
 
 /** 全局搜索状态（模块级单例，同 useHomeStats 模式）*/
 
@@ -20,6 +25,8 @@ export interface SearchHit {
   matchedIn: string[]
   totalMatches: number
   snippets: SearchSnippet[]
+  engineName?: string
+  engineInstance?: EngineInstanceId
 }
 
 export interface SearchResult {
@@ -40,6 +47,7 @@ const query = ref('')
 const days30 = ref(false)
 const titleOnly = ref(false)
 const projectFilter = ref<string | null>(null)
+const engineFilter = ref<string | null>(null)
 
 const result = ref<SearchResult | null>(null)
 const searching = ref(false)
@@ -60,17 +68,43 @@ async function runSearch() {
     return
   }
   const mySeq = ++seq
+  const startedAt = performance.now()
   searching.value = true
   searchError.value = null
   try {
-    const r = await invoke<SearchResult>('search_query', {
-      query: q,
-      filter: {
-        projectId: projectFilter.value,
-        days: days30.value ? 30 : null,
-        titleOnly: titleOnly.value,
-      },
-    })
+    const descriptors = await listEngines()
+    const selected = descriptors.filter(descriptor => descriptor.enabled
+      && (!engineFilter.value || instanceKey(descriptor.instance) === engineFilter.value))
+    const tasks: Array<Promise<SearchHit[]>> = []
+    for (const descriptor of selected) {
+      tasks.push(invoke<Array<{ session: SessionRef; title: string | null; snippet: string }>>('engine_search', {
+        query: { text: q, instance: descriptor.instance, limit: 100 },
+      }).then(hits => hits.flatMap(hit => {
+        const id = sessionUiId(hit.session)
+        const summary = resolveSession(id)
+        if (projectFilter.value && (!summary?.project_reference || projectUiId(summary.project_reference) !== projectFilter.value)) return []
+        if (days30.value && summary && summary.last_modified * 1000 < Date.now() - 30 * 86400_000) return []
+        if (titleOnly.value && !(hit.title ?? '').toLocaleLowerCase().includes(q.toLocaleLowerCase())) return []
+        return [{
+          sessionId: id,
+          projectId: summary?.project_reference ? projectUiId(summary.project_reference) : '',
+          title: hit.title,
+          lastModified: summary?.last_modified ?? 0,
+          matchedIn: ['content'],
+          totalMatches: 1,
+          snippets: [{ uuid: null, role: 1, timestamp: null, text: hit.snippet }],
+          engineName: descriptor.displayName,
+          engineInstance: descriptor.instance,
+        }]
+      })))
+    }
+    const settled = await Promise.allSettled(tasks)
+    if (settled.length > 0 && settled.every(item => item.status === 'rejected')) {
+      throw (settled[0] as PromiseRejectedResult).reason
+    }
+    const hits = settled.flatMap(item => item.status === 'fulfilled' ? item.value : [])
+      .sort((left, right) => right.lastModified - left.lastModified)
+    const r: SearchResult = { hits, totalHits: hits.length, elapsedMs: Math.round(performance.now() - startedAt) }
     if (mySeq !== seq) return // 竞态：只接受最新请求
     result.value = r
     // query 内部懒热(首查即首建),搜完顺手刷状态让"构建中"标签自愈为就绪
@@ -88,7 +122,7 @@ watch(query, () => {
   if (debounceTimer) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(runSearch, DEBOUNCE_MS)
 })
-watch([days30, titleOnly, projectFilter], runSearch)
+watch([days30, titleOnly, projectFilter, engineFilter], runSearch)
 
 async function refreshStatus() {
   try {
@@ -111,6 +145,7 @@ export function useSearch() {
     days30,
     titleOnly,
     projectFilter,
+    engineFilter,
     result,
     searching,
     searchError,

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -53,9 +53,18 @@ fn terminate_and_reap_startup_child(child: &mut Child) {
 /// 冲突级参数(--model/--effort/--chrome 等)刻意放行——追加在 Monet 参数之后,CLI 后者
 /// 覆盖语义让用户能强行改写,这正是逃生舱的意义
 const EXTRA_ARGS_DENYLIST: &[&str] = &[
-    "-p", "--print", "-c", "--continue",
-    "--output-format", "--input-format", "--session-id", "--resume", "--fork-session",
-    "--mcp-config", "--permission-prompt-tool", "--settings",
+    "-p",
+    "--print",
+    "-c",
+    "--continue",
+    "--output-format",
+    "--input-format",
+    "--session-id",
+    "--resume",
+    "--fork-session",
+    "--mcp-config",
+    "--permission-prompt-tool",
+    "--settings",
 ];
 
 /// 解析会话自定义 CLI 参数:shell 式分词(引号值支持),黑名单项连其值一并剔除。
@@ -89,32 +98,43 @@ mod extra_args_tests {
 
     #[test]
     fn keeps_normal_args() {
-        assert_eq!(parse_extra_args("--betas foo --fallback-model opus"),
-            vec!["--betas", "foo", "--fallback-model", "opus"]);
+        assert_eq!(
+            parse_extra_args("--betas foo --fallback-model opus"),
+            vec!["--betas", "foo", "--fallback-model", "opus"]
+        );
     }
 
     #[test]
     fn strips_denied_flag_with_value() {
-        assert_eq!(parse_extra_args("--output-format json --betas foo"),
-            vec!["--betas", "foo"]);
+        assert_eq!(
+            parse_extra_args("--output-format json --betas foo"),
+            vec!["--betas", "foo"]
+        );
     }
 
     #[test]
     fn strips_denied_eq_form() {
-        assert_eq!(parse_extra_args("--session-id=abc --betas foo"),
-            vec!["--betas", "foo"]);
+        assert_eq!(
+            parse_extra_args("--session-id=abc --betas foo"),
+            vec!["--betas", "foo"]
+        );
     }
 
     #[test]
     fn boolean_denied_flag_does_not_eat_next_flag() {
         // --print 是布尔 flag,其后的 --betas 不能被当作值误剔
-        assert_eq!(parse_extra_args("--print --betas foo"), vec!["--betas", "foo"]);
+        assert_eq!(
+            parse_extra_args("--print --betas foo"),
+            vec!["--betas", "foo"]
+        );
     }
 
     #[test]
     fn quoted_values_survive() {
-        assert_eq!(parse_extra_args(r#"--append-system-prompt "hello world""#),
-            vec!["--append-system-prompt", "hello world"]);
+        assert_eq!(
+            parse_extra_args(r#"--append-system-prompt "hello world""#),
+            vec!["--append-system-prompt", "hello world"]
+        );
     }
 
     #[test]
@@ -202,10 +222,7 @@ pub enum StreamEvent {
         output_tokens: Option<u64>,
     },
     /// 错误
-    Error {
-        session_id: String,
-        message: String,
-    },
+    Error { session_id: String, message: String },
 }
 
 /// 流式链路累计计数，供开发者性能 HUD 对比入口事件率与实际 IPC 批次率。
@@ -223,6 +240,49 @@ static STREAM_EMITTED_BATCHES: AtomicU64 = AtomicU64::new(0);
 static STREAM_EMITTED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static STREAM_MERGED_DELTAS: AtomicU64 = AtomicU64::new(0);
 static STREAM_EVENT_PUMP: OnceLock<SyncSender<StreamDispatch>> = OnceLock::new();
+
+#[derive(Clone)]
+pub enum StreamingObserverEvent {
+    Stream(StreamEvent),
+    Signal { name: String, payload: Value },
+}
+
+pub type StreamingObserver = Arc<dyn Fn(StreamingObserverEvent) + Send + Sync>;
+
+static STREAM_OBSERVERS: Mutex<Vec<(u64, StreamingObserver)>> = Mutex::new(Vec::new());
+static NEXT_STREAM_OBSERVER_ID: AtomicU64 = AtomicU64::new(1);
+
+pub struct StreamingObserverHandle(u64);
+
+impl Drop for StreamingObserverHandle {
+    fn drop(&mut self) {
+        STREAM_OBSERVERS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(id, _)| *id != self.0);
+    }
+}
+
+pub fn subscribe_observer(observer: StreamingObserver) -> StreamingObserverHandle {
+    let id = NEXT_STREAM_OBSERVER_ID.fetch_add(1, Ordering::Relaxed);
+    STREAM_OBSERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push((id, observer));
+    StreamingObserverHandle(id)
+}
+
+fn notify_observers(event: StreamingObserverEvent) {
+    let observers: Vec<_> = STREAM_OBSERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .map(|(_, observer)| Arc::clone(observer))
+        .collect();
+    for observer in observers {
+        observer(event.clone());
+    }
+}
 
 const STREAM_BATCH_WINDOW: Duration = Duration::from_millis(32);
 const STREAM_BATCH_CAPACITY: usize = 256;
@@ -259,7 +319,8 @@ impl StreamBatch {
             }
             let event_index = self.events.len();
             self.events.push(event);
-            self.last_delta_by_session.insert(session_id, (key, event_index));
+            self.last_delta_by_session
+                .insert(session_id, (key, event_index));
         } else {
             // 同会话的语义事件是严格屏障；不同会话仍可继续各自合并。
             self.last_delta_by_session.remove(&session_id);
@@ -278,7 +339,7 @@ impl StreamBatch {
 }
 
 impl StreamEvent {
-    fn session_id(&self) -> &str {
+    pub(crate) fn session_id(&self) -> &str {
         match self {
             Self::AssistantMessage { session_id, .. }
             | Self::BlockStart { session_id, .. }
@@ -290,7 +351,13 @@ impl StreamEvent {
     }
 
     fn delta_key(&self) -> Option<DeltaKey> {
-        let Self::BlockDelta { message_id, index, delta, .. } = self else {
+        let Self::BlockDelta {
+            message_id,
+            index,
+            delta,
+            ..
+        } = self
+        else {
             return None;
         };
         Some(DeltaKey {
@@ -319,8 +386,14 @@ fn delta_text_field(delta: &Value) -> Option<(&'static str, &str)> {
 /// 合并同一会话、message、block、delta 类型的字符串负载。
 fn merge_delta(target: &mut StreamEvent, incoming: &StreamEvent) -> bool {
     let (
-        StreamEvent::BlockDelta { delta: target_delta, .. },
-        StreamEvent::BlockDelta { delta: incoming_delta, .. },
+        StreamEvent::BlockDelta {
+            delta: target_delta,
+            ..
+        },
+        StreamEvent::BlockDelta {
+            delta: incoming_delta,
+            ..
+        },
     ) = (target, incoming)
     else {
         return false;
@@ -376,7 +449,10 @@ mod stream_batch_tests {
 
         assert_eq!(batch.len(), 7);
         assert_eq!(merged, 693);
-        assert!(batch.events.iter().all(|event| delta_text(event).len() == 100));
+        assert!(batch
+            .events
+            .iter()
+            .all(|event| delta_text(event).len() == 100));
     }
 
     #[test]
@@ -508,11 +584,16 @@ fn stream_event_sender(app: &AppHandle) -> &'static SyncSender<StreamDispatch> {
 /// 所有 WebView 流式消息的统一入口：先进入有界队列，再由单一线程跨会话合批发射。
 fn dispatch_stream_event(app: &AppHandle, event: StreamEvent) {
     STREAM_INPUT_EVENTS.fetch_add(1, Ordering::Relaxed);
+    notify_observers(StreamingObserverEvent::Stream(event.clone()));
     let _ = stream_event_sender(app).send(StreamDispatch::Event(event));
 }
 
 /// 与流内容存在先后关系的生命周期信号也走同一队列，保证 result/error 已先抵达前端。
 fn dispatch_stream_signal(app: &AppHandle, name: &'static str, payload: Value) {
+    notify_observers(StreamingObserverEvent::Signal {
+        name: name.to_string(),
+        payload: payload.clone(),
+    });
     let _ = stream_event_sender(app).send(StreamDispatch::Signal { name, payload });
 }
 
@@ -624,12 +705,7 @@ mod explicit_run_args_tests {
     #[test]
     fn adds_only_explicit_overrides() {
         let mut args = Vec::new();
-        append_explicit_run_args(
-            &mut args,
-            Some("claude-opus-5"),
-            Some("high"),
-            Some("plan"),
-        );
+        append_explicit_run_args(&mut args, Some("claude-opus-5"), Some("high"), Some("plan"));
         assert_eq!(
             args,
             vec![
@@ -654,7 +730,10 @@ mod explicit_run_args_tests {
     fn clearing_permission_override_requires_restart() {
         assert!(permission_change_requires_restart(Some("plan"), None));
         assert!(permission_change_requires_restart(Some("plan"), Some("")));
-        assert!(!permission_change_requires_restart(Some("plan"), Some("default")));
+        assert!(!permission_change_requires_restart(
+            Some("plan"),
+            Some("default")
+        ));
         assert!(!permission_change_requires_restart(None, None));
     }
 }
@@ -724,8 +803,9 @@ fn open_session(
         .unwrap_or_else(|| cwd.to_string());
     // 编码必须与 CLI 同规则(非字母数字一律 →'-')：仅替换 '/' 会漏掉 '.'/'_'
     // 以及 Windows 的 ':'/'\\'，致 resume/fork 三态对着错误目录判定
-    let project_dir = crate::config::projects_dir()
-        .join(crate::config::encode_project_dir(std::path::Path::new(&cwd_real)));
+    let project_dir = crate::config::projects_dir().join(crate::config::encode_project_dir(
+        std::path::Path::new(&cwd_real),
+    ));
     let session_file = project_dir.join(format!("{}.jsonl", session_id));
     // 会话身份参数三态:已落盘 → resume 自己;分叉意图且源已落盘 → CLI 原生 fork(resume 源 +
     // --fork-session + 指定新 ID,历史行 sessionId 由 CLI 重写,替代旧 fs::copy 仿造);
@@ -751,13 +831,13 @@ fn open_session(
         if !force_new {
             // jsonl 不在预期位置——全局探测：是迁走了还是真的新会话？
             if let Some(actual) = find_session_elsewhere(session_id, &session_file) {
-                return Err(format!(
-                    "SESSION_ELSEWHERE:{}",
-                    actual.to_string_lossy()
-                ));
+                return Err(format!("SESSION_ELSEWHERE:{}", actual.to_string_lossy()));
             }
         }
-        (vec!["--session-id".to_string(), session_id.to_string()], false)
+        (
+            vec!["--session-id".to_string(), session_id.to_string()],
+            false,
+        )
     };
     args.extend(session_args);
     args.extend([
@@ -927,7 +1007,9 @@ fn open_session(
                 if let Some(sub) = v.get("subtype").and_then(|s| s.as_str()) {
                     if sub == "hook_started" || sub == "hook_response" {
                         let mut payload = v;
-                        payload.as_object_mut().map(|o| o.insert("session_id".to_string(), json!(session_id)));
+                        payload
+                            .as_object_mut()
+                            .map(|o| o.insert("session_id".to_string(), json!(session_id)));
                         let _ = app.emit("session-hook", &payload);
                     }
                 }
@@ -945,7 +1027,11 @@ fn open_session(
 
     // 10. 存入 ACTIVE_PROCESSES
     let pid = child.id();
-    eprintln!("[long-lived] 新建进程 PID={} 会话={}", pid, &session_id[..session_id.len().min(8)]);
+    eprintln!(
+        "[long-lived] 新建进程 PID={} 会话={}",
+        pid,
+        &session_id[..session_id.len().min(8)]
+    );
     let started_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -953,12 +1039,15 @@ fn open_session(
     // started_at_ms 随 connected 事件下发：warm 重启（needs_restart）时旧进程 EOF
     // 因 superseded 不发 exited，前端 processAlive 无边沿，此事件是代际锚点
     // 唯一不依赖竞态方向的刷新通道
-    let _ = app.emit("session-connected", json!({
-        "session_id": session_id,
-        "resumed": resumed,
-        "cwd": cwd,
-        "started_at_ms": started_at_ms,
-    }));
+    let _ = app.emit(
+        "session-connected",
+        json!({
+            "session_id": session_id,
+            "resumed": resumed,
+            "cwd": cwd,
+            "started_at_ms": started_at_ms,
+        }),
+    );
     let sp_arc = Arc::new(Mutex::new(SessionProcess {
         child,
         stdin,
@@ -1048,14 +1137,31 @@ pub fn send_message(
                     || capability_needs_restart(&sp.capability_fingerprint, &capability_bundle)
             });
         if needs_restart {
-            eprintln!("[long-lived] 启动配置变更，重启进程 会话={}", &session_id[..session_id.len().min(8)]);
+            eprintln!(
+                "[long-lived] 启动配置变更，重启进程 会话={}",
+                &session_id[..session_id.len().min(8)]
+            );
             close_session(session_id);
             exists = false;
         }
     }
 
     if !exists {
-        open_session(app, session_id, cwd, model, effort, channel, advisor, chrome, fork_source, extra_args, permission_mode, &capability_bundle, force_new)?;
+        open_session(
+            app,
+            session_id,
+            cwd,
+            model,
+            effort,
+            channel,
+            advisor,
+            chrome,
+            fork_source,
+            extra_args,
+            permission_mode,
+            &capability_bundle,
+            force_new,
+        )?;
     }
 
     let process = ACTIVE_PROCESSES
@@ -1067,7 +1173,11 @@ pub fn send_message(
 
     let mut sp = process.lock().unwrap();
     if exists {
-        eprintln!("[long-lived] 复用进程 PID={} 会话={}", sp.child.id(), &session_id[..session_id.len().min(8)]);
+        eprintln!(
+            "[long-lived] 复用进程 PID={} 会话={}",
+            sp.child.id(),
+            &session_id[..session_id.len().min(8)]
+        );
         if let Some(m) = model.filter(|s| !s.is_empty()) {
             sp.request_counter += 1;
             let req_id = format!("set-model-{}", sp.request_counter);
@@ -1142,10 +1252,7 @@ pub fn toggle_remote_control(
             .is_some_and(|arc| {
                 let sp = arc.lock().unwrap();
                 permission_change_requires_restart(sp.permission_mode.as_deref(), permission_mode)
-                    || capability_needs_restart(
-                        &sp.capability_fingerprint,
-                        &capability_bundle,
-                    )
+                    || capability_needs_restart(&sp.capability_fingerprint, &capability_bundle)
             });
         if needs_restart {
             eprintln!(
@@ -1158,7 +1265,21 @@ pub fn toggle_remote_control(
     }
 
     if !exists {
-        open_session(app, session_id, cwd, model, effort, channel, advisor, chrome, fork_source, extra_args, permission_mode, &capability_bundle, false)?;
+        open_session(
+            app,
+            session_id,
+            cwd,
+            model,
+            effort,
+            channel,
+            advisor,
+            chrome,
+            fork_source,
+            extra_args,
+            permission_mode,
+            &capability_bundle,
+            false,
+        )?;
     }
 
     let process = ACTIVE_PROCESSES
@@ -1182,10 +1303,19 @@ pub fn toggle_remote_control(
             sp.permission_mode = Some(mode.to_string());
         }
     }
-    eprintln!("[long-lived] Remote Control enabled={} PID={} 会话={}", enabled, sp.child.id(), &session_id[..session_id.len().min(8)]);
+    eprintln!(
+        "[long-lived] Remote Control enabled={} PID={} 会话={}",
+        enabled,
+        sp.child.id(),
+        &session_id[..session_id.len().min(8)]
+    );
     sp.request_counter += 1;
     // 语义编进 request_id：CLI 的 response 不含 enabled 值，read_stream 只能靠它还原请求意图
-    let req_id = format!("rc-{}-{}", if enabled { "on" } else { "off" }, sp.request_counter);
+    let req_id = format!(
+        "rc-{}-{}",
+        if enabled { "on" } else { "off" },
+        sp.request_counter
+    );
     let msg = json!({
         "type": "control_request",
         "request_id": req_id,
@@ -1213,10 +1343,7 @@ mod task_control_tests {
             "background-tasks-1".to_string(),
             json!({"subtype": "background_tasks"}),
         );
-        let interrupt = control_request(
-            "interrupt-2".to_string(),
-            json!({"subtype": "interrupt"}),
-        );
+        let interrupt = control_request("interrupt-2".to_string(), json!({"subtype": "interrupt"}));
         assert_eq!(background["request"]["subtype"], "background_tasks");
         assert_eq!(interrupt["request"]["subtype"], "interrupt");
     }
@@ -1246,13 +1373,14 @@ pub fn interrupt_session(session_id: &str) -> Result<(), String> {
     match process {
         Some(p) => {
             let mut sp = p.lock().unwrap();
-            eprintln!("[long-lived] 中断进程 PID={} 会话={}", sp.child.id(), &session_id[..session_id.len().min(8)]);
+            eprintln!(
+                "[long-lived] 中断进程 PID={} 会话={}",
+                sp.child.id(),
+                &session_id[..session_id.len().min(8)]
+            );
             sp.request_counter += 1;
             let background_id = format!("background-tasks-{}", sp.request_counter);
-            let background = control_request(
-                background_id,
-                json!({"subtype": "background_tasks"}),
-            );
+            let background = control_request(background_id, json!({"subtype": "background_tasks"}));
             write_stdin(&mut sp.stdin, &background)?;
 
             sp.request_counter += 1;
@@ -1468,17 +1596,23 @@ pub fn cleanup_orphans() {
 fn graceful_shutdown(sp: &mut SessionProcess) {
     sp.request_counter += 1;
     let req_id = format!("shutdown-{}", sp.request_counter);
-    let _ = write_stdin(&mut sp.stdin, &json!({
-        "type": "control_request",
-        "request_id": req_id,
-        "request": {"subtype": "remote_control", "enabled": false}
-    }));
+    let _ = write_stdin(
+        &mut sp.stdin,
+        &json!({
+            "type": "control_request",
+            "request_id": req_id,
+            "request": {"subtype": "remote_control", "enabled": false}
+        }),
+    );
 }
 
 fn emit_error(app: &AppHandle, session_id: &str, message: String) {
     dispatch_stream_event(
         app,
-        StreamEvent::Error { session_id: session_id.to_string(), message },
+        StreamEvent::Error {
+            session_id: session_id.to_string(),
+            message,
+        },
     );
     dispatch_stream_signal(app, "stream-done", json!({ "session_id": session_id }));
 }
@@ -1540,10 +1674,7 @@ fn read_stream(
             Err(_) => continue,
         };
 
-        let raw_type = value
-            .get("type")
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
+        let raw_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
         if let Some(event) = decode_stream_event(&value, session_id, &mut current_message_id) {
             dispatch_stream_event(app, event);
@@ -1554,7 +1685,9 @@ fn read_stream(
             if let Some(subtype) = value.get("subtype").and_then(|s| s.as_str()) {
                 if subtype == "hook_started" || subtype == "hook_response" {
                     let mut payload = value.clone();
-                    payload.as_object_mut().map(|o| o.insert("session_id".to_string(), json!(session_id)));
+                    payload
+                        .as_object_mut()
+                        .map(|o| o.insert("session_id".to_string(), json!(session_id)));
                     let _ = app.emit("session-hook", &payload);
                 }
             }
@@ -1566,7 +1699,10 @@ fn read_stream(
         // 第三方渠道实测 CLI 回 error "Remote Control initialization failed"
         if raw_type == "control_response" {
             if let Some(resp) = value.get("response") {
-                let req_id = resp.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
+                let req_id = resp
+                    .get("request_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if req_id.starts_with("rc-") {
                     let is_err = resp.get("subtype").and_then(|v| v.as_str()) == Some("error");
                     let wanted_on = !req_id.starts_with("rc-off");
@@ -1575,7 +1711,9 @@ fn read_stream(
                     let err = resp.get("error").and_then(|v| v.as_str());
                     eprintln!(
                         "[long-lived] Remote Control 判决 req={} active={} 会话={}{}",
-                        req_id, active, &session_id[..session_id.len().min(8)],
+                        req_id,
+                        active,
+                        &session_id[..session_id.len().min(8)],
                         err.map(|e| format!(" err={}", e)).unwrap_or_default()
                     );
                     let _ = app.emit("rc-status", json!({
@@ -1715,8 +1853,7 @@ fn decode_stream_event(
                     let (mid, model) = current_message_id.as_ref()?.clone();
                     let index = inner.get("index")?.as_u64()? as usize;
                     let cb_value = inner.get("content_block")?.clone();
-                    let content_block: ContentBlock =
-                        serde_json::from_value(cb_value).ok()?;
+                    let content_block: ContentBlock = serde_json::from_value(cb_value).ok()?;
                     Some(StreamEvent::BlockStart {
                         session_id: sid,
                         message_id: mid,
@@ -1789,8 +1926,8 @@ fn decode_stream_event(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let is_interrupt = result_text.is_empty()
-                || result_text.contains("interrupted by user");
+            let is_interrupt =
+                result_text.is_empty() || result_text.contains("interrupted by user");
             if is_error && !is_interrupt {
                 Some(StreamEvent::Error {
                     session_id: sid,
@@ -1806,9 +1943,15 @@ fn decode_stream_event(
                     session_id: sid,
                     text: result_text,
                     cost_usd: cost,
-                    context_window: usage.and_then(|u| u.get("contextWindow")).and_then(|v| v.as_u64()),
-                    input_tokens: usage.and_then(|u| u.get("inputTokens")).and_then(|v| v.as_u64()),
-                    output_tokens: usage.and_then(|u| u.get("outputTokens")).and_then(|v| v.as_u64()),
+                    context_window: usage
+                        .and_then(|u| u.get("contextWindow"))
+                        .and_then(|v| v.as_u64()),
+                    input_tokens: usage
+                        .and_then(|u| u.get("inputTokens"))
+                        .and_then(|v| v.as_u64()),
+                    output_tokens: usage
+                        .and_then(|u| u.get("outputTokens"))
+                        .and_then(|v| v.as_u64()),
                 })
             }
         }

@@ -81,6 +81,7 @@ pub struct RuntimeCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct FacetCapabilities {
     pub assets: bool,
+    pub automation: bool,
     pub configuration: bool,
     pub quota: bool,
     pub runtime_commands: bool,
@@ -99,7 +100,32 @@ pub struct EngineCapabilities {
 pub struct EngineDescriptor {
     pub instance: EngineInstanceId,
     pub display_name: String,
+    pub enabled: bool,
     pub capabilities: EngineCapabilities,
+    pub ui: EngineUiIntegration,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineUiIntegration {
+    pub identity: UiIdentityMode,
+    pub session_surface: SessionSurface,
+    pub install_guide_url: Option<String>,
+    pub configuration_guide_url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UiIdentityMode {
+    Structured,
+    Native,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionSurface {
+    Standard,
+    Native,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -139,9 +165,21 @@ impl CapabilityHealth {
 pub struct EngineHealth {
     pub instance: EngineInstanceId,
     pub status: EngineHealthStatus,
+    pub installed: bool,
+    pub authenticated: Option<bool>,
     pub version: Option<String>,
+    pub version_supported: Option<bool>,
+    pub executable_path: Option<String>,
     pub source: CapabilityHealth,
     pub runtime: CapabilityHealth,
+    pub diagnostics: Vec<HealthDiagnostic>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthDiagnostic {
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -173,6 +211,7 @@ pub struct SessionActions {
     pub resume: ActionAvailability,
     pub fork: ActionAvailability,
     pub send: ActionAvailability,
+    pub steer: ActionAvailability,
     pub interrupt: ActionAvailability,
     pub open_cwd: ActionAvailability,
 }
@@ -184,6 +223,7 @@ impl SessionActions {
             resume: ActionAvailability::unavailable(reason_code.clone()),
             fork: ActionAvailability::unavailable(reason_code.clone()),
             send: ActionAvailability::unavailable(reason_code.clone()),
+            steer: ActionAvailability::unavailable(reason_code.clone()),
             interrupt: ActionAvailability::unavailable(reason_code),
             open_cwd: ActionAvailability::available(),
         }

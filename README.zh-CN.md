@@ -5,7 +5,7 @@
 <h1 align="center">Monet</h1>
 
 <p align="center">
-  你的 <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> 指挥台
+  Claude Code 与 Codex 的多引擎指挥台
 </p>
 
 <p align="center">
@@ -46,9 +46,9 @@
 
 ## Monet 是什么？
 
-你和 Claude Code 的每一次对话，都散落在终端窗口里——关掉就找不回，并行就顾不过来，跑长任务就得干等。
+你和 coding agent 的每一次对话，都散落在终端窗口里——关掉就找不回，并行就顾不过来，跑长任务就得干等。
 
-Monet 把它们收进一面墙：所有会话可浏览、可搜索、可并行指挥。CLI 干活，Monet 给你眼睛和手。
+Monet 把 Claude Code、Codex 等引擎收进一面墙：所有会话可浏览、可搜索、可并行指挥。Agent 干活，Monet 给你眼睛和手。
 
 ## 为什么选 Monet？
 
@@ -56,11 +56,19 @@ Monet 把它们收进一面墙：所有会话可浏览、可搜索、可并行�
 
 **多渠道玩家的家。** 官方订阅、第三方 API、自建代理、本地模型——不同会话各用各的，聊到一半随时热切：这一轮用强模型攻坚，下一轮换便宜渠道跑杂活。「跟随 CLI」与「官方直连」并立，CLI 配置指向哪里，设置页看得清清楚楚。
 
-**数据主权在你手里。** 对 Claude Code 的会话文件架构级只读——这是代码里没有写路径，不是一个开关。零遥测、无 Monet 账号体系；本地会话能力离线运行，只有订阅额度和你主动使用的 AI 功能会访问相应供应商的官方服务。Monet 的一切增值数据住在自己的 `~/.monet/` 目录，卸载后你的数据毫发无损。
+**数据主权在你手里。** 对各引擎的原始会话架构级只读：Claude Code 只读 JSONL，Codex 只通过本机官方 App Server 协议读取和运行，从不改写 rollout。零遥测、无 Monet 账号体系；本地会话能力离线运行，只有订阅额度和你主动使用的智能增强会访问相应供应商的官方服务。Monet 的标题、标签、收藏、软删除等数据独立住在 `~/.monet/`，卸载后原始会话毫发无损。
 
 **睡觉时也在干活。** 定时任务由系统调度器执行，Monet 没开也照跑；Mac 能按点自己醒来，跑完任务再睡回去。系统通知随时把你叫回来——人可以走开，事情不会停。
 
 ## 功能
+
+### 多引擎系统——Claude Code 与 Codex 同席
+
+- 档案馆、搜索、工作台和通知可同时承载 Claude Code 与 Codex，会话始终带引擎徽标并可按引擎筛选
+- Codex 通过本机 `codex app-server` 完成历史读取、新建/恢复、流式输出、追加指令、中断、三类审批以及动态模型/思考强度选择
+- 设置中的「引擎中心」分别展示安装、认证、版本、能力和诊断；一个引擎故障不会拖垮另一个
+- 内部 Engine Adapter 契约统一了身份、历史源、时间线、运行时、能力和可选 facet；新增引擎无需增加顶层 IPC 或改动共享存储 schema
+- Claude Code 保留成熟的专属工作台、渠道、工坊和自动化能力；其他引擎按自身 capability 显示可用操作，不出现注定失败的空按钮
 
 ### 工作台——并行会话指挥
 
@@ -142,15 +150,9 @@ brew install --cask monet
 
 > macOS 11+（Apple Silicon）享受全部功能；Windows 覆盖核心功能，系统级集成（小组件、菜单栏、睡眠唤醒）为 macOS 专属。
 
-**首次打开（macOS）**：Monet 已签名但尚未经 Apple 公证，首次打开会有 Gatekeeper 提示。右键应用 → **打开**（仅需一次），或执行：
+**首次打开（macOS 15+）**：Monet 已签名但尚未经 Apple 公证。若 Gatekeeper 拦截，请先尝试打开一次，再进入「系统设置 → 隐私与安全性」，在安全性区域点击「仍要打开」，确认并输入管理员密码。之后的更新由应用内完成。
 
-```bash
-xattr -cr /Applications/Monet.app
-```
-
-之后的更新由应用内静默完成。
-
-**装完即用，零配置**：你的 `claude` 能跑，Monet 就能跑——默认直接沿用 CLI 自己的配置，历史会话自动发现，没有导入步骤。CLI 还没装？设置页可以一键安装。
+**装完即用，零导入**：本机可用的 Claude Code / Codex 会被自动发现，历史会话直接进入同一个档案馆。Claude Code 默认沿用 CLI 自己的配置；各引擎的具体状态可在「设置 → 引擎」查看。
 
 ## 从源码构建
 
@@ -191,10 +193,13 @@ scripts/setup-signing.sh
 | 内容 | 位置 | 访问方式 |
 |------|------|---------|
 | Claude Code 会话 | `~/.claude/projects/` | **只读** |
+| Codex 会话 | 由本机 `codex app-server` 提供 | **协议只读；运行操作走官方协议** |
 | Monet 增值数据（标题、标签、定时任务） | `~/.monet/` | 读写 |
 | MCP 注册 | `~/.claude/settings.json` | 在 `mcpServers` 下添加 `monet` 条目 |
 
 本地会话能力离线运行、零遥测、无 Monet 账号体系。订阅额度只访问 Claude/Codex 官方服务，并复用官方客户端已有登录态；Monet 不主动刷新或回写 OAuth 凭据。凭据纪律：API token 不进命令行参数、临时文件即用即删。
+
+升级时，旧版 `metadata.json` 会被幂等迁移到按引擎隔离的 `metadata-v2.json`；旧文件不会删除或覆盖。搜索缓存会在 `search/v2/` 按引擎和项目冷重建。回滚旧版仍可继续使用原 Claude 数据，再次升级也不会覆盖已存在的新格式状态。
 
 ## 常见问题
 
@@ -215,8 +220,8 @@ scripts/setup-signing.sh
 **Windows / Linux？**
 Windows 已支持（核心功能完整，macOS 系统集成除外）；Linux 暂无近期计划。
 
-**会支持 Claude Code 之外的工具吗？**
-有可能。会话解析与界面层是分开的，未来不排除支持更多 agentic CLI——需要的话欢迎开 issue 投票。
+**支持哪些 Agent？**
+当前正式支持 Claude Code 与 Codex。Monet 已经是多引擎系统，而不是两个平台分支的拼接；新的生产 adapter 只需实现自身协议与能力声明。内部接入说明见 [Engine Adapter 指南](ENGINE_ADAPTERS.zh-CN.md)。
 
 ## 技术栈
 

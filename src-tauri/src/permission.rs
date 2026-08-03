@@ -61,6 +61,52 @@ static SERVICES: Mutex<Option<HashMap<String, Arc<PermissionService>>>> = Mutex:
 
 /// requestId 自增（全进程唯一，respond 时跨实例查找无歧义）
 static REQ_COUNTER: AtomicU64 = AtomicU64::new(1);
+static OBSERVER_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Debug)]
+pub enum PermissionObserverEvent {
+    Requested {
+        request_id: String,
+        session_id: String,
+        tool_name: String,
+        input: Value,
+    },
+}
+
+type PermissionObserver = Arc<dyn Fn(PermissionObserverEvent) + Send + Sync>;
+static OBSERVERS: Mutex<Vec<(u64, PermissionObserver)>> = Mutex::new(Vec::new());
+
+pub struct PermissionObserverHandle(u64);
+
+impl Drop for PermissionObserverHandle {
+    fn drop(&mut self) {
+        OBSERVERS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(id, _)| *id != self.0);
+    }
+}
+
+pub fn subscribe_observer(observer: PermissionObserver) -> PermissionObserverHandle {
+    let id = OBSERVER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    OBSERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push((id, observer));
+    PermissionObserverHandle(id)
+}
+
+fn notify_observers(event: PermissionObserverEvent) {
+    let observers: Vec<_> = OBSERVERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .map(|(_, observer)| Arc::clone(observer))
+        .collect();
+    for observer in observers {
+        observer(event.clone());
+    }
+}
 
 /// 推送给前端的事件
 #[derive(Debug, Clone, Serialize)]
@@ -82,8 +128,8 @@ impl PermissionService {
         // 同会话旧实例先停（同会话重发场景）
         Self::stop_for(session_id);
 
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| format!("绑定权限服务端口失败：{}", e))?;
+        let listener =
+            TcpListener::bind("127.0.0.1:0").map_err(|e| format!("绑定权限服务端口失败：{}", e))?;
         let endpoint = listener
             .local_addr()
             .map_err(|e| format!("读取权限服务地址失败：{}", e))?
@@ -291,9 +337,7 @@ fn handle_connection(
     pending: Arc<Mutex<HashMap<String, Arc<PendingRequest>>>>,
     stop_flag: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), String> {
-    stream
-        .set_nonblocking(false)
-        .map_err(|e| e.to_string())?;
+    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
@@ -331,15 +375,21 @@ fn handle_connection(
     // emit 给前端
     let payload = PermissionRequestPayload {
         request_id: request_id.clone(),
-        session_id,
-        tool_name,
-        input,
+        session_id: session_id.clone(),
+        tool_name: tool_name.clone(),
+        input: input.clone(),
         timestamp: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0),
     };
     let _ = app.emit("permission-request", &payload);
+    notify_observers(PermissionObserverEvent::Requested {
+        request_id: request_id.clone(),
+        session_id,
+        tool_name,
+        input,
+    });
 
     // 永不超时:阻塞等用户响应或服务停止(中断收尾会唤醒并按 deny 写回)
     let final_decision = wait_decision(&pending_req, &stop_flag);
@@ -373,10 +423,7 @@ fn handle_connection(
 /// 阻塞等待决策（condvar 挂起，永不超时）：命中用户响应或服务停止两者之一返回。
 /// 不自动拒绝——卡住等用户点。respond/shutdown 写入决策后 notify 即醒；
 /// 1s 超时兜底只为 Drop 等仅置 stop_flag 不写决策的路径，正常路径零空转
-fn wait_decision(
-    req: &PendingRequest,
-    stop_flag: &Arc<std::sync::atomic::AtomicBool>,
-) -> Decision {
+fn wait_decision(req: &PendingRequest, stop_flag: &Arc<std::sync::atomic::AtomicBool>) -> Decision {
     let mut slot = req.decision.lock().unwrap();
     loop {
         if let Some(d) = slot.as_ref() {
@@ -414,7 +461,12 @@ mod tests {
         let v: Value = serde_json::from_str(line).unwrap();
         assert_eq!(v.get("toolName").unwrap().as_str().unwrap(), "Bash");
         assert_eq!(
-            v.get("input").unwrap().get("command").unwrap().as_str().unwrap(),
+            v.get("input")
+                .unwrap()
+                .get("command")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "ls"
         );
     }

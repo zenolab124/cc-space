@@ -17,10 +17,15 @@ use tauri::{AppHandle, Emitter};
 ///   （FR-010 外部会话出错兜底；是否属于工作台由前端判定过滤）
 /// - 监控 data_dir/routines.json 变化，发送 "routines-changed" 事件（MCP 外部写入感知）
 pub fn start(app: &AppHandle) {
+    let watch_claude_sessions = crate::engines::claude::default_instance()
+        .ok()
+        .and_then(|instance| {
+            crate::engines::system::get()
+                .ok()
+                .map(|system| system.registry().is_available(&instance))
+        })
+        .unwrap_or(false);
     let root = crate::config::projects_dir();
-    if !root.is_dir() {
-        return;
-    }
 
     let data_dir = crate::config::data_dir().to_path_buf();
     let routines_file = data_dir.join("routines.json");
@@ -46,9 +51,11 @@ pub fn start(app: &AppHandle) {
             }
         };
 
-        if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
-            log::error!("Failed to watch {:?}: {}", root, e);
-            return;
+        if watch_claude_sessions && root.is_dir() {
+            if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
+                log::error!("Failed to watch {:?}: {}", root, e);
+                return;
+            }
         }
 
         if data_dir.is_dir() {
@@ -62,11 +69,17 @@ pub fn start(app: &AppHandle) {
             }
         }
 
-        log::info!("File watcher started on {:?}", root);
+        if watch_claude_sessions {
+            log::info!("Claude session watcher started on {:?}", root);
+        }
 
         // 启动时预记录全部会话文件 size：只对"启动之后新增"的内容做 api_error 探测，
         // 避免把历史错误当新事件误报
-        let mut file_sizes = snapshot_sizes(&root);
+        let mut file_sizes = if watch_claude_sessions {
+            snapshot_sizes(&root)
+        } else {
+            HashMap::new()
+        };
 
         // 内置 Agent 工作目录：变化全部静音——Agent 落盘会话不进档案/搜索，
         // 其写盘若触发 projects-changed，前端会因"未知项目"回退全量重扫（打穿 P0-2 增量优化）
@@ -140,15 +153,17 @@ pub fn start(app: &AppHandle) {
 
                     // api_error 增量探测：每个事件都处理（需要 paths，不能合并丢弃）
                     // Agent 目录跳过——Agent 调用失败有自己的 fallback 链和日志，不弹用户通知
-                    for path in &event.paths {
-                        if let Some((sid, pid)) = session_file_ids(&root, path) {
-                            if !agent_dirs.contains(&pid) {
-                                probe_api_errors(&handle, path, &sid, &pid, &mut file_sizes);
+                    if watch_claude_sessions {
+                        for path in &event.paths {
+                            if let Some((sid, pid)) = session_file_ids(&root, path) {
+                                if !agent_dirs.contains(&pid) {
+                                    probe_api_errors(&handle, path, &sid, &pid, &mut file_sizes);
+                                }
                             }
                         }
                     }
 
-                    if !is_routine {
+                    if watch_claude_sessions && !is_routine {
                         for path in &event.paths {
                             if let Some((sid, pid)) = session_file_ids(&root, path) {
                                 // 与 discovery 的会话定义保持一致：排除 agent- 前缀与 Agent 目录，
@@ -161,7 +176,8 @@ pub fn start(app: &AppHandle) {
                             } else if path.parent() == Some(root.as_path()) {
                                 // 项目目录本身的创建/删除/重命名：无法增量定位；
                                 // Agent 目录自身的出现/消失除外（对项目列表不可见）
-                                let is_agent_dir = path.file_name()
+                                let is_agent_dir = path
+                                    .file_name()
                                     .and_then(|n| n.to_str())
                                     .is_some_and(|n| agent_dirs.contains(n));
                                 if !is_agent_dir {
@@ -235,11 +251,7 @@ fn flush_routines_emit(
 }
 
 /// 距上次发射满 1 秒且有积压时，发送 runner-commands-changed（MCP 写入后前端实时感知）
-fn flush_runner_commands_emit(
-    app: &AppHandle,
-    pending: &mut bool,
-    last_emit: &mut Instant,
-) {
+fn flush_runner_commands_emit(app: &AppHandle, pending: &mut bool, last_emit: &mut Instant) {
     if !*pending {
         return;
     }
@@ -267,11 +279,36 @@ fn emit_pending_changes(
         return;
     }
     *last_emit = now;
-    let changes: Vec<Value> = pending
-        .drain()
+    let changed_ids: Vec<(String, String)> = pending.drain().collect();
+    let changes: Vec<Value> = changed_ids
+        .iter()
         .map(|(pid, sid)| json!({ "projectId": pid, "sessionId": sid }))
         .collect();
     let payload = json!({ "full": *full, "changes": changes });
+    if let Ok(instance) = crate::engines::claude::default_instance() {
+        if *full {
+            crate::engines::system::notify_source_change(
+                &instance,
+                crate::engines::core::SourceChange {
+                    kind: crate::engines::core::SourceChangeKind::FullRefresh,
+                    project: None,
+                    session: None,
+                },
+            );
+        }
+        for (project_id, session_id) in &changed_ids {
+            crate::engines::system::notify_source_change(
+                &instance,
+                crate::engines::core::SourceChange {
+                    kind: crate::engines::core::SourceChangeKind::SessionChanged,
+                    project: crate::engines::core::ProjectRef::new(instance.clone(), project_id)
+                        .ok(),
+                    session: crate::engines::core::SessionRef::new(instance.clone(), session_id)
+                        .ok(),
+                },
+            );
+        }
+    }
     *full = false;
     let _ = app.emit("projects-changed", payload);
     // 会话有真实变更 = 额度正在被消耗：节流触发一次后台额度刷新（内部 90s

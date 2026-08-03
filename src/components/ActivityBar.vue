@@ -1,16 +1,21 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUiState, type AppSection } from '@/composables/useUiState'
 import { useTheme } from '@/composables/useTheme'
 import { useNotifications } from '@/composables/useNotifications'
 import { useUpdater } from '@/composables/useUpdater'
+import { useEngines } from '@/engines/useEngines'
 
 const { t } = useI18n()
 const { activeSection, switchSection } = useUiState()
 const { activeTheme, activeThemeLabel, cycleActiveTheme } = useTheme()
 const { badgeCount } = useNotifications()
 const { status: updateStatus } = useUpdater()
+const { engines } = useEngines()
+
+const hasWorkshop = computed(() => engines.value.some(engine => engine.enabled && engine.capabilities.facets.assets))
+const hasAutomation = computed(() => engines.value.some(engine => engine.enabled && engine.capabilities.facets.automation))
 
 /** 终态七域全摆；v2.1.0 点亮工作台,「会话」更名档案语义,其余灰置 */
 interface DomainItem {
@@ -24,9 +29,15 @@ const topDomains = computed<DomainItem[]>(() => [
   { key: 'workbench', icon: 'i-carbon-workspace', label: t('activity.workbench'), section: 'workbench' },
   { key: 'sessions', icon: 'i-carbon-chat', label: t('activity.archive'), section: 'sessions' },
   { key: 'search', icon: 'i-carbon-search', label: t('activity.search'), section: 'search' },
-  { key: 'workshop', icon: 'i-carbon-tools', label: t('activity.workshop'), section: 'workshop' },
-  { key: 'automation', icon: 'i-carbon-bot', label: t('activity.automation'), section: 'automation' },
+  ...(hasWorkshop.value ? [{ key: 'workshop', icon: 'i-carbon-tools', label: t('activity.workshop'), section: 'workshop' as AppSection }] : []),
+  ...(hasAutomation.value ? [{ key: 'automation', icon: 'i-carbon-bot', label: t('activity.automation'), section: 'automation' as AppSection }] : []),
 ])
+
+watchEffect(() => {
+  if (engines.value.length === 0) return
+  if (activeSection.value === 'workshop' && !hasWorkshop.value) switchSection('workbench')
+  if (activeSection.value === 'automation' && !hasAutomation.value) switchSection('workbench')
+})
 
 function onItemClick(item: DomainItem) {
   if (item.section) switchSection(item.section)

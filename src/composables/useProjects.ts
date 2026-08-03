@@ -3,12 +3,19 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { Project, SessionSummary } from '@/types'
 import { tokenTotal } from '@/types'
+import { listEngines, listProjects, listSessions } from '@/engines/client'
+import { projectUiId, sessionUiId } from '@/engines/integration'
+import type { EngineDescriptor, EngineProject, EngineSessionSummary } from '@/engines/types'
+import { indexEngineSessions } from '@/engines/directory'
+import { usesNativeSessionSurface } from '@/engines/integration'
+import type { SourceChangeEnvelope } from '@/engines/events'
 
 const projects = ref<Project[]>([])
 /** 数据修订号:全量与增量刷新后都 +1。增量路径原地 mutate 不换 projects 引用,
  *  浅层 watch(projects) 收不到,需要跨刷新方式感知变更的一律 watch 这个 */
 const projectsRevision = ref(0)
 const selectedProjectIds = ref<Set<string>>(new Set())
+const selectedEngineIds = ref<Set<string>>(new Set())
 const loading = ref(false)
 const error = ref<string | null>(null)
 let watcherSetup = false
@@ -29,7 +36,7 @@ async function loadProjects() {
   if (!hasCached) loading.value = true
   error.value = null
   try {
-    projects.value = await invoke<Project[]>('get_projects')
+    projects.value = await loadEngineProjects()
     projectsRevision.value++
   } catch (e) {
     error.value = String(e)
@@ -49,7 +56,104 @@ async function loadProjects() {
         applySessionChanges(payload.changes)
       }
     })
+    listen<SourceChangeEnvelope>('engine-source-change', event => {
+      if (!usesNativeSessionSurface(event.payload.instance)) reloadProjectsSilently()
+    })
   }
+}
+
+async function loadEngineProjects(): Promise<Project[]> {
+  const descriptors = await listEngines()
+  const results = await Promise.allSettled(descriptors.filter(descriptor => descriptor.enabled).map(loadEngineInstanceProjects))
+  const loaded = results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+  loaded.sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
+  if (!results.some(result => result.status === 'fulfilled')) {
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (firstError) throw firstError.reason
+  }
+  indexEngineSessions(loaded)
+  return loaded
+}
+
+async function loadEngineInstanceProjects(descriptor: EngineDescriptor): Promise<Project[]> {
+  const sourceProjects = await listProjects(descriptor.instance)
+  const mapped = await Promise.all(sourceProjects.map(async project => {
+    const sessions = await listSessions(project.reference)
+    return mapProject(descriptor, project, sessions)
+  }))
+  return mapped.filter(project => project.sessions.length > 0)
+}
+
+function mapProject(
+  descriptor: EngineDescriptor,
+  project: EngineProject,
+  sessions: EngineSessionSummary[],
+): Project {
+  return {
+    id: projectUiId(project.reference),
+    native_id: project.reference.nativeId,
+    reference: project.reference,
+    engine: project.reference.engine,
+    engine_name: descriptor.displayName,
+    display_path: project.displayPath ?? project.displayName,
+    source_path: project.displayPath,
+    sessions: sessions.map(session => mapSession(descriptor, session)),
+    session_count: sessions.length,
+    last_active: epochSeconds(project.lastActive),
+  }
+}
+
+function mapSession(descriptor: EngineDescriptor, session: EngineSessionSummary): SessionSummary {
+  const cached = session.usage?.cachedInputTokens ?? 0
+  const subagent = tokenUsageFromMeta(session.sourceMeta.subagentTokens)
+  return {
+    id: sessionUiId(session.reference),
+    native_id: session.reference.nativeId,
+    reference: session.reference,
+    project_reference: session.project,
+    engine: session.reference.engine,
+    engine_name: descriptor.displayName,
+    title: session.title,
+    first_user_message: session.preview,
+    model: session.model,
+    git_branch: typeof session.sourceMeta.gitBranch === 'string' ? session.sourceMeta.gitBranch : null,
+    cwd: session.cwd,
+    version: typeof session.sourceMeta.version === 'string' ? session.sourceMeta.version : null,
+    timestamp: session.createdAt,
+    last_modified: epochSeconds(session.updatedAt) ?? 0,
+    total_tokens: {
+      input_tokens: session.usage?.inputTokens ?? 0,
+      output_tokens: session.usage?.outputTokens ?? 0,
+      cache_creation_input_tokens: session.usage?.cacheCreationInputTokens ?? 0,
+      cache_read_input_tokens: cached,
+    },
+    subagent_tokens: subagent,
+    file_size: numericMeta(session.sourceMeta.fileSize),
+    message_count: typeof session.sourceMeta.messageCount === 'number' ? session.sourceMeta.messageCount : 0,
+    context_window: typeof session.sourceMeta.contextWindow === 'number' ? session.sourceMeta.contextWindow : null,
+  }
+}
+
+function numericMeta(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+function tokenUsageFromMeta(value: unknown): SessionSummary['subagent_tokens'] {
+  const usage = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return {
+    input_tokens: numericMeta(usage.inputTokens),
+    output_tokens: numericMeta(usage.outputTokens),
+    cache_creation_input_tokens: numericMeta(usage.cacheCreationInputTokens),
+    cache_read_input_tokens: numericMeta(usage.cachedInputTokens),
+  }
+}
+
+function epochSeconds(value: string | null): number | null {
+  if (!value) return null
+  const milliseconds = Date.parse(value)
+  return Number.isFinite(milliseconds) ? milliseconds / 1000 : null
 }
 
 // 数据代际：每次增量变异 +1。全量拉取在途期间若有增量落地，
@@ -60,9 +164,9 @@ let dataGen = 0
 async function reloadProjectsSilently() {
   try {
     const genAtStart = dataGen
-    const result = await invoke<Project[]>('get_projects')
+    const result = await loadEngineProjects()
     if (dataGen !== genAtStart) {
-      projects.value = await invoke<Project[]>('get_projects')
+      projects.value = await loadEngineProjects()
     } else {
       projects.value = result
     }
@@ -75,7 +179,9 @@ async function reloadProjectsSilently() {
 /** 按会话增量更新项目树；遇到未知项目（新建项目目录）回退全量 */
 async function applySessionChanges(changes: SessionChange[]) {
   for (const { projectId, sessionId } of changes) {
-    const proj = projects.value.find(p => p.id === projectId)
+    const proj = projects.value.find(p =>
+      (p.native_id ?? p.id) === projectId
+      && (!p.engine || usesNativeSessionSurface(p.engine)))
     if (!proj) {
       reloadProjectsSilently()
       return
@@ -86,7 +192,7 @@ async function applySessionChanges(changes: SessionChange[]) {
         sessionId,
       })
       dataGen++
-      const idx = proj.sessions.findIndex(s => s.id === sessionId)
+      const idx = proj.sessions.findIndex(s => (s.native_id ?? s.id) === sessionId)
       if (!summary) {
         // 会话文件已删除
         if (idx >= 0) proj.sessions.splice(idx, 1)
@@ -97,9 +203,29 @@ async function applySessionChanges(changes: SessionChange[]) {
           continue
         }
       } else if (idx >= 0) {
-        proj.sessions[idx] = summary
+        proj.sessions[idx] = {
+          ...summary,
+          reference: proj.sessions[idx].reference,
+          project_reference: proj.sessions[idx].project_reference,
+          engine: proj.sessions[idx].engine,
+          engine_name: proj.sessions[idx].engine_name,
+          native_id: summary.id,
+        }
       } else {
-        proj.sessions.push(summary)
+        const engine = proj.engine
+        const projectReference = proj.reference
+        if (!engine || !projectReference) {
+          reloadProjectsSilently()
+          return
+        }
+        proj.sessions.push({
+          ...summary,
+          reference: { engine, nativeId: summary.id },
+          project_reference: projectReference,
+          engine,
+          engine_name: proj.engine_name,
+          native_id: summary.id,
+        })
       }
       proj.session_count = proj.sessions.length
       proj.sessions.sort((a, b) => (b.last_modified ?? 0) - (a.last_modified ?? 0))
@@ -128,12 +254,35 @@ function selectAllProjects(select: boolean) {
   }
 }
 
+function engineFilterId(project: Project): string {
+  return project.engine ? `${project.engine.engineId}/${project.engine.instanceId}` : 'legacy/default'
+}
+
+function toggleEngine(id: string) {
+  const next = new Set(selectedEngineIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedEngineIds.value = next
+}
+
+const engineOptions = computed(() => {
+  const values = new Map<string, string>()
+  for (const project of projects.value) {
+    values.set(engineFilterId(project), project.engine_name ?? project.engine?.engineId ?? '—')
+  }
+  return [...values].map(([id, name]) => ({ id, name }))
+})
+
 /** 选中项目的会话（无选中时显示全部） */
 const filteredSessions = computed<SessionSummary[]>(() => {
   const ids = selectedProjectIds.value
-  const source = ids.size > 0
+  const projectSource = ids.size > 0
     ? projects.value.filter(p => ids.has(p.id))
     : projects.value
+  const engineIds = selectedEngineIds.value
+  const source = engineIds.size > 0
+    ? projectSource.filter(project => engineIds.has(engineFilterId(project)))
+    : projectSource
   return source.flatMap(p => p.sessions)
 })
 
@@ -179,11 +328,14 @@ export function useProjects() {
     projects,
     projectsRevision,
     selectedProjectIds,
+    selectedEngineIds,
     loading,
     error,
     loadProjects,
     toggleProject,
     selectAllProjects,
+    toggleEngine,
+    engineOptions,
     filteredSessions,
     sidebarStats,
     sessionStats,

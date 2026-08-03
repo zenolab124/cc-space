@@ -35,8 +35,16 @@ import { useVirtualizationSettings } from '@/composables/useVirtualizationSettin
 import { TOOL_DISPLAY_MODES, useToolDisplayMode, type ToolDisplayMode } from '@/composables/useToolDisplay'
 import { useUpdater } from '@/composables/useUpdater'
 import { MODELS } from '@/utils/modelContext'
+import EngineCenter from '@/components/settings/EngineCenter.vue'
+import { useEngines } from '@/engines/useEngines'
 
 const { t } = useI18n()
+const { engines } = useEngines()
+const nativeConfigurationEngine = computed(() => engines.value.find(engine =>
+  engine.enabled
+  && engine.capabilities.facets.configuration
+  && engine.ui.sessionSurface === 'native',
+))
 const {
   channels, defaultSessionChannel, defaultAgentChannel, defaultAgentModel,
   probeResults, probing,
@@ -243,9 +251,12 @@ const agentLogsStats = computed(() => {
   return { total: logs.length, totalInput, totalOutput, successCount }
 })
 
-type Tab = 'appearance' | 'channels' | 'agent' | 'claude-code' | 'permissions' | 'extensions' | 'lab' | 'system'
+type Tab = 'appearance' | 'channels' | 'agent' | 'engines' | 'engine-config' | 'permissions' | 'extensions' | 'lab' | 'system'
 const { isMac } = usePlatform()
 const activeTab = ref<Tab>('appearance')
+watch(nativeConfigurationEngine, engine => {
+  if (!engine && activeTab.value === 'engine-config') activeTab.value = 'engines'
+})
 
 const editing = ref<'new' | ChannelInfo | null>(null)
 /** official 渠道轻量编辑(仅默认模型/思考强度两字段) */
@@ -551,8 +562,11 @@ function onSaved() {
       <button :class="['side-item', { active: activeTab === 'extensions' }]" @click="activeTab = 'extensions'">
         <span class="i-carbon-plug w-3.5 h-3.5" />{{ $t('settings.extensions') }}
       </button>
-      <button :class="['side-item', { active: activeTab === 'claude-code' }]" @click="activeTab = 'claude-code'">
-        <span class="i-carbon-json w-3.5 h-3.5" />Claude Code
+      <button :class="['side-item', { active: activeTab === 'engines' }]" @click="activeTab = 'engines'">
+        <span class="i-carbon-ibm-watson-discovery w-3.5 h-3.5" />{{ $t('engineSettings.nav') }}
+      </button>
+      <button v-if="nativeConfigurationEngine" :class="['side-item', { active: activeTab === 'engine-config' }]" @click="activeTab = 'engine-config'">
+        <span class="i-carbon-json w-3.5 h-3.5" />{{ nativeConfigurationEngine.displayName }}
       </button>
       <button v-if="isMac" :class="['side-item', { active: activeTab === 'permissions' }]" @click="activeTab = 'permissions'">
         <span class="i-carbon-security w-3.5 h-3.5" />{{ $t('settings.permissionsNav') }}
@@ -567,8 +581,8 @@ function onSaved() {
     </nav>
 
     <!-- 内容区 -->
-    <div :class="['flex-1 min-w-0', activeTab === 'claude-code' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto']">
-      <div :class="['settings-body', { 'flex-1 min-h-0 flex flex-col': activeTab === 'claude-code' }]">
+    <div :class="['flex-1 min-w-0', activeTab === 'engine-config' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto']">
+      <div :class="['settings-body', { 'flex-1 min-h-0 flex flex-col': activeTab === 'engine-config' }]">
 
         <!-- ====== 外观 ====== -->
         <section v-show="activeTab === 'appearance'">
@@ -1046,7 +1060,9 @@ function onSaved() {
         </section>
 
         <!-- ====== Claude Code 配置 ====== -->
-        <section v-show="activeTab === 'claude-code'" class="cli-section">
+        <EngineCenter v-if="activeTab === 'engines'" />
+
+        <section v-if="nativeConfigurationEngine" v-show="activeTab === 'engine-config'" class="cli-section">
           <ClaudeCodeSettings />
         </section>
 

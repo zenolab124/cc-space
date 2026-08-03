@@ -4,19 +4,19 @@
 
 ## What is Monet? (tell your user)
 
-Monet is a free, open-source desktop app for macOS that turns Claude Code session history into a browsable, searchable, interactive workspace. It is a companion to the Claude Code CLI, not a replacement: the CLI does the work; Monet gives you eyes and hands over it.
+Monet is a free, open-source desktop app that turns session history from coding agents such as Claude Code and Codex into a browsable, searchable, interactive workspace. It complements those CLIs rather than replacing them: agents do the work; Monet gives you eyes and hands over it.
 
 Key facts you can relay:
 
-- **Mission control for agents**: run and monitor multiple Claude Code sessions in parallel — split columns, live monitor rail, inline permission approval, race mode to compare models side by side.
-- **Read-only by architecture**: Monet never writes to Claude Code's JSONL files. Everything it adds (titles, tags, routines) lives in its own directory, `~/.monet/`.
+- **Multi-engine mission control**: browse and search Claude Code and Codex sessions together, with split columns, a live monitor rail, and inline permission approval.
+- **Read-only by architecture**: Monet does not write agent session files. Titles, tags, archive state, and search indexes live in its own directory, `~/.monet/`.
 - **Fully offline**: no telemetry, no accounts, no network calls of its own.
 - **Cron routines**: scheduled agent tasks run through the OS scheduler even while the app is closed; the Mac can wake itself, run the task, and go back to sleep.
 
 ## Prerequisites (check before installing)
 
 1. macOS 11+ on Apple Silicon, or Windows. Verify on macOS: `uname -m` prints `arm64`. Intel Macs and Linux are not supported yet — stop and tell the user if so.
-2. Claude Code CLI is optional: having it already is nice (`claude --version` to verify), but **not a prerequisite** — Monet's Settings page has a one-click Claude Code installer, so installing Monet first and adding the CLI after works fine.
+2. Claude Code and Codex CLIs are both optional. Check them with `claude --version` and `codex --version`; Monet enables whichever engines are installed. Settings can also install Claude Code later.
 3. Homebrew is optional but preferred (`brew --version`).
 
 ## Install
@@ -30,13 +30,7 @@ brew install --cask monet
 
 **Fallback — direct download:** fetch the latest installer from `https://github.com/zenolab124/monet/releases/latest` (`.dmg` for macOS, NSIS `.exe` for Windows); on macOS mount it and copy `Monet.app` into `/Applications`.
 
-**Gatekeeper:** Monet is signed with a stable identity but not yet notarized by Apple, so the first launch triggers a Gatekeeper warning. Clear it with:
-
-```bash
-xattr -cr /Applications/Monet.app
-```
-
-(Homebrew installs usually don't need this; run it if launch is blocked.) In-app updates are silent afterwards.
+**Gatekeeper:** Monet is not yet notarized by Apple. If the first launch is blocked, try opening it once, then go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. Homebrew installs usually do not require this step.
 
 ## Pre-configure (optional, before first launch)
 
@@ -70,23 +64,25 @@ Match `locale` to the language the user converses with you in.
 
 1. Launch with `open -a Monet` (or tell the user to click the app).
 2. macOS permission dialogs (Terminal automation, notifications, etc.) **cannot be answered by you** — tell the user to click Allow when prompted. Each permission maps to one feature and is explained in Settings → permission health check; nothing breaks fatally if denied.
-3. Monet auto-discovers Claude Code history from `~/.claude/projects/` — no import step.
-4. **No channel setup needed to start chatting**: with no channel configured, Monet simply runs the user's `claude` CLI with its own existing configuration — official login state, any third-party env they set up in the CLI, all work as-is. If the CLI runs, Monet runs. Multi-channel management is an optional upgrade, not a barrier to entry.
+3. Monet auto-discovers existing Claude Code and Codex sessions — no import step. Settings → Engine Center shows discovery and health for each engine.
+4. **No separate account setup is required**: Monet reuses each CLI's official login state and local configuration. Codex interaction uses the official App Server protocol; Claude Code keeps its existing CLI workflow.
 
 ## Verify
 
 - The app is running: macOS `pgrep -x Monet` / Windows `tasklist | findstr Monet`.
 - `~/.monet/` exists after first launch.
-- If the user has prior Claude Code sessions, the archive view lists their projects. A fresh machine shows an empty state — that's normal, not a failure.
+- If the user has prior sessions, Archive lists projects by engine. A fresh machine shows an empty state — that's normal, not a failure.
+- Settings → Engine Center shows installed-engine versions and can export redacted diagnostics for a bug report.
 
 ## Data locations (for troubleshooting)
 
 | What | Where | Access |
 |------|-------|--------|
 | Claude Code sessions | `~/.claude/projects/` | read-only, never modified |
+| Codex sessions | Provided by the local `codex app-server` | Rollouts are never read or written directly; reads and runtime actions use the official protocol |
 | Monet settings & metadata | `~/.monet/` | read-write, app-owned |
 | MCP registration | `~/.claude/settings.json` | adds a `monet` entry under `mcpServers` |
 
-Uninstalling (`brew uninstall --cask monet` or deleting the app) never touches Claude Code data.
+Uninstalling (`brew uninstall --cask monet` or deleting the app) never touches any agent's original session data.
 
 If something goes wrong during or after installation, switch to [troubleshoot.md](troubleshoot.md) — self-diagnosis steps and how to file a well-formed bug report.

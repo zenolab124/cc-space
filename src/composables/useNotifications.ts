@@ -21,6 +21,9 @@ import {
   isInteractiveTool,
   type PermissionRequest,
 } from './usePermissionRequests'
+import { respondInteraction as respondEngineInteraction } from '@/engines/client'
+import { sessionUiId } from '@/engines/integration'
+import type { InteractionRef, InteractionRequest, RuntimeEventEnvelope } from '@/engines/types'
 
 /**
  * 应用内通知层(FR-006/007/008/010)
@@ -93,6 +96,15 @@ export type PersistentToast =
       at: number
     }
   | {
+      kind: 'engine-interaction'
+      key: string
+      sessionId: string
+      title: string
+      sub: string
+      interaction: InteractionRequest
+      at: number
+    }
+  | {
       kind: 'error'
       key: string
       sessionId: string
@@ -110,7 +122,8 @@ function sessionTitle(sessionId: string): string {
     const s = p.sessions.find(s => s.id === sessionId)
     if (s) return displayTitle(s, getMeta(sessionId)?.title)
   }
-  if (useWorkbench().draftCwd(sessionId)) return i18n.global.t('session.newSessionTitle')
+  const workbench = useWorkbench()
+  if (workbench.draftCwd(sessionId) || workbench.engineDraft(sessionId)) return i18n.global.t('session.newSessionTitle')
   return sessionId.slice(0, 8)
 }
 
@@ -121,7 +134,8 @@ function sessionCwd(sessionId: string): string | null {
     const s = p.sessions.find(s => s.id === sessionId)
     if (s) return s.cwd
   }
-  return useWorkbench().draftCwd(sessionId)
+  const workbench = useWorkbench()
+  return workbench.draftCwd(sessionId) ?? workbench.engineDraft(sessionId)?.cwd ?? null
 }
 
 /** 持久 toast / 系统通知的类型标签：交互工具按真实语义命名，不再一律「权限请求」 */
@@ -163,6 +177,12 @@ function permissionSub(req: PermissionRequest): string {
 }
 
 const { queue } = usePermissionRequests()
+const engineInteractions = ref<Map<string, { request: InteractionRequest; sessionId: string; at: number }>>(new Map())
+
+function engineInteractionKey(reference: InteractionRef): string {
+  const runtimeId = typeof reference.runtimeId === 'string' ? reference.runtimeId : reference.runtimeId[0]
+  return `${sessionUiId(reference.session)}:${runtimeId}:${reference.requestId}`
+}
 
 const persistentToasts = computed<PersistentToast[]>(() => {
   const list: PersistentToast[] = []
@@ -179,6 +199,17 @@ const persistentToasts = computed<PersistentToast[]>(() => {
       sub: permissionSub(req),
       request: req,
       at: req.timestamp,
+    })
+  }
+  for (const entry of engineInteractions.value.values()) {
+    list.push({
+      kind: 'engine-interaction',
+      key: `engine-perm:${engineInteractionKey(entry.request.reference)}`,
+      sessionId: entry.sessionId,
+      title: sessionTitle(entry.sessionId),
+      sub: entry.request.title || entry.request.kind,
+      interaction: entry.request,
+      at: entry.at,
     })
   }
   for (const ev of errorEvents.value.values()) {
@@ -339,7 +370,51 @@ export async function initNotificationLayer(): Promise<void> {
     },
   )
 
-  // 4. Remote Control 判决 toast:仅手动开关回报成败(连接时自动开启的失败静默,
+  // 4. 通用引擎运行时：批准请求、错误与完成通知均以结构化会话键归档。
+  await listen<RuntimeEventEnvelope[]>('engine-runtime-events', event => {
+    for (const envelope of event.payload) {
+      const sessionId = sessionUiId(envelope.session)
+      const runtimeEvent = envelope.event
+      if (runtimeEvent.kind === 'interactionRequested') {
+      const request = runtimeEvent.request as unknown as InteractionRequest
+      const next = new Map(engineInteractions.value)
+      next.set(engineInteractionKey(request.reference), { request, sessionId, at: Date.now() })
+      engineInteractions.value = next
+      void maybeNotifySystem(
+        i18n.global.t('notification.permissionRequest'),
+        `${sessionTitle(sessionId)} · ${request.title || request.kind}`,
+      )
+      } else if (runtimeEvent.kind === 'interactionResolved') {
+      const reference = runtimeEvent.reference as unknown as InteractionRef
+      if (reference?.requestId) {
+        const next = new Map(engineInteractions.value)
+        next.delete(engineInteractionKey(reference))
+        engineInteractions.value = next
+      }
+      } else if (runtimeEvent.kind === 'runtimeError') {
+      const message = String(runtimeEvent.message || i18n.global.t('notification.streamError'))
+      upsertErrorEvent(sessionId, message, 'external')
+      void maybeNotifySystem(i18n.global.t('notification.errorStopped'), `${sessionTitle(sessionId)} · ${message.slice(0, 60)}`)
+      } else if (runtimeEvent.kind === 'turnCompleted') {
+      const next = new Map(engineInteractions.value)
+      for (const [id, pending] of next) {
+        if (pending.sessionId === sessionId) next.delete(id)
+      }
+      engineInteractions.value = next
+      if (runtimeEvent.error) {
+        const message = String(runtimeEvent.error)
+        upsertErrorEvent(sessionId, message, 'external')
+      } else {
+        const { activeSection } = useUiState()
+        const visible = activeSection.value === 'workbench' && isSessionVisibleInWorkbench(sessionId)
+        if (!visible) notifyTransient(i18n.global.t('notification.taskComplete', { title: sessionTitle(sessionId) }))
+        void maybeNotifySystem(i18n.global.t('notification.taskCompleteTitle'), sessionTitle(sessionId))
+      }
+      }
+    }
+  })
+
+  // 5. Remote Control 判决 toast:仅手动开关回报成败(连接时自动开启的失败静默,
   //    避免第三方渠道用户每次起进程都被骚扰);按钮状态由 useStreaming 监听同一事件负责
   await listen<{ session_id: string; active: boolean; manual: boolean; error?: string | null }>(
     'rc-status',
@@ -352,6 +427,23 @@ export async function initNotificationLayer(): Promise<void> {
       }
     },
   )
+}
+
+export async function respondEngineToast(
+  toast: Extract<PersistentToast, { kind: 'engine-interaction' }>,
+  action: 'allow' | 'allowSession' | 'deny',
+) {
+  const options = toast.interaction.options
+  const option = action === 'deny'
+    ? options.find(item => item.dangerous && /decline|deny/i.test(item.id)) ?? options.find(item => item.dangerous)
+    : action === 'allowSession'
+      ? options.find(item => !item.dangerous && /session/i.test(item.id)) ?? options.find(item => !item.dangerous)
+      : options.find(item => !item.dangerous && !/session/i.test(item.id)) ?? options.find(item => !item.dangerous)
+  if (!option) return
+  await respondEngineInteraction(toast.interaction.reference, option.id)
+  const next = new Map(engineInteractions.value)
+  next.delete(engineInteractionKey(toast.interaction.reference))
+  engineInteractions.value = next
 }
 
 // ---- 操作:toast 上的按钮 ----

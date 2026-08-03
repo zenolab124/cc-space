@@ -1,4 +1,5 @@
 import i18n from '../locales'
+import type { EngineInstanceId, ProjectRef, SessionRef } from '../engines/types'
 
 // 与 Rust 端数据模型对应的 TypeScript 类型
 
@@ -50,14 +51,26 @@ export interface SessionSummary {
   file_size: number
   message_count: number
   context_window: number | null
+  /** 多引擎结构化身份；旧草稿会话在落盘前可缺省。 */
+  reference?: SessionRef
+  project_reference?: ProjectRef
+  engine?: EngineInstanceId
+  engine_name?: string
+  native_id?: string
 }
 
 export interface Project {
   id: string
   display_path: string
+  /** 引擎确认过的真实工作目录；仅用于创建会话，不能由展示名称推断。 */
+  source_path?: string | null
   sessions: SessionSummary[]
   session_count: number
   last_active: number | null
+  reference?: ProjectRef
+  engine?: EngineInstanceId
+  engine_name?: string
+  native_id?: string
 }
 
 // --- 会话记录（完整对话）---

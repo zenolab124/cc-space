@@ -5,7 +5,7 @@
 <h1 align="center">Monet</h1>
 
 <p align="center">
-  Mission Control for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
+  Multi-engine mission control for Claude Code and Codex
 </p>
 
 <p align="center">
@@ -46,9 +46,9 @@
 
 ## What is Monet?
 
-Every conversation you have with Claude Code is scattered across terminal windows — close one and it's gone, run several and you can't keep up, start a long task and all you can do is wait.
+Every conversation you have with a coding agent is scattered across terminal windows — close one and it's gone, run several and you can't keep up, start a long task and all you can do is wait.
 
-Monet gathers them onto one wall: every session browsable, searchable, and commandable in parallel. The CLI does the work; Monet gives you eyes and hands.
+Monet gathers Claude Code, Codex, and future engines onto one wall: every session browsable, searchable, and commandable in parallel. The agent does the work; Monet gives you eyes and hands.
 
 ## Why Monet?
 
@@ -56,11 +56,19 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 
 **A home for multi-channel players.** Official subscription, third-party APIs, self-hosted proxies, local models — each session on its own channel, hot-switchable mid-conversation: a strong model for the hard turn, a cheap channel for the chores. "Follow CLI" and "Official Direct" stand side by side, and the settings page shows exactly where your CLI config points.
 
-**Your data stays yours.** Read-only over Claude Code's session files by architecture — there is no write path in the code, not a toggle. Zero telemetry and no Monet account system; local session features work offline, while subscription quota and AI features you explicitly invoke contact the respective provider's official services. Everything Monet adds lives in its own `~/.monet/` directory, so uninstalling leaves your data untouched.
+**Your data stays yours.** Engine transcripts are read-only by architecture: Claude Code JSONL is never written, while Codex history and runtime operations go through the local official App Server protocol without rewriting rollouts. Zero telemetry and no Monet account system; titles, tags, stars, and soft-delete markers live separately in `~/.monet/`, so uninstalling leaves original sessions untouched.
 
 **It works while you sleep.** Scheduled tasks run through the OS scheduler even with Monet closed; your Mac can wake itself on time, run the task, and go back to sleep. System notifications call you back whenever needed — you can walk away, the work doesn't stop.
 
 ## Features
+
+### Multi-engine system — Claude Code and Codex together
+
+- Archive, search, Workbench, and notifications can hold Claude Code and Codex sessions at the same time, with engine badges and filters throughout
+- Codex uses the local `codex app-server` for history, create/resume, streaming, steering, interruption, command/file/permission approvals, and dynamic model/effort discovery
+- Engine Center reports installation, authentication, version, capabilities, and diagnostics independently; one broken engine does not block another
+- The internal Engine Adapter contract unifies identity, history sources, timelines, runtimes, capabilities, and optional facets, so another engine needs no new top-level IPC or shared storage schema
+- Claude Code keeps its mature native Workbench, channels, Workshop, and automation features; every other surface is capability-driven and hides actions that cannot succeed
 
 ### Workbench — parallel session command
 
@@ -142,15 +150,9 @@ Or download from [Releases](../../releases): macOS `.dmg` / Windows installer.
 
 > macOS 11+ (Apple Silicon) gets the full experience; Windows covers the core features, with system-level integrations (widgets, menu bar, wake-from-sleep) being macOS-only.
 
-**First launch (macOS)**: Monet is signed but not yet notarized by Apple, so Gatekeeper warns on first open. Right-click the app → **Open** (once), or run:
+**First launch (macOS 15+)**: Monet is signed but not yet notarized by Apple. If Gatekeeper blocks it, try opening once, then go to System Settings → Privacy & Security, click **Open Anyway** in the Security section, confirm, and enter an administrator password. In-app updates work normally afterwards.
 
-```bash
-xattr -cr /Applications/Monet.app
-```
-
-Updates install silently in-app afterwards.
-
-**Works out of the box, zero config**: if your `claude` runs, Monet runs — it uses the CLI's own configuration by default, and your session history is discovered automatically with no import step. CLI not installed yet? The Settings page installs it in one click.
+**Works out of the box, zero import**: installed Claude Code and Codex engines are detected automatically, and their history appears in one Archive. Claude Code follows the CLI's own configuration by default; inspect each engine under Settings → Engines.
 
 ## Build from Source
 
@@ -191,10 +193,13 @@ Without it, the build falls back to ad-hoc signing — functional, but TCC permi
 | What | Where | Access |
 |------|-------|--------|
 | Claude Code sessions | `~/.claude/projects/` | **Read-only** |
+| Codex sessions | Provided by local `codex app-server` | **Protocol read-only; runtime actions use the official protocol** |
 | Monet metadata (titles, tags, routines) | `~/.monet/` | Read-write |
 | MCP registration | `~/.claude/settings.json` | Adds `monet` entry under `mcpServers` |
 
 Local session features work offline, with zero telemetry and no Monet account system. Subscription quota contacts only the official Claude/Codex services and reuses the official clients' existing sign-in state; Monet never proactively refreshes or writes OAuth credentials. Credential discipline: API tokens never enter command-line arguments, and temporary files are deleted right after use.
+
+On upgrade, legacy `metadata.json` is migrated idempotently to the engine-scoped `metadata-v2.json`; the old file is never deleted or overwritten. Search cache is rebuilt under `search/v2/`, partitioned by engine and project. Rolling back leaves the original Claude data usable, and upgrading again does not overwrite newer state.
 
 ## FAQ
 
@@ -215,8 +220,8 @@ Signed but not yet notarized. Right-click → Open once, and updates are silent 
 **Windows / Linux?**
 Windows is supported (core features complete, minus macOS system integrations); Linux has no near-term plans.
 
-**Will it support tools beyond Claude Code?**
-Possibly. Session parsing and the interface layer are separate, so supporting more agentic CLIs isn't ruled out — open an issue and vote if you want it.
+**Which agents are supported?**
+Claude Code and Codex are supported today. Monet is an engine system rather than two platform-specific branches; another production adapter implements only its protocol and capability declaration. See the [Engine Adapter guide](ENGINE_ADAPTERS.md).
 
 ## Tech Stack
 

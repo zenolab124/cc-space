@@ -1,6 +1,10 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { cwdToProjectId } from '@/utils/path'
+import type { SessionRef } from '@/engines/types'
+import { sessionUiId } from '@/engines/integration'
+import { resolveSessionRef } from '@/engines/directory'
+import { listEngines } from '@/engines/client'
 
 export interface SessionMeta {
   title?: string
@@ -18,7 +22,9 @@ const turnCounts = new Map<string, number>()
 let loaded = false
 
 async function loadAll() {
-  metaMap.value = await invoke<Record<string, SessionMeta>>('get_all_meta')
+  await listEngines()
+  const entries = await invoke<Array<{ session: SessionRef; metadata: SessionMeta }>>('get_all_meta_v2')
+  metaMap.value = Object.fromEntries(entries.map(entry => [sessionUiId(entry.session), entry.metadata]))
   loaded = true
 }
 
@@ -86,11 +92,14 @@ export function useSessionMeta() {
     return metaMap.value[sessionId]
   }
 
-  async function updateMeta(sessionId: string, patch: SessionMeta) {
+  async function updateMeta(sessionId: string, patch: SessionMeta, explicitSession?: SessionRef) {
     if (patch.title !== undefined) {
       patch.titleManual = true
     }
-    const updated = await invoke<SessionMeta>('update_meta', { sessionId, patch })
+    const session = explicitSession ?? resolveSessionRef(sessionId)
+    const updated = session
+      ? await invoke<SessionMeta>('update_meta_v2', { session, patch })
+      : await invoke<SessionMeta>('update_meta', { sessionId, patch })
     metaMap.value = { ...metaMap.value, [sessionId]: updated }
     return updated
   }

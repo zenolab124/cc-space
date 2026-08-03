@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useNotifications, requestKindLabel, type PersistentToast } from '@/composables/useNotifications'
+import { useNotifications, requestKindLabel, respondEngineToast, type PersistentToast } from '@/composables/useNotifications'
 import { usePermissionRequests, isInteractiveTool } from '@/composables/usePermissionRequests'
 
 /**
@@ -25,14 +25,17 @@ const foldedCount = computed(() =>
 
 async function onAllow(toast: PersistentToast) {
   if (toast.kind === 'permission') await respondRequest(toast.request.requestId, 'allow_once')
+  else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'allow')
 }
 
 async function onAllowSession(toast: PersistentToast) {
   if (toast.kind === 'permission') await respondRequest(toast.request.requestId, 'allow_session')
+  else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'allowSession')
 }
 
 async function onDeny(toast: PersistentToast) {
   if (toast.kind === 'permission') await respondRequest(toast.request.requestId, 'deny')
+  else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'deny')
 }
 
 /** 交互工具(提问/计划)不提供就地允许/拒绝——必须去会话里作答 */
@@ -41,11 +44,13 @@ function needsSession(toast: PersistentToast): boolean {
 }
 
 function toastLabel(toast: PersistentToast): string {
-  return toast.kind === 'permission' ? requestKindLabel(toast.request.toolName) : t('notification.errorStopped')
+  if (toast.kind === 'permission') return requestKindLabel(toast.request.toolName)
+  return toast.kind === 'engine-interaction' ? t('notification.permissionRequest') : t('notification.errorStopped')
 }
 
 function toastIcon(toast: PersistentToast): string {
   if (toast.kind === 'error') return 'i-carbon-warning text-destructive'
+  if (toast.kind === 'engine-interaction') return 'i-carbon-locked text-accent'
   switch (toast.request.toolName) {
     case 'AskUserQuestion': return 'i-carbon-help text-accent'
     case 'ExitPlanMode':
@@ -99,7 +104,7 @@ function toastIcon(toast: PersistentToast): string {
 
         <!-- 操作 -->
         <div class="flex items-center gap-1.5">
-          <template v-if="t.kind === 'permission'">
+          <template v-if="t.kind !== 'error'">
             <!-- 提问/计划类:就地无法作答,「去会话」提为主操作 -->
             <template v-if="needsSession(t)">
               <button class="px-2.5 py-0.5 text-[11px] rounded bg-primary text-primary-foreground" @click="goToSession(t.sessionId)">{{ $t('notification.goToSession') }}</button>

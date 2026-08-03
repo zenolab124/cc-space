@@ -1,111 +1,85 @@
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::config::projects_dir;
 use crate::config;
-use crate::models::{SessionRecord, MessageContent};
+use crate::config::projects_dir;
+use crate::engines::core::{EngineInstanceId, MetadataStore, SessionMetadataEntry, SessionRef};
+use crate::models::{MessageContent, SessionRecord};
 use crate::parser;
 
-static STORE: Mutex<Option<HashMap<String, SessionMeta>>> = Mutex::new(None);
+pub use crate::engines::core::SessionMetadata as SessionMeta;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionMeta {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub starred: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title_manual: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+static STORE: Mutex<Option<MetadataStore>> = Mutex::new(None);
+
+fn claude_instance() -> EngineInstanceId {
+    EngineInstanceId::new("claude-code", "default").expect("static Claude engine id is valid")
 }
 
-fn meta_path() -> PathBuf {
-    config::data_dir().join("metadata.json")
+fn claude_session(session_id: impl Into<String>) -> Result<SessionRef, String> {
+    SessionRef::new(claude_instance(), session_id.into()).map_err(|error| error.to_string())
 }
 
-fn load() -> HashMap<String, SessionMeta> {
-    let path = meta_path();
-    if !path.exists() {
-        return HashMap::new();
-    }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save(data: &HashMap<String, SessionMeta>) {
-    let path = meta_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(data) {
-        let _ = fs::write(&path, json);
-    }
-}
-
-fn with_store<F, R>(f: F) -> R
+fn with_store<F, R>(f: F) -> Result<R, String>
 where
-    F: FnOnce(&mut HashMap<String, SessionMeta>) -> R,
+    F: FnOnce(&mut MetadataStore) -> Result<R, String>,
 {
-    let mut guard = STORE.lock().unwrap();
-    let store = guard.get_or_insert_with(load);
+    let mut guard = STORE.lock().unwrap_or_else(|error| error.into_inner());
+    if guard.is_none() {
+        *guard = Some(MetadataStore::open(config::data_dir(), &claude_instance())?);
+    }
+    let store = guard.as_mut().expect("metadata store was initialized");
     f(store)
 }
 
 #[tauri::command]
 pub fn get_all_meta() -> HashMap<String, SessionMeta> {
-    with_store(|s| s.clone())
+    with_store(|store| Ok(store.all_for_instance(&claude_instance()))).unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_all_meta_v2() -> Result<Vec<SessionMetadataEntry>, String> {
+    with_store(|store| store.all())
 }
 
 #[tauri::command]
 pub fn update_meta(session_id: String, patch: SessionMeta) -> Result<SessionMeta, String> {
-    with_store(|store| {
-        let entry = store.entry(session_id).or_default();
-        if let Some(v) = patch.title {
-            entry.title = Some(v);
-        }
-        if let Some(v) = patch.deleted {
-            entry.deleted = Some(v);
-        }
-        if let Some(v) = patch.deleted_at {
-            entry.deleted_at = Some(v);
-        }
-        if let Some(v) = patch.tags {
-            entry.tags = Some(v);
-        }
-        if let Some(v) = patch.starred {
-            entry.starred = Some(v);
-        }
-        if let Some(v) = patch.title_manual {
-            entry.title_manual = Some(v);
-        }
-        if let Some(v) = patch.summary {
-            entry.summary = Some(v);
-        }
-        let result = entry.clone();
-        save(store);
-        Ok(result)
-    })
+    let session = claude_session(session_id)?;
+    with_store(|store| store.update(&session, patch))
+}
+
+#[tauri::command]
+pub fn update_meta_v2(session: SessionRef, patch: SessionMeta) -> Result<SessionMeta, String> {
+    with_store(|store| store.update(&session, patch))
 }
 
 /// 查询某会话是否已被软删除（discovery 过滤用）
 pub fn is_deleted(session_id: &str) -> bool {
-    with_store(|s| s.get(session_id).and_then(|m| m.deleted).unwrap_or(false))
+    let Ok(session) = claude_session(session_id) else {
+        return false;
+    };
+    with_store(|store| {
+        Ok(store
+            .get(&session)
+            .and_then(|metadata| metadata.deleted)
+            .unwrap_or(false))
+    })
+    .unwrap_or(false)
 }
 
+fn metadata_for(session_id: &str) -> Option<SessionMeta> {
+    let session = claude_session(session_id).ok()?;
+    with_store(|store| Ok(store.get(&session).cloned()))
+        .ok()
+        .flatten()
+}
+
+pub fn metadata_for_ref(session: &SessionRef) -> Option<SessionMeta> {
+    with_store(|store| Ok(store.get(session).cloned()))
+        .ok()
+        .flatten()
+}
 
 fn extract_conversation_snippet(project_id: &str, session_id: &str) -> Option<(String, usize)> {
     let path = projects_dir()
@@ -154,33 +128,30 @@ pub struct TitleResult {
 }
 
 #[tauri::command]
-pub async fn generate_title(
-    project_id: String,
-    session_id: String,
-) -> Result<TitleResult, String> {
+pub async fn generate_title(project_id: String, session_id: String) -> Result<TitleResult, String> {
     if !crate::channels::is_agent_enabled("title") {
         return Err("agent.title 已禁用".to_string());
     }
     let sid = session_id.clone();
     let pid = project_id.clone();
-    let current_title = with_store(|store| {
-        store.get(&sid).and_then(|m| m.title.clone())
-    });
+    let current_title = metadata_for(&sid).and_then(|metadata| metadata.title);
 
     let (title, turn_count) = tauri::async_runtime::spawn_blocking(move || {
-        let (snippet, count) = extract_conversation_snippet(&pid, &sid)
-            .ok_or_else(|| "会话无内容".to_string())?;
+        let (snippet, count) =
+            extract_conversation_snippet(&pid, &sid).ok_or_else(|| "会话无内容".to_string())?;
         let title = crate::agent::generate_title(&snippet, current_title.as_deref())?;
         Ok::<_, String>((title, count))
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    with_store(|store| {
-        let entry = store.entry(session_id).or_default();
-        entry.title = Some(title.clone());
-        save(store);
-    });
+    update_meta(
+        session_id,
+        SessionMeta {
+            title: Some(title.clone()),
+            ..Default::default()
+        },
+    )?;
 
     Ok(TitleResult { title, turn_count })
 }
@@ -205,11 +176,9 @@ pub async fn translate_settings_fields(fields_json: String) -> Result<String, St
     if !crate::channels::is_agent_enabled("settings_explain") {
         return Err("agent.settings_explain 已禁用".to_string());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::agent::translate_settings(&fields_json)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || crate::agent::translate_settings(&fields_json))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -222,24 +191,20 @@ pub async fn extract_settings_defaults(fields_json: String) -> Result<String, St
 }
 
 #[tauri::command]
-pub async fn generate_tags(
-    project_id: String,
-    session_id: String,
-) -> Result<Vec<String>, String> {
+pub async fn generate_tags(project_id: String, session_id: String) -> Result<Vec<String>, String> {
     if !crate::channels::is_agent_enabled("tags") {
         return Err("agent.tags 已禁用".to_string());
     }
     let sid = session_id.clone();
     let pid = project_id.clone();
-    let current_tags = with_store(|store| {
-        store.get(&sid).and_then(|m| m.tags.clone())
-    });
+    let current_tags = metadata_for(&sid).and_then(|metadata| metadata.tags);
 
     let tags = tauri::async_runtime::spawn_blocking(move || {
-        let (snippet, _) = extract_conversation_snippet(&pid, &sid)
-            .ok_or_else(|| "会话无内容".to_string())?;
+        let (snippet, _) =
+            extract_conversation_snippet(&pid, &sid).ok_or_else(|| "会话无内容".to_string())?;
         let raw = crate::agent::generate_tags(&snippet, current_tags.as_deref())?;
-        let tags: Vec<String> = raw.split(['，', ','])
+        let tags: Vec<String> = raw
+            .split(['，', ','])
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
@@ -248,42 +213,41 @@ pub async fn generate_tags(
     .await
     .map_err(|e| e.to_string())??;
 
-    with_store(|store| {
-        let entry = store.entry(session_id).or_default();
-        entry.tags = Some(tags.clone());
-        save(store);
-    });
+    update_meta(
+        session_id,
+        SessionMeta {
+            tags: Some(tags.clone()),
+            ..Default::default()
+        },
+    )?;
 
     Ok(tags)
 }
 
 #[tauri::command]
-pub async fn generate_summary(
-    project_id: String,
-    session_id: String,
-) -> Result<String, String> {
+pub async fn generate_summary(project_id: String, session_id: String) -> Result<String, String> {
     if !crate::channels::is_agent_enabled("summary") {
         return Err("agent.summary 已禁用".to_string());
     }
     let sid = session_id.clone();
     let pid = project_id.clone();
-    let current_summary = with_store(|store| {
-        store.get(&sid).and_then(|m| m.summary.clone())
-    });
+    let current_summary = metadata_for(&sid).and_then(|metadata| metadata.summary);
 
     let summary = tauri::async_runtime::spawn_blocking(move || {
-        let (snippet, _) = extract_conversation_snippet(&pid, &sid)
-            .ok_or_else(|| "会话无内容".to_string())?;
+        let (snippet, _) =
+            extract_conversation_snippet(&pid, &sid).ok_or_else(|| "会话无内容".to_string())?;
         crate::agent::generate_summary(&snippet, current_summary.as_deref())
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    with_store(|store| {
-        let entry = store.entry(session_id).or_default();
-        entry.summary = Some(summary.clone());
-        save(store);
-    });
+    update_meta(
+        session_id,
+        SessionMeta {
+            summary: Some(summary.clone()),
+            ..Default::default()
+        },
+    )?;
 
     Ok(summary)
 }
@@ -298,9 +262,7 @@ pub async fn parse_natural_schedule(text: String) -> Result<String, String> {
     if !crate::channels::is_agent_enabled("cron_parse") {
         return Err("agent.cron_parse 已禁用".to_string());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::agent::parse_cron(&text)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || crate::agent::parse_cron(&text))
+        .await
+        .map_err(|e| e.to_string())?
 }

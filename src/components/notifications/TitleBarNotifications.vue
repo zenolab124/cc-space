@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import {
   useNotifications,
   requestKindLabel,
+  respondEngineToast,
   type PersistentToast,
 } from '@/composables/useNotifications'
 import {
@@ -31,6 +32,7 @@ const transientText = computed(() => {
 
 function icon(toast: PersistentToast): string {
   if (toast.kind === 'error') return 'i-carbon-warning text-destructive'
+  if (toast.kind === 'engine-interaction') return 'i-carbon-locked text-accent'
   switch (toast.request.toolName) {
     case 'AskUserQuestion': return 'i-carbon-help text-accent'
     case 'ExitPlanMode':
@@ -40,9 +42,8 @@ function icon(toast: PersistentToast): string {
 }
 
 function label(toast: PersistentToast): string {
-  return toast.kind === 'permission'
-    ? requestKindLabel(toast.request.toolName)
-    : t('notification.errorStopped')
+  if (toast.kind === 'permission') return requestKindLabel(toast.request.toolName)
+  return toast.kind === 'engine-interaction' ? t('notification.permissionRequest') : t('notification.errorStopped')
 }
 
 function needsSession(toast: PersistentToast): boolean {
@@ -52,14 +53,17 @@ function needsSession(toast: PersistentToast): boolean {
 async function onAllow(toast: PersistentToast) {
   if (toast.kind === 'permission')
     await respondRequest(toast.request.requestId, 'allow_once')
+  else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'allow')
 }
 async function onAllowSession(toast: PersistentToast) {
   if (toast.kind === 'permission')
     await respondRequest(toast.request.requestId, 'allow_session')
+  else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'allowSession')
 }
 async function onDeny(toast: PersistentToast) {
   if (toast.kind === 'permission')
     await respondRequest(toast.request.requestId, 'deny')
+  else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'deny')
 }
 
 // --- dropdown ---
@@ -104,7 +108,7 @@ onUnmounted(() => document.removeEventListener('pointerdown', onOutside, true))
         </span>
 
         <!-- actions -->
-        <template v-if="current.kind === 'permission'">
+        <template v-if="current.kind !== 'error'">
           <template v-if="needsSession(current)">
             <button class="nb" @click="goToSession(current!.sessionId)">{{ $t('notification.goToSessionBrief') }}</button>
           </template>
@@ -156,7 +160,7 @@ onUnmounted(() => document.removeEventListener('pointerdown', onOutside, true))
           </div>
           <div class="mt-0.5 font-mono text-muted-foreground truncate">{{ toast.sub }}</div>
           <div class="mt-1 flex items-center gap-1">
-            <template v-if="toast.kind === 'permission'">
+            <template v-if="toast.kind !== 'error'">
               <template v-if="needsSession(toast)">
                 <button class="nb nb-primary" @click="goToSession(toast.sessionId)">{{ $t('notification.goToSessionBrief') }}</button>
               </template>

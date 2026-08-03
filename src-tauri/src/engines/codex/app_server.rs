@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, VecDeque};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -11,16 +11,20 @@ use serde_json::Value;
 use crate::engines::core::{EngineError, EngineErrorKind, EngineResult};
 use crate::proc_ext::HideConsole;
 
+const MAX_PROTOCOL_LINE_BYTES: usize = 64 * 1024 * 1024;
+
 pub const CORE_CLIENT_METHODS: &[&str] = &[
     "initialize",
     "thread/list",
     "thread/read",
     "thread/start",
     "thread/resume",
+    "thread/unsubscribe",
     "turn/start",
     "turn/steer",
     "turn/interrupt",
     "model/list",
+    "account/read",
 ];
 
 pub const CORE_SERVER_REQUESTS: &[&str] = &[
@@ -35,9 +39,16 @@ pub const CORE_NOTIFICATIONS: &[&str] = &[
     "item/started",
     "item/completed",
     "item/agentMessage/delta",
+    "item/reasoning/textDelta",
+    "item/reasoning/summaryTextDelta",
+    "item/commandExecution/outputDelta",
+    "thread/started",
+    "thread/archived",
+    "thread/name/updated",
+    "thread/closed",
 ];
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(untagged)]
 pub enum RequestId {
     Number(u64),
@@ -65,6 +76,12 @@ impl ClientRequest {
 pub struct ClientNotification {
     pub method: String,
     pub params: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ClientResponse {
+    pub id: RequestId,
+    pub result: Value,
 }
 
 impl ClientNotification {
@@ -203,6 +220,11 @@ impl AppServerError {
     pub fn rpc_error(&self) -> Option<&RpcError> {
         self.rpc_error.as_ref()
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_error(kind: AppServerErrorKind) -> Self {
+        Self::new(kind)
+    }
 }
 
 impl std::fmt::Display for AppServerError {
@@ -223,7 +245,7 @@ impl std::error::Error for AppServerError {}
 
 pub struct AppServerClient {
     stdin: BufWriter<ChildStdin>,
-    stdout_rx: Receiver<String>,
+    stdout_rx: Receiver<Result<String, AppServerErrorKind>>,
     pending: VecDeque<IncomingMessage>,
     _process: AppServerProcess,
 }
@@ -262,27 +284,13 @@ impl AppServerClient {
 
         let (stdout_tx, stdout_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if stdout_tx.send(line).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
+            forward_protocol_lines(BufReader::new(stdout), stdout_tx, MAX_PROTOCOL_LINE_BYTES);
         });
         if let Some(stderr) = stderr {
             std::thread::spawn(move || {
                 let mut reader = BufReader::new(stderr);
-                let mut sink = String::new();
-                while reader.read_line(&mut sink).unwrap_or(0) > 0 {
-                    if sink.len() > 16 * 1024 {
-                        sink.drain(..8 * 1024);
-                    }
-                }
+                let mut sink = [0_u8; 4096];
+                while reader.read(&mut sink).unwrap_or(0) > 0 {}
             });
         }
 
@@ -305,6 +313,10 @@ impl AppServerClient {
         params: Value,
     ) -> Result<(), AppServerError> {
         self.write_message(&ClientRequest::new(id, method, params))
+    }
+
+    pub fn respond(&mut self, id: RequestId, result: Value) -> Result<(), AppServerError> {
+        self.write_message(&ClientResponse { id, result })
     }
 
     pub fn receive(&mut self, timeout: Duration) -> Result<IncomingMessage, AppServerError> {
@@ -346,8 +358,9 @@ impl AppServerClient {
 
     fn receive_transport(&self, timeout: Duration) -> Result<IncomingMessage, AppServerError> {
         match self.stdout_rx.recv_timeout(timeout) {
-            Ok(line) => IncomingMessage::parse(&line)
+            Ok(Ok(line)) => IncomingMessage::parse(&line)
                 .map_err(|_| AppServerError::new(AppServerErrorKind::Protocol)),
+            Ok(Err(kind)) => Err(AppServerError::new(kind)),
             Err(RecvTimeoutError::Timeout) => Err(AppServerError::new(AppServerErrorKind::Timeout)),
             Err(RecvTimeoutError::Disconnected) => {
                 Err(AppServerError::new(AppServerErrorKind::Eof))
@@ -363,6 +376,63 @@ impl AppServerClient {
             .and_then(|_| self.stdin.flush())
             .map_err(|_| AppServerError::new(AppServerErrorKind::Io))
     }
+}
+
+fn forward_protocol_lines<R: BufRead>(
+    mut reader: R,
+    sender: Sender<Result<String, AppServerErrorKind>>,
+    max_line_bytes: usize,
+) {
+    let mut line = Vec::new();
+    let mut oversized = false;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(_) => {
+                let _ = sender.send(Err(AppServerErrorKind::Io));
+                return;
+            }
+        };
+        if available.is_empty() {
+            if !line.is_empty() || oversized {
+                let result = finish_protocol_line(line, oversized);
+                let _ = sender.send(result);
+            }
+            return;
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |position| position + 1);
+        if !oversized {
+            if line.len().saturating_add(consumed) > max_line_bytes {
+                oversized = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..consumed]);
+            }
+        }
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            let result = finish_protocol_line(std::mem::take(&mut line), oversized);
+            oversized = false;
+            if sender.send(result).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+fn finish_protocol_line(mut line: Vec<u8>, oversized: bool) -> Result<String, AppServerErrorKind> {
+    if oversized {
+        return Err(AppServerErrorKind::Protocol);
+    }
+    if line.last() == Some(&b'\n') {
+        line.pop();
+    }
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    String::from_utf8(line).map_err(|_| AppServerErrorKind::Protocol)
 }
 
 struct AppServerProcess {
@@ -581,6 +651,20 @@ mod tests {
     }
 
     #[test]
+    fn protocol_reader_rejects_oversized_lines_without_unbounded_buffering() {
+        let input = b"{}\n1234567890123\n{\"ok\":true}\n";
+        let (sender, receiver) = mpsc::channel();
+        forward_protocol_lines(std::io::Cursor::new(input), sender, 12);
+
+        assert_eq!(receiver.recv().unwrap().unwrap(), "{}");
+        assert_eq!(
+            receiver.recv().unwrap().unwrap_err(),
+            AppServerErrorKind::Protocol
+        );
+        assert_eq!(receiver.recv().unwrap().unwrap(), r#"{"ok":true}"#);
+    }
+
+    #[test]
     fn outgoing_messages_omit_json_rpc_header() {
         let request =
             serde_json::to_value(ClientRequest::new(1, "thread/list", json!({ "limit": 1 })))
@@ -607,6 +691,20 @@ mod tests {
 
         assert!(report.supported.contains(&"initialize".to_string()));
         assert!(report.missing.contains(&"turn/start".to_string()));
+    }
+
+    #[test]
+    fn minimum_supported_schema_projection_covers_core_contract() {
+        let schema: Value =
+            serde_json::from_str(include_str!("fixtures/app-server-0.146.0-contract.json"))
+                .expect("synthetic baseline contract should be valid JSON");
+        let report = validate_schema_contract([&schema]);
+
+        assert!(
+            report.is_supported(),
+            "missing methods: {:?}",
+            report.missing
+        );
     }
 
     #[cfg(unix)]
@@ -684,8 +782,18 @@ mod tests {
         let threads = server
             .request(1, "thread/list", json!({ "limit": 1 }), deadline, timeout)
             .expect("thread/list should succeed");
+        let account = server
+            .request(
+                2,
+                "account/read",
+                json!({ "refreshToken": false }),
+                deadline,
+                timeout,
+            )
+            .expect("account/read should succeed");
 
         assert!(threads.is_object(), "thread/list should return an object");
+        assert!(account.is_object(), "account/read should return an object");
     }
 
     #[test]

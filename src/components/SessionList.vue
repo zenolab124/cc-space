@@ -18,7 +18,7 @@ import { useRunners } from '@/composables/useRunners'
 const { t } = useI18n()
 const { getMeta } = useSessionMeta()
 
-const { filteredSessions, sessionStats, loadProjects } = useProjects()
+const { filteredSessions, sessionStats, loadProjects, engineOptions, selectedEngineIds, toggleEngine } = useProjects()
 const {
   selectedSessionId,
   sortOrder,
@@ -249,6 +249,18 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
 
     <!-- 筛选栏 -->
     <div class="px-3 py-1 flex flex-wrap gap-1.5 items-center">
+      <button
+        v-for="engine in engineOptions"
+        :key="engine.id"
+        class="px-2 py-0.5 text-xs rounded transition-colors"
+        :class="selectedEngineIds.has(engine.id) ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground'"
+        @click="toggleEngine(engine.id)"
+      >
+        {{ engine.name }}
+      </button>
+
+      <span v-if="engineOptions.length" class="text-border">|</span>
+
       <!-- 时间范围 -->
       <button
         v-for="(label, key) in timeLabels"
@@ -323,6 +335,7 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               {{ displayTitle(session, getMeta(session.id)?.title) }}
             </div>
             <div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
+              <span class="px-1 rounded bg-secondary/70 text-[9px]">{{ session.engine_name }}</span>
               <span v-if="session.git_branch">{{ session.git_branch }}</span>
               <span v-if="session.git_branch">·</span>
               <span>{{ relativeTime(session.last_modified) }}</span>

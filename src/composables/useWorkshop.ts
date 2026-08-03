@@ -1,6 +1,8 @@
 import { reactive, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { WorkshopAssets } from '../types'
+import { listAssets, listEngines } from '@/engines/client'
+import type { EngineDescriptor } from '@/engines/types'
 
 /**
  * 工坊数据源（v2.3.0 FR-001/FR-005）：
@@ -17,6 +19,7 @@ export type McpProbeState = 'probing' | 'online' | 'offline'
 const assets = ref<WorkshopAssets | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+const sourceEngine = ref<EngineDescriptor | null>(null)
 
 /** 探活状态表，key = path + '|' + name（同名服务器跨配置文件唯一） */
 const probeStates = reactive(new Map<string, McpProbeState>())
@@ -34,7 +37,21 @@ async function load() {
   loading.value = true
   error.value = null
   try {
-    assets.value = await invoke<WorkshopAssets>('get_workshop_assets')
+    const descriptor = (await listEngines()).find(engine => engine.enabled && engine.capabilities.facets.assets)
+    if (!descriptor) throw new Error('No enabled engine provides workshop assets')
+    sourceEngine.value = descriptor
+    const [skills, commands, agents, mcpServers] = await Promise.all([
+      listAssets(descriptor.instance, 'skill'),
+      listAssets(descriptor.instance, 'command'),
+      listAssets(descriptor.instance, 'agent'),
+      listAssets(descriptor.instance, 'mcp'),
+    ])
+    assets.value = {
+      skills: skills.map(item => item.data) as WorkshopAssets['skills'],
+      commands: commands.map(item => item.data) as WorkshopAssets['commands'],
+      agents: agents.map(item => item.data) as WorkshopAssets['agents'],
+      mcpServers: mcpServers.map(item => item.data) as WorkshopAssets['mcpServers'],
+    }
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -81,6 +98,7 @@ function probeMcpServers() {
 export function useWorkshop() {
   return {
     assets,
+    sourceEngine,
     loading,
     error,
     ensureLoaded,

@@ -7,6 +7,27 @@ use super::{EngineError, EngineErrorKind, EngineResult, ProjectRef, SessionRef};
 
 const SOURCE_METADATA_MAX_KEYS: usize = 32;
 const SOURCE_METADATA_MAX_BYTES: usize = 16 * 1024;
+const SEGMENT_TEXT_MAX_CHARS: usize = 2_000_000;
+const SEGMENT_VALUE_MAX_BYTES: usize = 256 * 1024;
+
+pub fn bounded_segment_text(mut value: String) -> String {
+    if let Some((boundary, _)) = value.char_indices().nth(SEGMENT_TEXT_MAX_CHARS) {
+        value.truncate(boundary);
+        value.push('…');
+    }
+    value
+}
+
+pub fn bounded_segment_value(value: Value) -> Value {
+    if serde_json::to_vec(&value)
+        .map(|encoded| encoded.len() <= SEGMENT_VALUE_MAX_BYTES)
+        .unwrap_or(false)
+    {
+        value
+    } else {
+        serde_json::json!({ "truncated": true })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,6 +167,8 @@ pub struct Usage {
     pub output_tokens: u64,
     pub total_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -213,6 +236,19 @@ mod tests {
         assert_eq!(
             SourceMetadata::new(values).unwrap_err().kind,
             EngineErrorKind::Protocol
+        );
+    }
+
+    #[test]
+    fn segment_payloads_are_bounded_on_utf8_boundaries() {
+        let text = bounded_segment_text("界".repeat(SEGMENT_TEXT_MAX_CHARS + 1));
+        assert_eq!(text.chars().count(), SEGMENT_TEXT_MAX_CHARS + 1);
+        assert!(text.ends_with('…'));
+        assert_eq!(
+            bounded_segment_value(serde_json::json!({
+                "value": "x".repeat(SEGMENT_VALUE_MAX_BYTES)
+            })),
+            serde_json::json!({ "truncated": true })
         );
     }
 }

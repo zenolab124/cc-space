@@ -34,6 +34,10 @@ function projectPath(displayPath: string) {
 function projectTokens(project: typeof projects.value[number]) {
   return project.sessions.reduce((sum, s) => sum + tokenTotal(s.total_tokens), 0)
 }
+
+function engineLabel(project: typeof projects.value[number]) {
+  return project.engine_name ?? project.engine?.engineId ?? ''
+}
 </script>
 
 <template>
@@ -78,9 +82,14 @@ function projectTokens(project: typeof projects.value[number]) {
         />
         <div class="min-w-0 flex-1">
           <div class="flex items-baseline justify-between gap-2">
-            <span class="text-sm text-foreground truncate font-medium" :title="project.display_path">
-              {{ projectName(project.display_path) }}
-            </span>
+            <div class="min-w-0 flex items-center gap-1.5">
+              <span class="text-sm text-foreground truncate font-medium" :title="project.display_path">
+                {{ projectName(project.display_path) }}
+              </span>
+              <span class="shrink-0 px-1 py-px rounded bg-secondary text-[9px] text-muted-foreground">
+                {{ engineLabel(project) }}
+              </span>
+            </div>
             <span v-if="project.last_active" class="text-xs text-muted-foreground shrink-0">
               {{ relativeTime(project.last_active) }}
             </span>

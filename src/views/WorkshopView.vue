@@ -24,7 +24,7 @@ import type { WorkshopMcpServer } from '@/types'
 
 const { t } = useI18n()
 const { activeSection } = useUiState()
-const { assets, loading, error, ensureLoaded, refresh, retry, probeStates, probeMcpServers } = useWorkshop()
+const { assets, sourceEngine, loading, error, ensureLoaded, refresh, retry, probeStates, probeMcpServers } = useWorkshop()
 const { hooksCount, ensureLoaded: ensureHooksLoaded } = useHooks()
 const { memoryCount, ensureLoaded: ensureMemoryLoaded, ensureFresh: refreshMemory } = useMemory()
 
@@ -207,6 +207,7 @@ function onMcpAddSuccess() {
         <div class="col-list" :class="{ 'col-list-narrow': isNarrow }">
           <div class="list-head">
             <h2 class="list-title">{{ head.title }}</h2>
+            <span v-if="sourceEngine" class="rounded bg-secondary px-1.5 py-0.5 text-[9px] text-muted-foreground">{{ sourceEngine.displayName }}</span>
             <span class="list-sub">{{ head.sub }}</span>
           </div>
           <div class="list-toolbar">

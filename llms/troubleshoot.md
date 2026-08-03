@@ -10,7 +10,7 @@
 |------|-----|
 | Monet version | `defaults read /Applications/Monet.app/Contents/Info.plist CFBundleShortVersionString` |
 | macOS version / arch | `sw_vers -productVersion` and `uname -m` (must be `arm64`) |
-| Claude Code CLI | `claude --version` |
+| Agent CLIs | `claude --version` and `codex --version` (collect whichever are installed) |
 | Install method | `brew list --cask --versions monet` succeeds → Homebrew, else direct `.dmg` |
 | App running? | `pgrep -x Monet` |
 | Background services | `launchctl list \| grep io.github.zenolab124.monet` |
@@ -23,9 +23,11 @@ Log locations (all under `~/.monet/`):
 
 ## Common issues
 
-**App blocked at launch ("damaged" / unidentified developer).** Gatekeeper reaction to a signed-but-not-notarized app. Fix: `xattr -cr /Applications/Monet.app`, then reopen. One-time; in-app updates are silent afterwards.
+**App blocked at launch (unidentified developer).** Try opening it once, then go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. Do not bypass the system prompt by removing quarantine attributes.
 
-**No sessions / projects visible.** Monet reads `~/.claude/projects/` by default. Check the directory exists and has content. If the user relocated Claude Code data (`CLAUDE_CONFIG_DIR`), set `claudeRoot` in `~/.monet/settings.json` (see install.md) and restart. An empty archive on a machine that never ran Claude Code is normal.
+**No sessions / projects visible.** Start in Settings → Engine Center; it distinguishes a missing CLI, an unavailable data source, and a runtime-protocol connection failure. Claude Code reads `~/.claude/projects/` by default; if its data was relocated with `CLAUDE_CONFIG_DIR`, set `claudeRoot` in `~/.monet/settings.json` and restart. Codex history and interactive work are both provided by the official Codex CLI App Server, so the CLI must be authenticated and its App Server must start; Monet does not scan rollouts directly. An unused engine being empty is normal.
+
+**One engine fails while another works.** That is expected failure isolation. Inspect the affected engine in Settings → Engine Center. For a report, export diagnostics from the same page; the export contains engine identity, version, health state, and redacted errors, never transcript content, prompts, or credentials.
 
 **Menu bar icon missing.** Check `launchctl list | grep io.github.zenolab124.monet.tray`. Restart the app (the tray is re-registered on launch). Inspect `~/.monet/tray.log` for errors.
 
@@ -41,7 +43,7 @@ Log locations (all under `~/.monet/`):
 
 If self-diagnosis says "this is a software defect", file an issue — you can produce a far better report than a hand-filled template.
 
-**1. Collect** (from Diagnostic basics): Monet version, macOS version + arch, CLI version, install method, what happened vs expected, minimal reproduction steps, and the *relevant* log lines only (not whole files).
+**1. Collect** (from Diagnostic basics): Monet version, macOS version + arch, the relevant agent and CLI version, install method, the Engine Center diagnostic export, what happened vs expected, minimal reproduction steps, and the *relevant* log lines only (not whole files).
 
 **2. Redact — hard rules, apply before anything leaves the machine:**
 
@@ -51,7 +53,7 @@ If self-diagnosis says "this is a software defect", file an issue — you can pr
 
 **3. Confirm with the user.** Show them the final issue title and body and get an explicit OK — you are publishing on their behalf.
 
-**4. Submit** — pick the first path that works. Structure the report body after the repo's bug template either way: Monet version / macOS version / CLI version / What happened / Steps to reproduce / Expected behavior / Logs.
+**4. Submit** — pick the first path that works. Structure the report body after the repo's bug template either way: Monet version / macOS version / engine and CLI version / What happened / Steps to reproduce / Expected behavior / redacted diagnostics and logs.
 
 **Path A — GitHub CLI** (`gh auth status` succeeds). The issue belongs to the user's account, so they get reply notifications:
 

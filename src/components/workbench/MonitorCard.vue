@@ -13,6 +13,8 @@ import { displayTitle, formatTokens, relativeTime } from '@/types'
 import { fileName } from '@/utils/path'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 import { useRunners } from '@/composables/useRunners'
+import { respondInteraction } from '@/engines/client'
+import { useEngineRuntimeState } from '@/engines/runtimeState'
 
 const { t } = useI18n()
 const { getMeta } = useSessionMeta()
@@ -29,7 +31,7 @@ const props = defineProps<{
 const sid = computed(() => props.sessionId)
 
 const { projects } = useProjects()
-const { activeTab, expandSession, removeSession, flashSessionId, draftCwd } = useWorkbench()
+const { activeTab, expandSession, removeSession, flashSessionId, draftCwd, engineDraft } = useWorkbench()
 const { retrySession } = useStreaming()
 const { respondRequest } = usePermissionRequests()
 const { notifyTransient, sessionTitle, dismissError } = useNotifications()
@@ -37,12 +39,19 @@ const { confirm } = useConfirm()
 
 const stream = useSessionStream(sid)
 const status = useSessionStatus(sid)
+const engineRuntime = useEngineRuntimeState(sid)
 const perms = queueForSession(sid)
 
 // Runner 运行中计数（用于小徽标）
 const { runningCount: getRunnerCount } = useRunners()
 const runnerCount = computed(() => getRunnerCount(props.sessionId))
 const headPerm = computed(() => perms.value[0] ?? null)
+const engineInteraction = computed(() => engineRuntime.value.snapshot?.pendingInteractions[0] ?? null)
+const displayTail = computed(() => engineRuntime.value.tail.length ? engineRuntime.value.tail : stream.value.tail)
+const runtimeActive = computed(() => {
+  const phase = engineRuntime.value.snapshot?.phase
+  return phase === 'running' || phase === 'awaitingInteraction'
+})
 
 const summary = computed(() => {
   for (const p of projects.value) {
@@ -55,8 +64,10 @@ const summary = computed(() => {
 /** 应用内新建未落盘的草稿:标题与项目名占位 */
 const draft = computed(() => {
   if (summary.value) return null
+  const genericDraft = engineDraft(props.sessionId)
+  if (genericDraft) return { projectName: fileName(genericDraft.cwd), engineName: genericDraft.engineName }
   const cwd = draftCwd(props.sessionId)
-  return cwd ? { projectName: fileName(cwd) } : null
+  return cwd ? { projectName: fileName(cwd), engineName: null } : null
 })
 
 const title = computed(() =>
@@ -71,7 +82,7 @@ const now = ref(Date.now())
 let timer: number | null = null
 
 watch(
-  () => stream.value.streaming,
+  () => stream.value.streaming || runtimeActive.value,
   (active) => {
     if (active && timer === null) {
       timer = window.setInterval(() => {
@@ -114,8 +125,10 @@ const canRetry = computed(() => status.value.key === 'error' && !!stream.value.l
 // --- meta:持续时间(运行中)或最后活动时间 ---
 
 const durationText = computed(() => {
-  if (stream.value.streaming && stream.value.startedAt) {
-    const mins = Math.floor((now.value - stream.value.startedAt) / 60_000)
+  const runtimeStartedAt = engineRuntime.value.startedAt
+  const activeSince = runtimeActive.value ? runtimeStartedAt : stream.value.streaming ? stream.value.startedAt : null
+  if (activeSince) {
+    const mins = Math.floor((now.value - activeSince) / 60_000)
     return mins < 1 ? t('time.justStarted') : t('time.nMinutes', { n: mins })
   }
   return summary.value ? relativeTime(summary.value.summary.last_modified) : ''
@@ -140,7 +153,7 @@ function onCardClick() {
 
 /** ×:退出工作台。流式中需确认(退出≠终止,流在后台继续直至落盘) */
 async function onClose() {
-  if (stream.value.streaming) {
+  if (stream.value.streaming || runtimeActive.value) {
     const ok = await confirm(t('workbench.monitor.removeConfirm'), t('common.removeBrief'))
     if (!ok) return
   }
@@ -155,6 +168,15 @@ async function onAllow() {
 async function onDeny() {
   const p = headPerm.value
   if (p) await respondRequest(p.requestId, 'deny')
+}
+
+async function decideEngineInteraction(allow: boolean) {
+  const request = engineInteraction.value
+  if (!request) return
+  const option = allow
+    ? request.options.find(item => !item.dangerous)
+    : request.options.find(item => item.dangerous)
+  if (option) await respondInteraction(request.reference, option.id)
 }
 
 async function onRetry() {
@@ -232,25 +254,25 @@ const { isDropTarget } = useDroppable({
 
     <!-- 尾部区:最近输出末 2-3 行(150ms 节流;流式中末行带光标) -->
     <div class="mx-2.5 my-1.5 px-2 py-1.5 bg-background border border-border rounded text-[11px] leading-relaxed text-muted-foreground min-h-9">
-      <template v-if="stream.tail.length > 0">
+      <template v-if="displayTail.length > 0">
         <div
-          v-for="(line, i) in stream.tail"
+          v-for="(line, i) in displayTail"
           :key="i"
           class="truncate"
           :class="{
             'font-mono text-[10.5px]': line.kind === 'tool',
             'text-destructive': line.kind === 'error',
-            'text-foreground': i === stream.tail.length - 1 && line.kind === 'text',
+            'text-foreground': i === displayTail.length - 1 && line.kind === 'text',
           }"
         >
           {{ line.text }}<span
-            v-if="stream.streaming && i === stream.tail.length - 1"
+            v-if="(stream.streaming || runtimeActive) && i === displayTail.length - 1"
             class="tail-caret"
           />
         </div>
       </template>
       <div v-else class="truncate">
-        {{ stream.streaming ? $t('workbench.monitor.starting') : $t('workbench.monitor.noOutput') }}<span v-if="stream.streaming" class="tail-caret" />
+        {{ stream.streaming || runtimeActive ? $t('workbench.monitor.starting') : $t('workbench.monitor.noOutput') }}<span v-if="stream.streaming || runtimeActive" class="tail-caret" />
       </div>
     </div>
 
@@ -286,6 +308,30 @@ const { isDropTarget } = useDroppable({
           <span class="i-carbon-close w-3.5 h-3.5" />
         </button>
       </template>
+    </div>
+
+    <div
+      v-else-if="engineInteraction"
+      class="mx-2.5 mb-1.5 px-2 py-1 border border-border rounded bg-popover flex items-center gap-1.5 text-[11px] decision-accent"
+      @click.stop
+    >
+      <span class="flex-1 min-w-0 truncate text-muted-foreground">{{ engineInteraction.title || engineInteraction.kind }}</span>
+      <button
+        class="w-5 h-5 grid place-items-center rounded bg-primary/15 text-primary shrink-0 hover:bg-primary/25"
+        :title="$t('common.allow')"
+        @pointerdown.stop
+        @click.stop="decideEngineInteraction(true)"
+      >
+        <span class="i-carbon-arrow-right w-3.5 h-3.5" />
+      </button>
+      <button
+        class="w-5 h-5 grid place-items-center rounded bg-destructive/15 text-destructive shrink-0 hover:bg-destructive/25"
+        :title="$t('common.deny')"
+        @pointerdown.stop
+        @click.stop="decideEngineInteraction(false)"
+      >
+        <span class="i-carbon-close w-3.5 h-3.5" />
+      </button>
     </div>
 
     <!-- 就地决策条:出错重试 -->

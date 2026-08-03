@@ -1,15 +1,21 @@
 mod capability;
+mod coordinator;
 mod error;
+mod facets;
 mod identity;
 mod registry;
 mod runtime;
 mod source;
+mod storage;
 mod timeline;
 
 pub use capability::*;
+pub use coordinator::*;
 pub use error::*;
+pub use facets::*;
 pub use identity::*;
 pub use registry::*;
 pub use runtime::*;
 pub use source::*;
+pub use storage::*;
 pub use timeline::*;

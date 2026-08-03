@@ -1,0 +1,43 @@
+{
+  "fixture": "synthetic App Server 0.146.0 contract projection",
+  "properties": {
+    "clientMethod": {
+      "enum": [
+        "initialize",
+        "thread/list",
+        "thread/read",
+        "thread/start",
+        "thread/resume",
+        "thread/unsubscribe",
+        "turn/start",
+        "turn/steer",
+        "turn/interrupt",
+        "model/list",
+        "account/read"
+      ]
+    },
+    "serverRequest": {
+      "enum": [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval"
+      ]
+    },
+    "notification": {
+      "enum": [
+        "turn/started",
+        "turn/completed",
+        "item/started",
+        "item/completed",
+        "item/agentMessage/delta",
+        "item/reasoning/textDelta",
+        "item/reasoning/summaryTextDelta",
+        "item/commandExecution/outputDelta",
+        "thread/started",
+        "thread/archived",
+        "thread/name/updated",
+        "thread/closed"
+      ]
+    }
+  }
+}

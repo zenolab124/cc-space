@@ -28,6 +28,7 @@ import { migrateLegacyAppDefaults } from '@/composables/useChannels'
 import { stateRepairCount, stateWasReset, useWorkbench } from '@/composables/useWorkbench'
 import { applyZoom, useZoom } from '@/composables/useZoom'
 import { useUpdater } from '@/composables/useUpdater'
+import { initEngineRuntimeState } from '@/engines/runtimeState'
 import { DragDropProvider, DragOverlay } from '@dnd-kit/vue'
 
 const { projects, projectsRevision, loadProjects } = useProjects()
@@ -151,6 +152,7 @@ onMounted(async () => {
   await initStreamListeners()
   await initTurnSignalListener()
   await initPermissionListener()
+  await initEngineRuntimeState()
   await initNotificationLayer()
   await initShortcuts()
   await useRoutines().initRoutineListener()

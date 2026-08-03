@@ -118,10 +118,10 @@ pub fn run() {
                 // 开发模式：窗口移到非主显示器（扩展屏）
                 move_to_secondary_monitor(app);
             }
-            // 启动文件监控
+            // 引擎系统独立注册各适配器；单个引擎初始化失败不会阻断应用启动。
+            engines::system::initialize(app.handle().clone());
+            // 通用配置文件始终监听；引擎会话目录由对应 adapter 的启用状态控制。
             watcher::start(app.handle());
-            // 会话状态跟踪扩展：已安装则恢复信号监听
-            turn_signal::start_listener_if_installed(app.handle().clone());
             // 渠道 runtime 残留清理(上次异常退出可能留下含 token 的合成文件)
             channels::cleanup_runtime_dir();
             // 会话进程残留清扫(上次崩溃/强杀遗留的 CLI+MCP 孤儿树,须在任何会话 spawn 前)
@@ -277,7 +277,9 @@ pub fn run() {
             commands::open_in_default_app,
             commands::read_local_image,
             metadata::get_all_meta,
+            metadata::get_all_meta_v2,
             metadata::update_meta,
+            metadata::update_meta_v2,
             metadata::generate_title,
             metadata::generate_tags,
             metadata::generate_summary,
@@ -345,6 +347,31 @@ pub fn run() {
             runners::runner_commands_list,
             runners::runner_command_remove,
             runners::runner_session_stop_all,
+            engines::commands::engine_list,
+            engines::commands::engine_health,
+            engines::commands::engine_set_enabled,
+            engines::commands::engine_export_diagnostics,
+            engines::commands::engine_list_projects,
+            engines::commands::engine_list_sessions,
+            engines::commands::engine_load_timeline,
+            engines::commands::engine_session_actions,
+            engines::commands::engine_resolve_asset,
+            engines::commands::engine_search,
+            engines::commands::engine_list_assets,
+            engines::commands::engine_configuration_schema,
+            engines::commands::engine_configuration_read,
+            engines::commands::engine_configuration_update,
+            engines::commands::engine_read_quota,
+            engines::commands::engine_list_runtime_commands,
+            engines::commands::engine_list_models,
+            engines::commands::engine_create_session,
+            engines::commands::engine_attach_session,
+            engines::commands::engine_start_turn,
+            engines::commands::engine_steer_turn,
+            engines::commands::engine_interrupt_turn,
+            engines::commands::engine_respond_interaction,
+            engines::commands::engine_close_session,
+            engines::commands::engine_runtime_snapshots,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
