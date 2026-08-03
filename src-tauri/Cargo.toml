@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.0.3"
+version = "1.0.4"
 description = "Monet — Mission Control for Claude Code"
 authors = ["Zeno"]
 license = "MIT"
