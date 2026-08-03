@@ -445,7 +445,12 @@ fn quota_item_label(item: &app_lib::quota::QuotaItem, zh: bool) -> String {
             }
         }
         app_lib::quota::QuotaItemKind::Weekly => {
-            if zh {
+            let named = !item.label.is_empty() && !item.label.eq_ignore_ascii_case("weekly");
+            if named && zh {
+                format!("{} · 每周", item.label)
+            } else if named {
+                format!("{} · Weekly", item.label)
+            } else if zh {
                 "每周".into()
             } else {
                 "Weekly".into()

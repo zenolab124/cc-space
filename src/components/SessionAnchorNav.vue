@@ -21,24 +21,16 @@ const railRef = ref<HTMLElement>()
 const railHeight = ref(0)
 let resizeObs: ResizeObserver | null = null
 
-const MAX_GAP = 3
-const MIN_GAP = 2
 const MAX_WRAP = 12
 const MIN_WRAP = 8
 
 const layout = computed(() => {
   const n = props.anchors.length
-  if (n <= 1) return { gap: MAX_GAP, wrap: MAX_WRAP }
+  if (n <= 1) return { wrap: MAX_WRAP }
   const avail = railHeight.value // contentRect 已排除 padding
-  if (avail <= 0) return { gap: MAX_GAP, wrap: MAX_WRAP }
-  const needed = n * MAX_WRAP + (n - 1) * MAX_GAP
-  if (needed <= avail) return { gap: MAX_GAP, wrap: MAX_WRAP }
-  // 先压 gap
-  const gapRoom = (avail - n * MAX_WRAP) / (n - 1)
-  if (gapRoom >= MIN_GAP) return { gap: Math.floor(gapRoom), wrap: MAX_WRAP }
-  // gap 到底，压 wrap
-  const wrapRoom = (avail - (n - 1) * MIN_GAP) / n
-  return { gap: MIN_GAP, wrap: Math.max(MIN_WRAP, Math.floor(wrapRoom)) }
+  if (avail <= 0 || n * MAX_WRAP <= avail) return { wrap: MAX_WRAP }
+  // 锚点命中区首尾相接：空间不足时只压缩单段高度，不再制造交互断层。
+  return { wrap: Math.max(MIN_WRAP, Math.floor(avail / n)) }
 })
 
 onMounted(() => {
@@ -114,7 +106,7 @@ const showNav = computed(() => props.anchors.length > 1)
 </script>
 
 <template>
-  <div v-if="showNav" ref="railRef" class="anchor-rail" :style="{ gap: layout.gap + 'px' }">
+  <div v-if="showNav" ref="railRef" class="anchor-rail">
     <div
       v-for="a in anchors"
       :key="a.index"
@@ -173,24 +165,33 @@ const showNav = computed(() => props.anchors.length > 1)
 }
 
 .anchor-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--muted-foreground);
-  opacity: 0.25;
-  transition: all 0.15s ease;
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: 0;
+  transform: scaleX(1);
+  transition: transform 140ms ease, opacity 120ms ease;
 }
 .anchor-dot-wrap:hover .anchor-dot {
-  opacity: 1;
-  transform: scale(1.8);
-  background: var(--primary);
+  opacity: 0.72;
+  transform: scaleX(2.5);
 }
 .anchor-dot.active {
   opacity: 1;
   background: var(--primary);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--primary) 40%, transparent);
   width: 6px;
   height: 6px;
+  border-radius: 50%;
+  transform: none;
+}
+.anchor-dot-wrap:hover .anchor-dot.active {
+  opacity: 1;
+  transform: scale(1.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anchor-dot { transition: none; }
 }
 </style>
 

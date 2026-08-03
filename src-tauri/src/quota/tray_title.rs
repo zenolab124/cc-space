@@ -19,7 +19,7 @@ pub enum TrayTitleSlot {
 impl Default for TrayTitleConfig {
     fn default() -> Self {
         Self {
-            slots: vec![TrayTitleSlot::Session, TrayTitleSlot::Model("Fable".into())],
+            slots: vec![TrayTitleSlot::Session],
         }
     }
 }
@@ -42,16 +42,10 @@ impl Default for TrayTitleConfigV2 {
     fn default() -> Self {
         Self {
             version: 2,
-            slots: vec![
-                TrayTitleSlotV2 {
-                    provider: "claude".into(),
-                    item: "default/session".into(),
-                },
-                TrayTitleSlotV2 {
-                    provider: "claude".into(),
-                    item: "default/model:fable".into(),
-                },
-            ],
+            slots: vec![TrayTitleSlotV2 {
+                provider: "claude".into(),
+                item: "default/session".into(),
+            }],
         }
     }
 }

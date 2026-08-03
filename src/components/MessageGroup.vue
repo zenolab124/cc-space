@@ -5,10 +5,10 @@ import type { SessionRecord, ContentBlock } from '@/types'
 import type { ChannelMark } from '@/composables/useSessionSettings'
 import { useToolDisplayMode } from '@/composables/useToolDisplay'
 import { joinsToolRun, segmentToolBlocks, type ToolUseBlock } from '@/utils/toolDisplay'
-import { shortModel, formatTokens, hasReportedUsage } from '@/types'
+import type { AssistantResponseMeta } from '@/utils/assistantResponse'
+import AssistantResponseFrame from './AssistantResponseFrame.vue'
 import ContentBlockList from './ContentBlockList.vue'
 import ToolProcessGroup from './ToolProcessGroup.vue'
-import ToolProcessItems from './ToolProcessItems.vue'
 import SystemEventRow from './SystemEventRow.vue'
 import MsgClamp from './MsgClamp.vue'
 import UserMsgContent from './UserMsgContent.vue'
@@ -31,8 +31,7 @@ const props = defineProps<{
   timeLabel?: string | null
   /** 自绘吸顶层正在展示本组用户消息:文档流原件隐形但占位,避免临界滚动区双显 */
   hideUser?: boolean
-  footerAt?: number | null
-  footer?: { text: string; doneFull: string } | null
+  responseMeta?: AssistantResponseMeta | null
   channelMarksByUuid: Map<string | null, ChannelMark[]>
   modelSwitchName: (record: any) => string | null
   isModelCommandRecord: (record: any) => boolean
@@ -46,6 +45,7 @@ const props = defineProps<{
 
 const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
 const { toolDisplayMode } = useToolDisplayMode()
+const hasAssistantResponses = computed(() => props.group.responses.some(record => record.type === 'assistant'))
 
 interface ResponsePart {
   record: VisibleRecord
@@ -170,92 +170,50 @@ const responseEntries = computed<ResponseEntry[]>(() => {
     icon="i-carbon-cloud"
     :label="channelMarkLabel(m)"
   />
-  <!-- 回复(AI + system) -->
-  <template v-for="entry in responseEntries" :key="entry.key">
-    <template v-if="entry.grouped">
+  <!-- 同一用户轮次的所有 assistant 记录共用一条回复轨道与一组头尾元信息。 -->
+  <AssistantResponseFrame
+    v-if="hasAssistantResponses"
+    :meta="responseMeta"
+    :show-footer="!!responseMeta"
+  >
+    <template v-for="entry in responseEntries" :key="entry.key">
       <div
+        v-if="entry.grouped"
         v-memo="[entry]"
-        class="flex gap-3 msg-block"
+        class="assistant-response-entry"
         :class="{ 'response-cv': granularVisibility }"
       >
-        <div class="w-0.5 shrink-0 rounded-full bg-claude/60" />
-        <div class="min-w-0 flex-1">
-          <ToolProcessGroup :blocks="entry.blocks" :tools="toolsOf(entry.blocks)">
-            <div v-for="part in entry.parts" :key="part.record.uuid || part.index" class="tool-process-response">
-              <div class="text-xs font-medium mb-1 text-claude flex items-center gap-1.5 flex-wrap">
-                <span>
-                  {{ $t('session.claude') }}
-                  <span v-if="(part.record as any).message?.model" class="text-muted-foreground font-normal">
-                    ({{ shortModel((part.record as any).message.model) }})
-                  </span>
-                </span>
-                <span v-if="hasReportedUsage((part.record as any).message?.usage)" class="text-muted-foreground/70 font-normal tabular-nums">
-                  {{ formatTokens((part.record as any).message.usage.input_tokens) }} in
-                  · {{ formatTokens((part.record as any).message.usage.cache_read_input_tokens) }} cache
-                  · {{ formatTokens((part.record as any).message.usage.cache_creation_input_tokens) }} new
-                  · {{ formatTokens((part.record as any).message.usage.output_tokens) }} out
-                </span>
-              </div>
-              <ToolProcessItems :blocks="part.blocks" />
-            </div>
-          </ToolProcessGroup>
-          <div
-            v-if="entry.parts.some(part => part.index === footerAt) && footer"
-            class="mt-2 text-[11px] text-muted-foreground/70 tabular-nums w-fit"
-            v-tooltip="footer.doneFull"
-          >
-            {{ footer.text }}
-          </div>
-        </div>
+        <ToolProcessGroup :blocks="entry.blocks" :tools="toolsOf(entry.blocks)" />
       </div>
-    </template>
-    <template v-else v-for="part in entry.parts" :key="part.record.uuid || part.index">
-      <SystemEventRow v-if="part.record.type === 'system'" :record="part.record" />
-      <div
-        v-else
-        v-memo="[part.record]"
-        class="flex gap-3 msg-block"
-        :class="{ 'response-cv': granularVisibility }"
-      >
-        <div class="w-0.5 shrink-0 rounded-full bg-claude/60" />
-        <div class="min-w-0 flex-1">
-          <div class="text-xs font-medium mb-1 text-claude flex items-center gap-1.5 flex-wrap">
-            <span>
-              {{ $t('session.claude') }}
-              <span v-if="(part.record as any).message?.model" class="text-muted-foreground font-normal">
-                ({{ shortModel((part.record as any).message.model) }})
-              </span>
-            </span>
-            <span v-if="hasReportedUsage((part.record as any).message?.usage)" class="text-muted-foreground/70 font-normal tabular-nums">
-              {{ formatTokens((part.record as any).message.usage.input_tokens) }} in
-              · {{ formatTokens((part.record as any).message.usage.cache_read_input_tokens) }} cache
-              · {{ formatTokens((part.record as any).message.usage.cache_creation_input_tokens) }} new
-              · {{ formatTokens((part.record as any).message.usage.output_tokens) }} out
-            </span>
-          </div>
+      <template v-else v-for="part in entry.parts" :key="part.record.uuid || part.index">
+        <SystemEventRow v-if="part.record.type === 'system'" :record="part.record" />
+        <div
+          v-else
+          v-memo="[part.record]"
+          class="assistant-response-entry"
+          :class="{ 'response-cv': granularVisibility }"
+        >
           <ContentBlockList
             :blocks="part.blocks"
             :record-uuid="part.record.uuid"
           />
-          <!-- 长轮次组末统计(全轮 usage 总和+完成时间):挂在最后一条有效 assistant 块内,与回复共用竖线 -->
-          <div
-            v-if="part.index === footerAt && footer"
-            class="mt-2 text-[11px] text-muted-foreground/70 tabular-nums w-fit"
-            v-tooltip="footer.doneFull"
-          >
-            {{ footer.text }}
-          </div>
         </div>
-      </div>
+      </template>
+      <!-- 渠道切换横线:回复消息锚点 -->
+      <template v-for="part in entry.parts" :key="`marks-${part.record.uuid || part.index}`">
+        <DividerMark
+          v-for="(m, j) in (part.record.uuid ? channelMarksByUuid.get(part.record.uuid) ?? [] : [])"
+          :key="`channel-mark-${part.record.uuid}-${j}`"
+          icon="i-carbon-cloud"
+          :label="channelMarkLabel(m)"
+        />
+      </template>
     </template>
-    <!-- 渠道切换横线:回复消息锚点 -->
-    <template v-for="part in entry.parts" :key="`marks-${part.record.uuid || part.index}`">
-      <DividerMark
-        v-for="(m, j) in (part.record.uuid ? channelMarksByUuid.get(part.record.uuid) ?? [] : [])"
-        :key="`channel-mark-${part.record.uuid}-${j}`"
-        icon="i-carbon-cloud"
-        :label="channelMarkLabel(m)"
-      />
+  </AssistantResponseFrame>
+  <!-- 无 assistant 的系统轮保持原来的独立系统事件样式。 -->
+  <template v-else v-for="entry in responseEntries" :key="entry.key">
+    <template v-for="part in entry.parts" :key="part.record.uuid || part.index">
+      <SystemEventRow v-if="part.record.type === 'system'" :record="part.record" />
     </template>
   </template>
 </template>

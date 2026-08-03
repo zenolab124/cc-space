@@ -124,7 +124,12 @@ pub(super) fn backoff_path() -> PathBuf {
 
 fn read_disk_cache() -> Option<DiskCache> {
     let content = std::fs::read_to_string(disk_cache_path()).ok()?;
-    serde_json::from_str(&content).ok()
+    let mut cache: DiskCache = serde_json::from_str(&content).ok()?;
+    cache
+        .info
+        .groups
+        .retain(|group| !should_hide_label(&group.label));
+    Some(cache)
 }
 
 fn write_disk_cache(info: &ProviderQuota) {
@@ -549,6 +554,19 @@ fn explicit_retry_after(value: &Value) -> Option<i64> {
     value.get("data").and_then(explicit_retry_after)
 }
 
+fn should_hide_label(label: &str) -> bool {
+    let normalized = label.to_ascii_lowercase();
+    normalized.contains("codex-spark") || normalized.contains("codex spark")
+}
+
+fn should_hide_limit(snapshot: &RateLimitSnapshot) -> bool {
+    snapshot
+        .limit_name
+        .as_deref()
+        .or(snapshot.individual_limit.as_deref())
+        .is_some_and(should_hide_label)
+}
+
 fn map_quota(
     account: AccountReadResult,
     limits: RateLimitsReadResult,
@@ -562,9 +580,14 @@ fn map_quota(
 
     let mut snapshots = Vec::new();
     if let Some(snapshot) = limits.rate_limits {
-        snapshots.push(("default".to_string(), snapshot));
+        if !should_hide_limit(&snapshot) {
+            snapshots.push(("default".to_string(), snapshot));
+        }
     }
     for (id, snapshot) in limits.rate_limits_by_limit_id {
+        if should_hide_limit(&snapshot) {
+            continue;
+        }
         if snapshots
             .iter()
             .any(|(_, existing)| existing.limit_id.as_deref() == Some(id.as_str()))
@@ -723,6 +746,26 @@ mod tests {
             quota.groups[1].credits.as_ref().unwrap().balance.as_deref(),
             Some("12.3400")
         );
+    }
+
+    #[test]
+    fn codex_spark_limit_is_not_exposed() {
+        let limits = parse_limits(json!({
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "limitId": "codex",
+                    "primary": { "usedPercent": 18.0, "windowDurationMins": 10080 }
+                },
+                "codex_fast": {
+                    "limitId": "codex_fast",
+                    "limitName": "GPT-5.3-Codex-Spark",
+                    "primary": { "usedPercent": 36.0, "windowDurationMins": 10080 }
+                }
+            }
+        }));
+        let quota = map_quota(AccountReadResult::default(), limits).unwrap();
+        assert_eq!(quota.groups.len(), 1);
+        assert_eq!(quota.groups[0].id, "codex");
     }
 
     #[test]

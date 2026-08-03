@@ -23,11 +23,13 @@ const durationLabel = computed(() => {
 </script>
 
 <template>
-  <div class="mt-2">
+  <div class="thinking-block mt-2 mb-1.5">
     <!-- 有明文:可折叠,显示字数 -->
     <template v-if="hasPlainText">
       <button
         class="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+        :aria-expanded="expanded"
+        :title="$t('block.foldShiftHint')"
         @click="toggle"
       >
         <span class="i-carbon-chevron-right w-3 h-3 transition-transform" :class="{ 'rotate-90': expanded }" />

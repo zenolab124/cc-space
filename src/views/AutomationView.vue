@@ -219,9 +219,8 @@ function isLogWarning(log: RoutineExecutionLog): boolean {
   return log.exitCode === 0 && stripAnsi(log.stderr).trim().length > 0
 }
 
-function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'warning' | 'running' | 'failed' {
+function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running' | 'failed' {
   if (log.cancelled) return 'cancelled'
-  if (isLogWarning(log)) return 'warning'
   if (log.exitCode === 0) return 'success'
   if (log.exitCode == null) return 'running'
   return 'failed'
@@ -871,7 +870,6 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'warning
   flex-shrink: 0;
 }
 .log-status.success { background: var(--success, #2d7d3a); }
-.log-status.warning { background: #d08a24; }
 .log-status.failed { background: var(--destructive); }
 .log-status.running { background: var(--accent); animation: pulse 1.5s infinite; }
 .log-status.cancelled { background: var(--muted-foreground); }

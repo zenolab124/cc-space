@@ -1,6 +1,7 @@
 import { inject, provide, reactive, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { ToolResultData } from '@/utils/toolPair'
 import { bridgeSetting, writeSetting } from '@/utils/settingBridge'
+import { foldDefaultExpanded, foldDefaultRevision, setFoldDefault } from './useFoldDefaults'
 
 export const TOOL_DISPLAY_MODES = ['cards', 'individual', 'grouped'] as const
 export type ToolDisplayMode = typeof TOOL_DISPLAY_MODES[number]
@@ -53,8 +54,12 @@ export interface ToolFoldState {
   collapsedItems: Set<string>
   expandedGroups: Set<string>
   collapsedGroups: Set<string>
+  groupDefaultExpanded: Ref<boolean>
+  itemDefaultExpanded: Ref<boolean>
   requestedToolId: Ref<string | null>
   reset: () => void
+  setAllGroups: (expanded: boolean) => void
+  setAllItems: (expanded: boolean) => void
   requestReveal: (toolUseId: string) => void
   clearRevealRequest: (toolUseId: string) => void
 }
@@ -67,6 +72,15 @@ export function createToolFoldState(): ToolFoldState {
   const expandedGroups = reactive(new Set<string>())
   const collapsedGroups = reactive(new Set<string>())
   const requestedToolId = ref<string | null>(null)
+
+  watch(foldDefaultRevision.toolGroup, () => {
+    expandedGroups.clear()
+    collapsedGroups.clear()
+  }, { flush: 'sync' })
+  watch(foldDefaultRevision.toolItem, () => {
+    expandedItems.clear()
+    collapsedItems.clear()
+  }, { flush: 'sync' })
 
   function reset() {
     expandedItems.clear()
@@ -82,6 +96,14 @@ export function createToolFoldState(): ToolFoldState {
     collapsedItems.delete(toolUseId)
   }
 
+  function setAllGroups(expanded: boolean) {
+    setFoldDefault('toolGroup', expanded)
+  }
+
+  function setAllItems(expanded: boolean) {
+    setFoldDefault('toolItem', expanded)
+  }
+
   function clearRevealRequest(toolUseId: string) {
     if (requestedToolId.value === toolUseId) requestedToolId.value = null
   }
@@ -91,8 +113,12 @@ export function createToolFoldState(): ToolFoldState {
     collapsedItems,
     expandedGroups,
     collapsedGroups,
+    groupDefaultExpanded: foldDefaultExpanded.toolGroup,
+    itemDefaultExpanded: foldDefaultExpanded.toolItem,
     requestedToolId,
     reset,
+    setAllGroups,
+    setAllItems,
     requestReveal,
     clearRevealRequest,
   }

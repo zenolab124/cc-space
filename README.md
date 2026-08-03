@@ -83,7 +83,7 @@ Monet gathers them onto one wall: every session browsable, searchable, and comma
 
 ### Reading experience — one engine for live and past
 
-- 18+ purpose-built tool-call cards: Edit shows side-by-side red/green diffs, Bash separates command and output, both copyable
+- Three tool-call display modes: full cards, collapsed items, or grouped consecutive processes; expanding preserves purpose-built features such as side-by-side Edit diffs and separately copyable Bash sections
 - Inline HTML/SVG rendering in replies: comparison cards, tables, diagrams — no more walls of text
 - Anchor navigation + pinned prompts + back-to-bottom float: glide through sessions hundreds of turns long
 - Per-turn token quadruple and a context-usage bar that warns before overflow — see where the money goes, live

@@ -4,6 +4,7 @@ import {
   findPendingPermissionToolUseId,
   joinsToolRun,
   segmentToolBlocks,
+  summarizeToolProcess,
   toolSummary,
 } from '@/utils/toolDisplay'
 import { deriveToolVisualState } from '@/composables/useToolDisplay'
@@ -87,6 +88,35 @@ describe('tool display projection', () => {
     if (block.type !== 'tool_use') throw new Error('invalid fixture')
     expect(toolSummary(block)).toBe('Run focused tests')
     expect(block.input).toEqual({ command: 'pnpm test', description: 'Run focused tests' })
+  })
+
+  it('summarizes a process by useful actions and representative details', () => {
+    const blocks = [
+      tool('a', 'Read', { file_path: '/workspace/src/App.vue' }),
+      tool('b', 'Read', { file_path: '/workspace/src/main.ts' }),
+      tool('c', 'Bash', { command: 'pnpm test', description: '运行测试' }),
+      tool('d', 'WebSearch', { query: 'Open-Meteo weather API' }),
+    ]
+    const tools = blocks.filter(block => block.type === 'tool_use')
+
+    expect(summarizeToolProcess(tools)).toEqual([
+      { kind: 'read', name: 'Read', count: 2, detail: 'App.vue' },
+      { kind: 'run', name: 'Bash', count: 1, detail: '运行测试' },
+      { kind: 'web', name: 'WebSearch', count: 1, detail: 'Open-Meteo weather API' },
+    ])
+  })
+
+  it('shortens long details and makes MCP names readable', () => {
+    const blocks = [
+      tool('a', 'Bash', { command: 'a'.repeat(50) }),
+      tool('b', 'mcp__browser__navigate', { url: 'https://example.com/page' }),
+    ]
+    const tools = blocks.filter(block => block.type === 'tool_use')
+    const summary = summarizeToolProcess(tools)
+
+    expect(summary[0].detail).toHaveLength(36)
+    expect(summary[0].detail.endsWith('…')).toBe(true)
+    expect(summary[1]).toMatchObject({ kind: 'other', name: 'browser/navigate' })
   })
 })
 

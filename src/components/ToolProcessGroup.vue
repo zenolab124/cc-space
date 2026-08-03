@@ -3,7 +3,7 @@ import { computed, inject, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolResultData } from '@/utils/toolPair'
 import type { ContentBlock } from '@/types'
-import type { ToolUseBlock } from '@/utils/toolDisplay'
+import { summarizeToolProcess, type ToolProcessSummaryItem, type ToolUseBlock } from '@/utils/toolDisplay'
 import {
   TOOL_EXECUTION_CONTEXT,
   TOOL_FOLD_INTERACTION,
@@ -43,6 +43,30 @@ const groupState = computed<ToolVisualState>(() => {
   return priority.find(state => states.value.includes(state)) ?? 'unknown'
 })
 const failedCount = computed(() => states.value.filter(state => state === 'error').length)
+const processSummary = computed(() => summarizeToolProcess(props.tools))
+const visibleSummary = computed(() => processSummary.value.slice(0, 2))
+const hiddenToolCount = computed(() =>
+  processSummary.value.slice(2).reduce((total, item) => total + item.count, 0),
+)
+
+function actionLabel(item: ToolProcessSummaryItem): string {
+  if (item.kind === 'other') return item.name
+  return t(`block.toolFold.action.${item.kind}`)
+}
+
+function summaryLabel(item: ToolProcessSummaryItem): string {
+  const action = actionLabel(item)
+  if (item.count > 1) return `${action} ×${item.count}`
+  if (!item.detail) return action
+  return item.detail.toLocaleLowerCase().startsWith(action.toLocaleLowerCase())
+    ? item.detail
+    : `${action} ${item.detail}`
+}
+
+const summaryTitle = computed(() => [
+  processSummary.value.map(summaryLabel).join(' · '),
+  t('block.foldShiftHint'),
+].filter(Boolean).join('\n'))
 const stateLabel = computed(() => {
   if (groupState.value === 'permission' && failedCount.value) {
     return t('block.toolFold.failedAndPermission', { count: failedCount.value })
@@ -66,11 +90,17 @@ const autoExpanded = computed(() =>
 const expanded = computed(() => {
   if (containsRequested.value) return true
   if (foldState.collapsedGroups.has(groupKey.value)) return false
-  return foldState.expandedGroups.has(groupKey.value) || autoExpanded.value
+  return foldState.expandedGroups.has(groupKey.value)
+    || foldState.groupDefaultExpanded.value
+    || autoExpanded.value
 })
 
-function toggle() {
+function toggle(event: MouseEvent) {
   onInteraction()
+  if (event.shiftKey) {
+    foldState.setAllGroups(!expanded.value)
+    return
+  }
   if (expanded.value) {
     foldState.expandedGroups.delete(groupKey.value)
     foldState.collapsedGroups.add(groupKey.value)
@@ -86,13 +116,19 @@ function toggle() {
     <button
       type="button"
       class="tool-process-line"
+      :class="[`is-${groupState}`, { 'is-expanded': expanded }]"
       :aria-expanded="expanded"
+      :title="summaryTitle"
       @click="toggle"
     >
       <span class="i-carbon-chevron-right tool-process-chevron" :class="{ 'rotate-90': expanded }" />
-      <span class="i-carbon-flow-stream tool-process-icon" />
-      <span class="tool-process-title">{{ $t('block.toolFold.process') }}</span>
-      <span class="tool-process-count">{{ $t('block.toolFold.count', { count: tools.length }) }}</span>
+      <span class="tool-process-summary">
+        <template v-for="(item, index) in visibleSummary" :key="`${item.kind}:${item.name}`">
+          <span v-if="index" class="tool-process-separator" aria-hidden="true">·</span>
+          <span>{{ summaryLabel(item) }}</span>
+        </template>
+        <span v-if="hiddenToolCount" class="tool-process-more">+{{ hiddenToolCount }}</span>
+      </span>
       <span
         v-if="stateLabel"
         class="tool-process-running"
@@ -115,38 +151,58 @@ function toggle() {
 </template>
 
 <style scoped>
-.tool-process-group { margin: 2px 0 6px; }
+.tool-process-group { min-width: 0; margin: 0; }
 .tool-process-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   width: 100%;
-  min-height: 26px;
-  padding: 2px 0;
+  min-height: var(--tool-row-height);
+  padding: 0;
   border: 0;
-  color: var(--muted-foreground);
+  color: color-mix(in srgb, var(--muted-foreground) 56%, transparent);
   background: transparent;
   text-align: left;
   cursor: pointer;
+  line-height: var(--tool-row-line-height);
+  transition: color 120ms ease;
 }
-.tool-process-line:hover { color: var(--foreground); }
-.tool-process-chevron { width: 12px; height: 12px; flex: none; transition: transform 150ms; }
-.tool-process-icon { width: 14px; height: 14px; flex: none; opacity: 0.78; }
-.tool-process-title { color: var(--foreground); font-weight: 600; }
-.tool-process-count {
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted-foreground);
-  font-size: 9px;
+.tool-process-line:hover,
+.tool-process-line:focus-visible,
+.tool-process-line.is-expanded,
+.tool-process-line.is-running,
+.tool-process-line.is-permission,
+.tool-process-line.is-error,
+.tool-process-line.is-interrupted { color: var(--foreground); }
+.tool-process-line:focus-visible { outline: 1px solid var(--ring); outline-offset: 2px; }
+.tool-process-chevron { width: 11px; height: 11px; flex: none; transition: transform 150ms; }
+.tool-process-summary {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 450;
+  line-height: var(--tool-row-line-height);
+  white-space: nowrap;
 }
-.tool-process-running { display: inline-flex; align-items: center; margin-left: auto; color: var(--muted-foreground); font-size: 11px; }
+.tool-process-summary > span:not(.tool-process-separator, .tool-process-more) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-process-separator,
+.tool-process-more {
+  flex: none;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+}
+.tool-process-running { display: inline-flex; align-items: center; margin-left: auto; color: var(--muted-foreground); font-size: 11px; line-height: var(--tool-row-line-height); }
 .tool-process-running.is-running { color: var(--claude); }
 .tool-process-running.is-permission { color: var(--accent); }
 .tool-process-running.is-error,
 .tool-process-running.is-interrupted { color: var(--destructive); }
 .tool-process-running.is-background { color: var(--primary); }
-.tool-process-items { margin: 2px 0 5px 18px; padding-left: 11px; border-left: 1px solid var(--border); }
+.tool-process-items { margin: 0 0 4px 15px; padding-left: 9px; border-left: 1px solid var(--border); }
 .tool-process-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-process-dots i {
   width: 3px;

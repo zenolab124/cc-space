@@ -127,13 +127,15 @@ const capacity = computed(() =>
     ?? getContextWindow(props.runConfig.display.model ?? null),
 )
 
-// --- 窄列折叠(胶囊化后仅一档) ---
+// --- 窄列折叠 ---
 //
-// 胶囊三段 + 进度条自适应;窄列(< 280px)胶囊收起渠道段(点任意段开全景面板补齐)。
+// 权限模式优先在 < 520px 时收进 ⋯ 二级菜单；更窄(< 280px)时胶囊再收起渠道段。
+// 模型与 token 进度始终保留，避免关键运行状态在窄列中消失。
 
 const containerRef = ref<HTMLElement>()
 const containerWidth = ref(Number.POSITIVE_INFINITY)
 
+const showPermission = computed(() => containerWidth.value >= 520)
 const showChannel = computed(() => containerWidth.value >= 280)
 
 let resizeObserver: ResizeObserver | null = null
@@ -268,6 +270,7 @@ function onChannelChange(channelId: string | null) {
 }
 function onPermissionModeChange(mode: PermissionMode | null) {
   emit('permissionModeChange', mode)
+  menuOpen.value = false
 }
 </script>
 
@@ -291,6 +294,7 @@ function onPermissionModeChange(mode: PermissionMode | null) {
 
     <!-- 权限模式 -->
     <PermissionModeDropdown
+      v-if="showPermission"
       :selected="selectedPermissionMode"
       :effective="runConfig.display.permissionMode"
       @select="onPermissionModeChange"
@@ -325,6 +329,16 @@ function onPermissionModeChange(mode: PermissionMode | null) {
                shadow-paper-lifted bg-popover w-52"
         :class="menuAlignLeft ? 'left-0' : 'right-0'"
       >
+        <!-- 窄列收纳项 -->
+        <div v-if="!showPermission" class="py-0.5 border-b border-border">
+          <PermissionModeDropdown
+            variant="submenu"
+            :selected="selectedPermissionMode"
+            :effective="runConfig.display.permissionMode"
+            @select="onPermissionModeChange"
+          />
+        </div>
+
         <!-- 元数据 -->
         <div class="px-3 py-1.5 text-xs text-muted-foreground flex flex-col gap-1 border-b border-border">
           <button
@@ -446,19 +460,5 @@ function onPermissionModeChange(mode: PermissionMode | null) {
 }
 .menu-item:hover {
   background: var(--muted);
-}
-.submenu-trigger {
-  position: relative;
-}
-.submenu-panel {
-  position: absolute;
-  top: 0;
-  z-index: 51;
-  min-width: 120px;
-  padding: 4px 0;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--popover);
-  box-shadow: var(--shadow-paper-lifted);
 }
 </style>

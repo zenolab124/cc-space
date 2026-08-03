@@ -30,49 +30,74 @@ const segments = computed(() => {
 </script>
 
 <template>
-  <template v-for="segment in segments" :key="segment.key">
-    <MessageBlock
-      v-if="segment.kind === 'block'"
-      :block="segment.block"
-      :streaming="streaming"
-      :record-uuid="segment.recordUuids[0]"
-    />
-    <template v-else-if="toolDisplayMode === 'cards'">
-      <template
-        v-for="(block, index) in segment.blocks"
-        :key="isToolUseBlock(block) ? block.id : `${block.type}:${index}`"
-      >
-        <div
-          v-if="isToolUseBlock(block)"
-          :data-tool-use-id="block.id"
-        >
-          <MessageBlock
-            :block="block"
-            :streaming="streaming"
-            :record-uuid="segment.recordUuids[index]"
-          />
-        </div>
+  <div class="content-block-list">
+    <template v-for="segment in segments" :key="segment.key">
+      <div v-if="segment.kind === 'block'" class="content-segment">
         <MessageBlock
-          v-else
-          :block="block"
+          :block="segment.block"
           :streaming="streaming"
-          :record-uuid="segment.recordUuids[index]"
+          :record-uuid="segment.recordUuids[0]"
         />
-      </template>
+      </div>
+      <div v-else-if="toolDisplayMode === 'cards'" class="content-segment content-tool-cards">
+        <template
+          v-for="(block, index) in segment.blocks"
+          :key="isToolUseBlock(block) ? block.id : `${block.type}:${index}`"
+        >
+          <div
+            v-if="isToolUseBlock(block)"
+            class="content-tool-card"
+            :data-tool-use-id="block.id"
+          >
+            <MessageBlock
+              :block="block"
+              :streaming="streaming"
+              :record-uuid="segment.recordUuids[index]"
+            />
+          </div>
+          <div v-else class="content-tool-card">
+            <MessageBlock
+              :block="block"
+              :streaming="streaming"
+              :record-uuid="segment.recordUuids[index]"
+            />
+          </div>
+        </template>
+      </div>
+      <div v-else-if="toolDisplayMode === 'individual'" class="content-segment">
+        <ToolProcessItems
+          :blocks="segment.blocks"
+          :block-record-uuids="segment.recordUuids"
+          :streaming="streaming"
+        />
+      </div>
+      <div v-else class="content-segment">
+        <ToolProcessGroup
+          :blocks="segment.blocks"
+          :block-record-uuids="segment.recordUuids"
+          :tools="segment.tools"
+          :streaming="streaming"
+        />
+      </div>
     </template>
-    <template v-else-if="toolDisplayMode === 'individual'">
-      <ToolProcessItems
-        :blocks="segment.blocks"
-        :block-record-uuids="segment.recordUuids"
-        :streaming="streaming"
-      />
-    </template>
-    <ToolProcessGroup
-      v-else
-      :blocks="segment.blocks"
-      :block-record-uuids="segment.recordUuids"
-      :tools="segment.tools"
-      :streaming="streaming"
-    />
-  </template>
+  </div>
 </template>
+
+<style scoped>
+.content-block-list,
+.content-tool-cards {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--message-block-gap);
+}
+.content-segment,
+.content-tool-card { min-width: 0; }
+
+/* 外部节奏由内容流统一管理，避免各块根 margin 与 gap 重复叠加。 */
+.content-segment > :deep(*),
+.content-tool-card > :deep(*) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+</style>

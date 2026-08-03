@@ -38,14 +38,19 @@ import {
 } from '@/composables/useSlashCommands'
 import { useWorkshop } from '@/composables/useWorkshop'
 import { useSessionMeta } from '@/composables/useSessionMeta'
-import { shortId, shortModel, formatTokens, hasReportedUsage, shouldReplaceUsage } from '@/types'
+import { shortId, hasReportedUsage, shouldReplaceUsage } from '@/types'
 import { inferModel } from '@/utils/modelContext'
+import {
+  summarizeAssistantResponse,
+  type AssistantResponseMeta,
+} from '@/utils/assistantResponse'
 import { cwdToProjectId, samePath } from '@/utils/path'
 import { ROLE_DISPLAY, resolveMappedRoles } from '@/utils/modelEnv'
 import { filterConsumedResults, type ToolResultData } from '@/utils/toolPair'
 import { findPendingPermissionToolUseId } from '@/utils/toolDisplay'
 import type { SessionRecord, SessionSummary, ContentBlock } from '@/types'
 import ContentBlockList from './ContentBlockList.vue'
+import AssistantResponseFrame from './AssistantResponseFrame.vue'
 import MessageGroup from './MessageGroup.vue'
 import SystemEventRow from './SystemEventRow.vue'
 import DividerMark from './DividerMark.vue'
@@ -1114,6 +1119,19 @@ const streamingMessageIds = computed(() =>
  *  typing-dots 等进行中指示据此补位,不显示"空闲下凭空吐内容" */
 const hasLiveTurn = computed(() => stream.value.streamingTurns.some(t => t.live))
 
+/** 流式树完成时先补齐尾部元信息；落账切换到历史树后由 JSONL 时间戳接管。 */
+const streamResponseCompletedAt = ref<string | null>(null)
+watch(
+  [effectiveSessionId, () => stream.value.streaming, hasLiveTurn],
+  ([sessionId, streaming, live], [previousSessionId, previousStreaming, previousLive]) => {
+    if (sessionId !== previousSessionId || streaming || live) {
+      streamResponseCompletedAt.value = null
+      return
+    }
+    if (previousStreaming || previousLive) streamResponseCompletedAt.value = new Date().toISOString()
+  },
+)
+
 /** 进入消息流的 system 子类型（其余 system 记录为噪音，不渲染） */
 const VISIBLE_SYSTEM_SUBTYPES = new Set(['api_error', 'compact_boundary'])
 
@@ -1311,12 +1329,14 @@ const shouldVirtualize = computed(() => renderGroups.value.length > virtualizati
 
 // tanstack-vue-virtual:count/estimateSize 走 getter 保持 reactive。
 // estimateSize 首帧粗估 200px/组,measureElement 挂载后自动校正真高;
+// gap=16 与非虚拟路径 space-y-4 对齐，避免相邻轮次轨道首尾相接；
 // overscan=5 覆盖上下 5 组,兼顾滚动流畅度与 DOM 节点数
 const messageVirtualizer = useVirtualizer(
   computed(() => ({
     count: renderGroups.value.length,
     getScrollElement: () => scrollContainer.value ?? null,
     estimateSize: () => 200,
+    gap: 16,
     overscan: 5,
   })),
 )
@@ -1529,67 +1549,48 @@ function contentBlocks(record: Extract<SessionRecord, { type: 'user' | 'assistan
   return lifted
 }
 
-/**
- * 组末尾标注整行文案(全轮次显示,长度门槛已按用户决策移除——每轮成本可见的
- * 信息价值大于视觉噪声,标注本身是 muted 小字):数据取该轮最后一条有效
- * assistant 记录,模型/token 与顶部标注同源。返回 null = 不渲染(无有效 model)。
- */
-function groupFooterOf(group: { responses: unknown[] }): { text: string; doneFull: string } | null {
-  // usage 全轮求和:单块 usage 只是单次 API 调用(每次工具往返一次),求和才是"这一轮总消耗",
-  // 与计费口径一致(块级明细仍在各块头部)。模型/完成时间取最后一条有效 assistant。
-  let model: string | null = null
+/** 历史轮次元信息：多次 assistant API 调用统一求和，完成时刻取最后一条落账记录。 */
+function groupResponseMetaOf(group: MsgGroup): AssistantResponseMeta | null {
+  const assistants = group.responses.filter(
+    (record): record is Extract<VisibleRecord, { type: 'assistant' }> => record.type === 'assistant',
+  )
+  if (assistants.length === 0) return null
+
+  const summary = summarizeAssistantResponse(assistants.map(record => ({
+    model: record.message?.model,
+    usage: record.message?.usage,
+  })))
   let doneTs: string | null = null
-  let hasUsage = false
-  const sum = { in: 0, cache: 0, new: 0, out: 0 }
-  for (const r of group.responses) {
-    const rec = r as { type?: string; timestamp?: string | null; _lastTs?: string | null; message?: { model?: string; usage?: Record<string, number> } }
-    if (rec.type !== 'assistant') continue
-    const u = rec.message?.usage
-    if (u) {
-      hasUsage = true
-      sum.in += u.input_tokens ?? 0
-      sum.cache += u.cache_read_input_tokens ?? 0
-      sum.new += u.cache_creation_input_tokens ?? 0
-      sum.out += u.output_tokens ?? 0
-    }
-    if (rec.message?.model && rec.message.model !== '<synthetic>') {
-      model = rec.message.model
-      // 完成时间:合并块 timestamp 是首行≈开始,_lastTs 是末行≈完成
-      doneTs = rec._lastTs ?? rec.timestamp ?? doneTs
-    }
+  for (const record of assistants) {
+    // 合并块 timestamp 是首行≈开始，_lastTs 是末行≈完成。
+    doneTs = (record as typeof record & { _lastTs?: string | null })._lastTs ?? record.timestamp ?? doneTs
   }
-  if (!model) return null
-  // 顺序:完成时间 → 模型 → token 汇总
-  const parts: string[] = []
-  const doneAt = timeOfDay(doneTs)
-  if (doneAt) parts.push(doneAt)
-  parts.push(shortModel(model))
-  if (hasUsage) {
-    parts.push(
-      `${formatTokens(sum.in)} in`,
-      `${formatTokens(sum.cache)} cache`,
-      `${formatTokens(sum.new)} new`,
-      `${formatTokens(sum.out)} out`,
-    )
+  return {
+    ...summary,
+    completedText: timeOfDay(doneTs),
+    completedFull: fullTime(doneTs),
+    tier: modelTierOf(summary.model),
   }
-  return { text: parts.join(' · '), doneFull: fullTime(doneTs) }
 }
 
-/** 组末尾标注预计算,与 messageGroups 同下标(含 Intl 格式化,不能留在模板里每次 re-render 逐组重跑) */
-const groupFooters = computed<({ text: string; doneFull: string } | null)[]>(() => messageGroups.value.map(groupFooterOf))
-
-/** 组末尾标注挂载的 resp 下标(最后一条有效 assistant,与 groupFooterOf 同规则):
- *  挂进该块内容列而非组级独立行,统计行与回复共用同一根竖线(线连续、缩进天然对齐) */
-const groupFooterAt = computed<(number | null)[]>(() =>
-  messageGroups.value.map(g => {
-    let at: number | null = null
-    g.responses.forEach((r, i) => {
-      const rec = r as { type?: string; message?: { model?: string } }
-      if (rec.type === 'assistant' && rec.message?.model && rec.message.model !== '<synthetic>') at = i
-    })
-    return at
-  }),
+/** 历史区头尾共用同一份摘要，避免模板重渲染时逐组重复 Intl 与求和。 */
+const groupResponseMetas = computed<(AssistantResponseMeta | null)[]>(() =>
+  messageGroups.value.map(groupResponseMetaOf),
 )
+
+/** 流式区与历史区复用同一元信息结构；usage 随已完成的 API message 累加。 */
+const streamingResponseMeta = computed<AssistantResponseMeta | null>(() => {
+  const turns = stream.value.streamingTurns
+  if (turns.length === 0) return null
+  const summary = summarizeAssistantResponse(turns)
+  const completedAt = streamResponseCompletedAt.value
+  return {
+    ...summary,
+    completedText: timeOfDay(completedAt),
+    completedFull: fullTime(completedAt),
+    tier: modelTierOf(summary.model),
+  }
+})
 
 // ---- 发送时间标注 ----
 
@@ -2925,8 +2926,7 @@ async function onReload() {
               :day-label="dayDividers[vitem.index]"
               :time-label="groupTimeLabels[vitem.index]"
               :hide-user="vitem.index === stickyDisplay?.index"
-              :footer-at="groupFooterAt[vitem.index]"
-              :footer="groupFooters[vitem.index]"
+              :response-meta="groupResponseMetas[vitem.index]"
               :channel-marks-by-uuid="channelMarksByUuid"
               :model-switch-name="modelSwitchName"
               :is-model-command-record="isModelCommandRecord"
@@ -2950,8 +2950,7 @@ async function onReload() {
               :gi="gi"
               :day-label="dayDividers[gi]"
               :time-label="groupTimeLabels[gi]"
-              :footer-at="groupFooterAt[gi]"
-              :footer="groupFooters[gi]"
+              :response-meta="groupResponseMetas[gi]"
               :channel-marks-by-uuid="channelMarksByUuid"
               :model-switch-name="modelSwitchName"
               :is-model-command-record="isModelCommandRecord"
@@ -2975,8 +2974,7 @@ async function onReload() {
             :hide-user="shouldVirtualize && stickyDisplay?.index === lastGroupIndex"
             :day-label="dayDividers[lastGroupIndex]"
             :time-label="groupTimeLabels[lastGroupIndex]"
-            :footer-at="groupFooterAt[lastGroupIndex]"
-            :footer="groupFooters[lastGroupIndex]"
+            :response-meta="groupResponseMetas[lastGroupIndex]"
             :channel-marks-by-uuid="channelMarksByUuid"
             :model-switch-name="modelSwitchName"
             :is-model-command-record="isModelCommandRecord"
@@ -3017,41 +3015,23 @@ async function onReload() {
           </div>
         </div>
 
-        <div
-          v-for="turn in stream.streamingTurns"
-          :key="turn.messageId"
-          class="flex gap-3 msg-block"
-          :class="{ 'settled-turn-cv': !turn.live }"
+        <AssistantResponseFrame
+          v-if="stream.streamingTurns.length"
+          :meta="streamingResponseMeta"
+          :show-footer="!!streamResponseCompletedAt"
         >
-          <div class="w-0.5 shrink-0 rounded-full bg-claude/60" />
-          <div class="min-w-0 flex-1">
-            <div class="text-xs font-medium mb-1 text-claude flex items-center gap-1.5">
-              <span>
-                {{ $t('session.claude') }}
-                <!-- 本轮实际运行模型的真值(message_start 回显),从首字起与落账后标注同源 -->
-                <span v-if="turn.model" class="text-muted-foreground font-normal">({{ shortModel(turn.model) }}<template v-if="modelTierOf(turn.model)"> · {{ $t('topbar.roleTier', { role: modelTierOf(turn.model) }) }}</template>)</span>
-              </span>
-              <!-- 块级 usage:该 turn 的 assistant 快照到达(message 完成)即显示真值,
-                   不等整轮结束;四段格式与历史区块头同款,换树前后像素等价 -->
-              <span
-                class="text-muted-foreground/70 font-normal tabular-nums"
-                :style="{ visibility: hasReportedUsage(turn.usage) ? 'visible' : 'hidden' }"
-              >
-                <template v-if="hasReportedUsage(turn.usage)">
-                  {{ formatTokens(turn.usage?.input_tokens ?? 0) }} in
-                  · {{ formatTokens(turn.usage?.cache_read_input_tokens ?? 0) }} cache
-                  · {{ formatTokens(turn.usage?.cache_creation_input_tokens ?? 0) }} new
-                  · {{ formatTokens(turn.usage?.output_tokens ?? 0) }} out
-                </template>
-                <template v-else>&nbsp;</template>
-              </span>
-            </div>
+          <div
+            v-for="turn in stream.streamingTurns"
+            :key="turn.messageId"
+            class="stream-response-entry"
+            :class="{ 'settled-turn-cv': !turn.live }"
+          >
             <ContentBlockList
               :blocks="filterConsumedResults(turn.content)"
               :streaming="!!turn.live"
             />
           </div>
-        </div>
+        </AssistantResponseFrame>
 
         <div v-if="stream.streaming && stream.streamingTurns.length === 0" class="flex gap-3">
           <div class="w-0.5 shrink-0 rounded-full bg-claude/60" />

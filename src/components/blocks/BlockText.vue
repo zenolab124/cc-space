@@ -120,7 +120,7 @@ function onProseClick(e: MouseEvent) {
 </script>
 
 <template>
-  <div class="prose-msg text-sm" @click="onProseClick">
+  <div class="prose-msg message-prose" @click="onProseClick">
     <!-- 段数组路径:冻结段索引 key(内容 hash 会致 remount 闪烁),tail 固定 key 独立渲染位 -->
     <template v-if="bornStreaming">
       <MdSegment v-for="(s, i) in segments" :key="i" :source="s.source" :colored="s.colored" />
@@ -137,3 +137,15 @@ function onProseClick(e: MouseEvent) {
     </button>
   </div>
 </template>
+
+<style scoped>
+.prose-msg.message-prose {
+  font-size: 13px;
+  line-height: 1.72;
+  letter-spacing: 0.006em;
+}
+.message-prose :deep(code),
+.message-prose :deep(pre) {
+  letter-spacing: normal;
+}
+</style>

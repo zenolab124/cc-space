@@ -42,7 +42,9 @@ const state = computed(() => deriveToolVisualState({
 const autoExpanded = computed(() => state.value === 'running' || state.value === 'permission')
 const expanded = computed(() => {
   if (foldState.collapsedItems.has(props.tool.id)) return false
-  return foldState.expandedItems.has(props.tool.id) || autoExpanded.value
+  return foldState.expandedItems.has(props.tool.id)
+    || foldState.itemDefaultExpanded.value
+    || autoExpanded.value
 })
 
 const iconClass = computed(() => {
@@ -65,8 +67,12 @@ const stateLabel = computed(() => {
   return ''
 })
 
-function toggle() {
+function toggle(event: MouseEvent) {
   onInteraction()
+  if (event.shiftKey) {
+    foldState.setAllItems(!expanded.value)
+    return
+  }
   if (expanded.value) {
     foldState.expandedItems.delete(props.tool.id)
     foldState.collapsedItems.add(props.tool.id)
@@ -87,6 +93,7 @@ watch(() => foldState.requestedToolId.value, requested => {
       type="button"
       class="tool-fold-line"
       :aria-expanded="expanded"
+      :title="$t('block.foldShiftHint')"
       @click="toggle"
     >
       <span
@@ -120,13 +127,14 @@ watch(() => foldState.requestedToolId.value, requested => {
   align-items: center;
   gap: 6px;
   width: 100%;
-  min-height: 26px;
-  padding: 2px 0;
+  min-height: var(--tool-row-height);
+  padding: 0;
   border: 0;
   color: var(--muted-foreground);
   background: transparent;
   text-align: left;
   cursor: pointer;
+  line-height: var(--tool-row-line-height);
 }
 .tool-fold-line:hover { color: var(--foreground); }
 .tool-fold-chevron {
@@ -140,16 +148,18 @@ watch(() => foldState.requestedToolId.value, requested => {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: var(--tool-row-line-height);
   white-space: nowrap;
 }
 .tool-fold-main b { color: var(--foreground); font-weight: 600; }
-.tool-fold-state { display: inline-flex; align-items: center; margin-left: auto; flex: none; font-size: 11px; }
+.tool-fold-state { display: inline-flex; align-items: center; margin-left: auto; flex: none; font-size: 11px; line-height: var(--tool-row-line-height); }
 .tool-fold-state.is-running { color: var(--claude); }
 .tool-fold-state.is-permission { color: var(--warning, var(--accent)); }
 .tool-fold-state.is-error,
 .tool-fold-state.is-interrupted { color: var(--destructive); }
 .tool-fold-state.is-background { color: var(--primary); }
-.tool-fold-card { margin: 2px 0 5px 18px; }
+.tool-fold-card { margin: 2px 0 6px 18px; }
+.tool-fold-card > :deep(*) { margin-top: 0; }
 .tool-fold-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-fold-dots i {
   width: 3px;

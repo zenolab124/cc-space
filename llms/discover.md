@@ -44,7 +44,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 ### 3.2 Session running — the CLI session, now in a GUI
 
 - True character-level streaming: first-token latency drops from "after the whole reply is generated" to the API's first token
-- Thinking display: thinking blocks shown as summaries; expanding one expands all (preference remembered)
+- Thinking display: lightweight summaries stay collapsed by default; a normal click expands only that block, while Shift-click toggles all and remembers the default
 - Long-lived processes: one resident CLI process per session, reused across turns — no cold start per message
 - Automatic session identity: continue → resume; branch from a point in history → native fork; fresh → new. Three intents, zero ceremony
 - Fork sessions: grow a new branch from any historical session, via the CLI's native mechanism
@@ -60,7 +60,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Busy queueing: when the session is busy or running elsewhere, messages queue up and send in order; the queue is visible and revocable
 - External session awareness: when a session is running in a terminal or VS Code, Monet shows "running in X" naming the owner; you can watch along, or terminate it from Monet
 - File ledger: see at a glance which files this session touched — modified and read-only groups, per-change diffs, and a one-click jump back to the conversation moment where the AI explained why it changed the file; includes a git worktree snapshot; Read/Edit/Write cards in the message stream link straight into the ledger
-- Async task panel: everything the AI farmed out (subagents, workflows, background commands) in one place — active/completed sections, live progress and exit codes, each task locatable back to the turn that started it
+- Async task panel: everything the AI farmed out (subagents, workflows, background commands) in one place — active/completed sections, live progress and exit codes, per-task stop controls, and a jump back to the turn that started it
 - Three counter entries in the top bar: async tasks (active count + pulse), file ledger (entry count), Runner (turns alert-colored on crash); they only appear when there's something to show
 - Custom CLI args escape hatch: append arbitrary CLI arguments per session (protocol-level args are blacklist-protected; dangerous args are intercepted and highlighted as you type)
 - Append system prompt: inject a custom system prompt per session
@@ -69,9 +69,9 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 > A running session in the Workbench and a historical session in the Archive use the same reading interface — learn it once, use it everywhere; reviewing history feels exactly like watching live output.
 
-- Rich rendering: markdown, syntax highlighting (light/dark dual theme), thinking summaries (expand one, all follow — preference remembered), image lightbox (click to fullscreen, Esc to close)
+- Rich rendering: markdown, syntax highlighting (light/dark dual theme), thinking summaries (normal click expands one; Shift-click toggles all and remembers the default), image lightbox (click to fullscreen, Esc to close)
 - HTML visual enhancement (optional toggle): teaches the AI to embed HTML in replies — side-by-side comparison cards, collapsible sections, info cards, inline SVG diagrams — so answers stop being a monotone vertical text stream; script-class dangerous tags are filtered, rendering is safe
-- Every tool call as a card: purpose-built cards per tool type — Bash command and output separately copyable, Edit expands into a side-by-side diff, Read/Write click to open the file, long outputs collapse with a one-line result preview — no more terminal scroll
+- Three tool-call display modes: full cards, collapsed items, or grouped consecutive processes; collapsed rows retain action summaries and running/failure state, while expansion preserves purpose-built Bash copying, side-by-side Edit diffs, and Read/Write file navigation; normal clicks stay local and Shift-click toggles all while remembering the default
 - In-session navigation: an anchor rail on the left (hover to preview each turn's question, click to jump); the current turn's user message pins to the top with previous/next-turn buttons; a back-to-bottom float — glide through a several-hundred-turn session
 - Tokens transparent throughout: per-reply in/cache/new/out quadruple, per-turn totals, and a context-usage bar in the top bar (warns as it fills) — see when context will overflow and where tokens go, in real time
 - Long-content governance: long user messages fade-collapse, huge text expands on demand (size labeled so you know the cost), floating copy button on code blocks

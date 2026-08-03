@@ -1,36 +1,33 @@
-import { ref, watch } from 'vue'
-import { readMigratedStorage } from '../utils/storageMigrate'
+import { computed, ref } from 'vue'
+import { foldDefaultExpanded, foldDefaultRevision, setFoldDefault } from './useFoldDefaults'
 
 /**
- * 思考块全局展开状态:点开任意思考块 = 全部展开,再点 = 全部折叠。
- * 状态持久化到 localStorage,新渲染的思考块(含流式新产出、跨会话)都跟随该状态。
+ * 普通点击只控制当前思考块；Shift + 点击修改并持久化全局默认，
+ * 同步当前所有思考块，后续新渲染与下次启动也跟随该默认。
  */
 
-const STORAGE_KEY = 'monet:thinking-expanded'
-const LEGACY_STORAGE_KEY = 'cc-space:thinking-expanded' // 旧 key,一次性迁移读取用
-
-function load(): boolean {
-  try {
-    return readMigratedStorage(STORAGE_KEY, LEGACY_STORAGE_KEY) === '1'
-  } catch (_) {
-    return false
-  }
-}
-
-/** 模块级单例:所有 BlockThinking 实例消费同一份状态 */
-const thinkingExpanded = ref(load())
-
-watch(thinkingExpanded, (v) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, v ? '1' : '0')
-  } catch (_) {
-    // 存储失败静默忽略,仅丢失跨启动记忆
-  }
-})
-
 export function useThinkingExpand() {
-  function toggle() {
-    thinkingExpanded.value = !thinkingExpanded.value
+  const localExpanded = ref<boolean | null>(null)
+  const localRevision = ref(foldDefaultRevision.thinking.value)
+  const thinkingExpanded = computed({
+    get: () => localExpanded.value !== null
+      && localRevision.value === foldDefaultRevision.thinking.value
+      ? localExpanded.value
+      : foldDefaultExpanded.thinking.value,
+    set: (value: boolean) => {
+      localExpanded.value = value
+      localRevision.value = foldDefaultRevision.thinking.value
+    },
+  })
+
+  function toggle(event?: Pick<MouseEvent, 'shiftKey'>) {
+    const next = !thinkingExpanded.value
+    if (event?.shiftKey) {
+      setFoldDefault('thinking', next)
+      return
+    }
+    thinkingExpanded.value = next
   }
+
   return { thinkingExpanded, toggle }
 }

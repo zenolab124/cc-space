@@ -81,10 +81,10 @@ function revealInFinder(path: string) {
 
 <template>
   <div class="mt-2 rounded-md bg-background border border-border px-3 py-2 text-xs space-y-2">
-    <div class="flex items-center gap-1.5">
-      <span class="i-carbon-image w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-      <span class="text-foreground font-medium">{{ t('block.toolSendFile.title') }}</span>
-      <span v-if="caption" class="text-muted-foreground ml-1">— {{ caption }}</span>
+    <div class="flex items-start gap-1.5 min-w-0">
+      <span class="i-carbon-image w-3.5 h-3.5 mt-0.5 shrink-0 text-muted-foreground" />
+      <span class="text-foreground font-medium shrink-0 whitespace-nowrap">{{ t('block.toolSendFile.title') }}</span>
+      <span v-if="caption" class="min-w-0 flex-1 ml-1 text-muted-foreground leading-relaxed break-words">— {{ caption }}</span>
     </div>
 
     <div v-for="(f, i) in files" :key="i" class="space-y-1">

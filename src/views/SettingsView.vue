@@ -26,6 +26,7 @@ import AgentIframeDemo from '@/components/settings/AgentIframeDemo.vue'
 import ClaudeCodeSettings from '@/components/settings/ClaudeCodeSettings.vue'
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
 import TurnSignalCard from '@/components/settings/TurnSignalCard.vue'
+import TrayQuotaSelect from '@/components/settings/TrayQuotaSelect.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useZoom } from '@/composables/useZoom'
@@ -324,56 +325,8 @@ interface QuotaBundle { providers: ProviderQuota[] }
 const traySlots = ref<TrayTitleSlot[]>([])
 const quotaProviders = ref<ProviderQuota[]>([])
 
-function traySlotKey(slot: TrayTitleSlot): string {
-  return `${slot.provider}/${slot.item}`
-}
-
-const traySlotOptions = computed(() => {
-  const options: { key: string; slot: TrayTitleSlot; label: string }[] = []
-  for (const provider of quotaProviders.value) {
-    for (const group of provider.groups) {
-      for (const item of group.items) {
-        const metric = item.kind === 'fiveHour'
-          ? t('settings.traySlotFiveHour')
-          : item.kind === 'weekly'
-            ? t('settings.traySlotWeekly')
-            : item.label
-        options.push({
-          key: traySlotKey({ provider: provider.id, item: item.id }),
-          slot: { provider: provider.id, item: item.id },
-          label: t('settings.traySlotProvider', { provider: provider.displayName, metric }),
-        })
-      }
-    }
-  }
-  const known = new Set(options.map(option => option.key))
-  for (const slot of traySlots.value) {
-    const key = traySlotKey(slot)
-    if (!known.has(key)) {
-      options.push({
-        key,
-        slot,
-        label: t('settings.traySlotUnavailable', { provider: slot.provider }),
-      })
-    }
-  }
-  return options
-})
-
-function isTraySlotActive(key: string): boolean {
-  return traySlots.value.some(slot => traySlotKey(slot) === key)
-}
-
-async function toggleTraySlot(option: { key: string; slot: TrayTitleSlot }) {
-  if (isTraySlotActive(option.key)) {
-    traySlots.value = traySlots.value.filter(slot => traySlotKey(slot) !== option.key)
-  } else {
-    const order = new Map(traySlotOptions.value.map((item, index) => [item.key, index]))
-    traySlots.value = [...traySlots.value, option.slot].sort((left, right) =>
-      (order.get(traySlotKey(left)) ?? Number.MAX_SAFE_INTEGER)
-      - (order.get(traySlotKey(right)) ?? Number.MAX_SAFE_INTEGER),
-    )
-  }
+async function setTraySlots(slots: TrayTitleSlot[]) {
+  traySlots.value = slots
   await invoke('set_tray_title_config_v2', { slots: traySlots.value }).catch(() => {})
 }
 
@@ -1255,7 +1208,7 @@ function onSaved() {
 
           <div class="settings-grid">
             <!-- 菜单栏（macOS 专属：launchd Helper 架构） -->
-            <div v-if="isMac" class="setting-group">
+            <div v-if="isMac" class="setting-group setting-group-tray">
               <div class="setting-group-header">
                 <span class="i-carbon-menu w-3.5 h-3.5" />
                 {{ $t('settings.groupTray') }}
@@ -1276,14 +1229,12 @@ function onSaved() {
                   <div class="setting-label">{{ $t('settings.trayTitle') }}</div>
                   <div class="setting-hint">{{ $t('settings.trayTitleHint') }}</div>
                 </div>
-                <div class="flex items-center gap-1.5 flex-wrap justify-end">
-                  <button
-                    v-for="slot in traySlotOptions"
-                    :key="slot.key"
-                    :class="['setting-chip', { on: isTraySlotActive(slot.key) }]"
-                    @click="toggleTraySlot(slot)"
-                  >{{ slot.label }}</button>
-                </div>
+                <TrayQuotaSelect
+                  :providers="quotaProviders"
+                  :model-value="traySlots"
+                  :disabled="!trayEnabled"
+                  @update:model-value="setTraySlots"
+                />
               </div>
             </div>
             <!-- 桌面小组件（macOS 专属：WidgetKit） -->
@@ -1567,6 +1518,14 @@ function onSaved() {
   /* 跨满整行：双列时占两列，单列时自然落一列（span 2 在单列会溢出） */
   grid-column: 1 / -1;
 }
+.setting-group-tray {
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+}
+.setting-group-tray > .setting-group-header {
+  border-radius: 6px 6px 0 0;
+}
 .setting-group-header {
   display: flex;
   align-items: center;
@@ -1593,26 +1552,6 @@ function onSaved() {
 .setting-row-main {
   flex: 1;
   min-width: 0;
-}
-
-/* 多选胶囊 */
-.setting-chip {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 2px 10px;
-  font-size: 11.5px;
-  color: var(--muted-foreground);
-  background: transparent;
-  transition: all 0.15s;
-}
-.setting-chip:hover {
-  color: var(--foreground);
-}
-.setting-chip.on {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  border-color: var(--primary);
-  color: var(--primary);
-  font-weight: 500;
 }
 
 /* 设置单元：label 在上，控件在下 */
