@@ -5,8 +5,8 @@
 //! 所有用户都被推 nightly。通道切换只能在 Rust 侧用 `updater_builder().endpoints()`
 //! 动态指定，因此整条检查/下载链路一并收口到这里，前端只调 command + 听进度事件。
 //!
-//! 版本号语义：nightly 用 `1.0.3-nightly.YYYYMMDD`。semver 上它 > 1.0.2 且 < 1.0.3，
-//! 于是 nightly 用户持续收 nightly，而稳定版发 1.0.3 时会自然把他们带回稳定线。
+//! 版本号语义：nightly 用下一 patch 的 `1.0.5-nightly.YYYYMMDD.RUN`。semver 上它
+//! 高于当前稳定版 1.0.4；正式版 Publish 后会自动刷新滚动 Nightly，使两者不共用基础版本号。
 
 use serde::Serialize;
 use std::sync::Mutex;

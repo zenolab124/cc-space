@@ -6,6 +6,7 @@ name: Nightly
 # 与 release.yml 的关键差异：
 #   · 版本号在 CI 内临时改，不 commit（pnpm version 那套只服务正式发版）
 #   · 用固定的滚动 tag「nightly」，每次强制覆盖，避免 release 列表被日期 tag 淹掉
+#   · 正式版 Publish 后自动刷新到下一个 patch，避免 Nightly 与当前正式版重叠
 #   · 发 prerelease，产 nightly.json
 #   · 仅 macOS：nightly 主要服务开发者自测，Windows 用户走稳定版
 #
@@ -16,16 +17,21 @@ on:
   schedule:
     - cron: '0 18 * * *' # UTC 18:00 = 北京时间 02:00
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
 jobs:
   build-macos:
+    # release 事件也包含 prerelease；这里只响应 v* 正式版，避免 Nightly 自己触发递归构建。
+    if: ${{ github.event_name != 'release' || (github.event.release.prerelease == false && startsWith(github.event.release.tag_name, 'v')) }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
           fetch-depth: 0 # 需要历史来判断有无新提交
 
       # 定时触发时若 24h 内无提交就跳过，避免天天发同一份包
@@ -65,16 +71,17 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: brew install xcodegen
 
-      # 版本号取「下一个 patch 的预发布」：1.0.2 → 1.0.3-nightly.20260728。
-      # semver 上它 > 1.0.2 且 < 1.0.3，于是 nightly 用户持续收 nightly，
-      # 而稳定版发 1.0.3 时会自然把他们带回稳定线，无需手动切换。
+      # 版本号取「下一个 patch 的预发布」：1.0.4 → 1.0.5-nightly.20260803.42。
+      # run number 保证同一天多次构建仍有不同且单调递增的 semver。
+      # semver 上它 > 1.0.4 且 < 1.0.5，于是 nightly 用户持续收 nightly，
+      # 正式版 Publish 后本 workflow 会立即再跑一次，让 Nightly 前进到后续 patch。
       - name: Compute nightly version
         if: steps.check.outputs.skip == 'false'
         id: ver
         run: |
           set -euo pipefail
           NEXT=$(node -p "const [a,b,c]=require('./package.json').version.split('.'); \`\${a}.\${b}.\${Number(c)+1}\`")
-          VERSION="${NEXT}-nightly.$(date -u +%Y%m%d)"
+          VERSION="${NEXT}-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "nightly 版本: $VERSION"
 
