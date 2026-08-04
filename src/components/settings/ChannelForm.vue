@@ -23,10 +23,22 @@ const name = ref(props.channel?.name ?? '')
 const baseUrl = ref(props.channel?.baseUrl ?? '')
 const authToken = ref('')
 const note = ref(props.channel?.note ?? '')
+const engineSupport = ref<string[]>(props.channel?.engineSupport?.length
+  ? [...props.channel.engineSupport]
+  : ['claude-code'])
 const protocol = ref(props.channel?.protocol ?? 'anthropic')
 const scope = ref(props.channel?.scope ?? 'full')
 const agentModel = ref(props.channel?.agentModel ?? '')
 const tokenVisible = ref(false)
+const codexMode = ref<'external' | 'managed'>(props.channel?.codex?.mode ?? 'external')
+const codexProviderId = ref(props.channel?.codex?.providerId ?? '')
+const codexBaseUrl = ref(props.channel?.codex?.baseUrl ?? '')
+const codexAuthMode = ref<'bearer' | 'openai' | 'none'>(props.channel?.codex?.authMode ?? 'bearer')
+const codexAuthToken = ref('')
+const codexTokenVisible = ref(false)
+const codexDefaultModel = ref(props.channel?.codex?.defaultModel ?? '')
+const codexDefaultEffort = ref(props.channel?.codex?.defaultEffort ?? '')
+const codexModelsText = ref((props.channel?.codex?.availableModels ?? []).join(', '))
 /** 渠道默认模型(env.ANTHROPIC_MODEL,保存时合并进 modelEnv)与默认思考强度(顶层 effortLevel/ultracode) */
 const defaultModel = ref(props.channel?.defaultModel ?? '')
 const defaultEffort = ref(props.channel?.defaultEffort ?? '')
@@ -40,6 +52,18 @@ function onModelEnvUpdate(env: Record<string, string>) {
 }
 
 const isVirtual = computed(() => props.channel?.id === APPLE_FM_CHANNEL_ID)
+const supportsClaude = computed(() => engineSupport.value.includes('claude-code'))
+const supportsCodex = computed(() => engineSupport.value.includes('codex'))
+
+function toggleEngine(engineId: string) {
+  if (engineSupport.value.includes(engineId)) {
+    if (engineSupport.value.length > 1) {
+      engineSupport.value = engineSupport.value.filter(engine => engine !== engineId)
+    }
+    return
+  }
+  engineSupport.value = [...engineSupport.value, engineId]
+}
 
 /** 「获取模型列表」:一律用表单当前值直探(新建与编辑同款)。
  *  编辑态若按 id 走渠道文件,用户改了 baseUrl/token/协议还没保存时,
@@ -76,8 +100,12 @@ const ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/
 
 onMounted(async () => {
   if (!isNew.value && props.channel) {
-    const token = await revealToken(props.channel.id)
-    if (token) authToken.value = token
+    const [claudeToken, codexToken] = await Promise.all([
+      revealToken(props.channel.id, 'claude-code'),
+      props.channel.codex ? revealToken(props.channel.id, 'codex') : Promise.resolve(null),
+    ])
+    if (claudeToken) authToken.value = claudeToken
+    if (codexToken) codexAuthToken.value = codexToken
   }
 })
 
@@ -92,12 +120,28 @@ async function onSave() {
     formError.value = t('settings.channelForm.nameError')
     return
   }
-  if (!isVirtual.value && !baseUrl.value.trim()) {
+  if (!engineSupport.value.length) {
+    formError.value = t('settings.channelForm.engineRequired')
+    return
+  }
+  if (supportsClaude.value && !isVirtual.value && !baseUrl.value.trim()) {
     formError.value = t('settings.channelForm.baseUrlError')
     return
   }
-  if (!isVirtual.value && protocol.value !== 'openai' && !authToken.value.trim()) {
+  if (supportsClaude.value && !isVirtual.value && protocol.value !== 'openai' && !authToken.value.trim()) {
     formError.value = t('settings.channelForm.tokenError')
+    return
+  }
+  if (supportsCodex.value && !codexProviderId.value.trim()) {
+    formError.value = t('settings.channelForm.codexProviderError')
+    return
+  }
+  if (supportsCodex.value && codexMode.value === 'managed' && !codexBaseUrl.value.trim()) {
+    formError.value = t('settings.channelForm.codexBaseUrlError')
+    return
+  }
+  if (supportsCodex.value && codexMode.value === 'managed' && codexAuthMode.value === 'bearer' && !codexAuthToken.value.trim()) {
+    formError.value = t('settings.channelForm.codexTokenError')
     return
   }
   saving.value = true
@@ -110,7 +154,7 @@ async function onSave() {
     await saveChannel({
       id: trimmedId,
       name: name.value.trim(),
-      baseUrl: isVirtual.value ? '' : baseUrl.value.trim().replace(/\/+$/, ''),
+      baseUrl: !supportsClaude.value || isVirtual.value ? '' : baseUrl.value.trim().replace(/\/+$/, ''),
       authToken: authToken.value.trim() || undefined,
       note: note.value.trim() || undefined,
       protocol: protocol.value,
@@ -121,6 +165,20 @@ async function onSave() {
       modelEnv: isVirtual.value ? undefined : mergedEnv,
       // 替换语义:空串=清除默认(移除顶层 effortLevel/ultracode);虚拟渠道不传
       defaultEffort: isVirtual.value ? undefined : defaultEffort.value,
+      engineSupport: [...engineSupport.value],
+      codex: supportsCodex.value ? {
+        mode: codexMode.value,
+        providerId: codexProviderId.value.trim(),
+        baseUrl: codexBaseUrl.value.trim().replace(/\/+$/, '') || undefined,
+        authMode: codexAuthMode.value,
+        authToken: codexAuthToken.value.trim() || undefined,
+        defaultModel: codexDefaultModel.value.trim() || undefined,
+        defaultEffort: codexDefaultEffort.value || undefined,
+        availableModels: codexModelsText.value
+          .split(/[,，\n]/)
+          .map(model => model.trim())
+          .filter(Boolean),
+      } : undefined,
     })
     emit('saved')
   } catch (e) {
@@ -152,6 +210,31 @@ async function onSave() {
       <input v-model="name" type="text" :placeholder="$t('settings.channelForm.namePlaceholder')" class="form-input" />
     </label>
 
+    <div class="form-field">
+      <span class="form-label">{{ $t('settings.channelForm.engineSupportLabel') }}</span>
+      <div class="flex items-center gap-1.5">
+        <button
+          v-for="engine in [{ id: 'claude-code', label: 'Claude Code' }, { id: 'codex', label: 'Codex' }]"
+          :key="engine.id"
+          type="button"
+          class="engine-chip"
+          :class="{ active: engineSupport.includes(engine.id) }"
+          :aria-pressed="engineSupport.includes(engine.id)"
+          @click="toggleEngine(engine.id)"
+        >
+          <span class="h-1.5 w-1.5 rounded-full" :class="engine.id === 'codex' ? 'bg-codex' : 'bg-claude'" />
+          {{ engine.label }}
+        </button>
+      </div>
+      <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.engineSupportHint') }}</span>
+    </div>
+
+    <section v-if="supportsClaude" class="engine-binding">
+      <div class="engine-binding-head">
+        <span class="h-1.5 w-1.5 rounded-full bg-claude" />
+        <span>Claude Code</span>
+        <span class="ml-auto font-mono text-[9px] font-normal text-muted-foreground">settings / env</span>
+      </div>
     <label class="form-field">
       <span class="form-label">{{ $t('settings.channelForm.protocolLabel') }}</span>
       <select v-model="protocol" class="form-input">
@@ -256,6 +339,80 @@ async function onSave() {
       @update:env="onModelEnvUpdate"
       @probe="onProbe"
     />
+    </section>
+
+    <section v-if="supportsCodex" class="engine-binding">
+      <div class="engine-binding-head">
+        <span class="h-1.5 w-1.5 rounded-full bg-codex" />
+        <span>Codex</span>
+        <span class="ml-auto font-mono text-[9px] font-normal text-muted-foreground">model_provider / Responses</span>
+      </div>
+
+      <label class="form-field">
+        <span class="form-label">{{ $t('settings.channelForm.codexModeLabel') }}</span>
+        <select v-model="codexMode" class="form-input">
+          <option value="external">{{ $t('settings.channelForm.codexModeExternal') }}</option>
+          <option value="managed">{{ $t('settings.channelForm.codexModeManaged') }}</option>
+        </select>
+        <span class="text-[10px] leading-snug text-muted-foreground/70">
+          {{ $t(codexMode === 'external' ? 'settings.channelForm.codexModeExternalHint' : 'settings.channelForm.codexModeManagedHint') }}
+        </span>
+      </label>
+
+      <label class="form-field">
+        <span class="form-label">Provider ID</span>
+        <input v-model="codexProviderId" type="text" :placeholder="codexMode === 'managed' ? `monet-${id || 'proxy'}` : 'openai / proxy / ollama'" class="form-input font-mono" spellcheck="false" />
+      </label>
+
+      <template v-if="codexMode === 'managed'">
+        <label class="form-field">
+          <span class="form-label">Base URL <span class="text-muted-foreground font-normal">{{ $t('settings.channelForm.baseUrlHint') }}</span></span>
+          <input v-model="codexBaseUrl" type="text" placeholder="https://api.example.com/v1" class="form-input font-mono" spellcheck="false" />
+        </label>
+
+        <label class="form-field">
+          <span class="form-label">{{ $t('settings.channelForm.codexAuthLabel') }}</span>
+          <select v-model="codexAuthMode" class="form-input">
+            <option value="bearer">Bearer Token</option>
+            <option value="openai">{{ $t('settings.channelForm.codexAuthOpenai') }}</option>
+            <option value="none">{{ $t('settings.channelForm.codexAuthNone') }}</option>
+          </select>
+        </label>
+
+        <div v-if="codexAuthMode === 'bearer'" class="form-field">
+          <span class="form-label">Bearer Token</span>
+          <div class="relative">
+            <input v-model="codexAuthToken" :type="codexTokenVisible ? 'text' : 'password'" placeholder="sk-…" class="form-input font-mono w-full pr-8" autocomplete="off" />
+            <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground" @click="codexTokenVisible = !codexTokenVisible">
+              <span :class="codexTokenVisible ? 'i-carbon-view-off' : 'i-carbon-view'" class="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <div class="grid grid-cols-2 gap-2">
+        <label class="form-field">
+          <span class="form-label">{{ $t('settings.channelForm.defaultModelLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
+          <input v-model="codexDefaultModel" type="text" placeholder="gpt-5.6-sol" class="form-input font-mono" spellcheck="false" />
+        </label>
+        <label class="form-field">
+          <span class="form-label">{{ $t('settings.channelForm.defaultEffortLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
+          <select v-model="codexDefaultEffort" class="form-input">
+            <option value="">{{ $t('settings.channelForm.defaultEffortNone') }}</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">xHigh</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="form-field">
+        <span class="form-label">{{ $t('settings.channelForm.codexModelsLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
+        <textarea v-model="codexModelsText" rows="2" class="form-input resize-none font-mono" placeholder="gpt-5.6-sol, gpt-5.6-terra" spellcheck="false" />
+        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.codexModelsHint') }}</span>
+      </label>
+    </section>
 
     <label class="form-field">
       <span class="form-label">{{ $t('settings.channelForm.noteLabel') }}</span>
@@ -291,5 +448,44 @@ async function onSave() {
 .form-label {
   font-size: 11px;
   color: var(--muted-foreground);
+}
+.engine-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.engine-chip:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.engine-chip.active {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.engine-binding {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.engine-binding-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  font-size: 11px;
+  font-weight: 600;
 }
 </style>

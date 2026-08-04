@@ -23,13 +23,15 @@ import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
 import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
 import SessionTokenBreakdown from '@/components/topbar/SessionTokenBreakdown.vue'
+import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
-import { engineRunConfig, setEngineRunConfig } from '@/engines/runConfig'
+import { engineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
+import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -54,6 +56,10 @@ const models = ref<ModelDescriptor[]>([])
 const actions = ref<SessionActions | null>(null)
 const selectedModel = ref<string | null>(null)
 const selectedEffort = ref<string | null>(null)
+const modelOverridden = ref(false)
+const effortOverridden = ref(false)
+const selectedChannel = ref<string | null>(null)
+const attachedChannel = ref<string | null | undefined>(undefined)
 const runConfigSyncing = ref(false)
 const asyncPanelOpen = ref(false)
 const menuOpen = ref(false)
@@ -65,6 +71,7 @@ const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
 const { confirm } = useConfirm()
+const { channels } = useChannels()
 let unlistenSnapshot: UnlistenFn | null = null
 let unlistenEvent: UnlistenFn | null = null
 let recoveringSnapshot = false
@@ -101,6 +108,55 @@ const timelineEffort = computed(() => {
     .find(effort => typeof effort === 'string' && !!effort.trim())
   return typeof value === 'string' ? value : null
 })
+const sessionEngineId = computed(() => props.session.engine?.engineId ?? 'unknown')
+const timelineProvider = computed(() => engineProviderIdFromSource(
+  props.session.source_meta,
+  sessionEngineId.value,
+))
+const providerChannel = computed(() => channels.value.find(channel =>
+  channel.enabled
+  && channelSupportsEngine(channel, sessionEngineId.value)
+  && engineChannelBinding(channel, sessionEngineId.value)?.providerId === timelineProvider.value,
+) ?? null)
+const activeChannel = computed(() => selectedChannel.value
+  ? channels.value.find(channel => channel.id === selectedChannel.value) ?? null
+  : null)
+const effectiveChannel = computed(() => activeChannel.value ?? providerChannel.value)
+const activeChannelBinding = computed(() => engineChannelBinding(effectiveChannel.value, sessionEngineId.value))
+const capsuleModels = computed(() => {
+  const descriptors = models.value.map(model => ({
+    id: model.model,
+    label: model.displayName,
+    hidden: model.hidden,
+    defaultEffort: model.defaultEffort,
+    efforts: model.efforts,
+  }))
+  const configured = activeChannelBinding.value
+  const extras = [configured?.defaultModel, ...(configured?.availableModels ?? [])]
+    .filter((model): model is string => !!model)
+    .filter(model => !descriptors.some(item => item.id === model))
+    .map(model => ({
+      id: model,
+      label: model,
+      hidden: false,
+      defaultEffort: configured?.defaultEffort ?? null,
+      efforts: ['low', 'medium', 'high', 'xhigh'].map(id => ({ id, description: null })),
+    }))
+  return [...descriptors, ...extras]
+})
+const capsuleConfig = computed<EngineCapsuleConfig>(() => ({
+  engineId: sessionEngineId.value,
+  engineName: enginePresentation.value.displayName,
+  channelId: selectedChannel.value,
+  inheritedChannelLabel: providerChannel.value?.name ?? timelineProvider.value,
+  model: selectedModel.value,
+  effort: selectedEffort.value,
+  modelOverridden: modelOverridden.value,
+  effortOverridden: effortOverridden.value,
+  defaultModel: activeChannelBinding.value?.defaultModel ?? null,
+  defaultEffort: activeChannelBinding.value?.defaultEffort ?? null,
+  models: capsuleModels.value,
+}))
 const conversationGroups = computed(() => {
   const groups: Array<{
     key: string
@@ -149,7 +205,6 @@ const runtimeUnavailableReason = computed(() => {
 const isBusy = computed(() => snapshot.value?.phase === 'running' || snapshot.value?.phase === 'awaitingInteraction' || sending.value)
 const activeTurnId = computed(() => snapshot.value?.activeTurnId ?? null)
 const pendingInteractions = computed(() => snapshot.value?.pendingInteractions ?? [])
-const effortOptions = computed(() => models.value.find(model => model.model === selectedModel.value)?.efforts ?? [])
 const starred = computed(() => !!getMeta(props.session.id)?.starred)
 const resolvedTitle = computed(() => getMeta(props.session.id)?.title
   || props.session.title
@@ -272,25 +327,38 @@ async function ensureAttached() {
   if (!reference.value || attaching.value || actions.value?.resume.available !== true) return
   attaching.value = true
   try {
-    if (!runtimeId.value) {
-      const attached = await attachSession(reference.value)
-      runtimeId.value = attached.runtimeId
-    }
     if (models.value.length === 0) {
       try {
         models.value = await listModels(reference.value.engine)
         const stored = engineRunConfig(props.session.id)
+        selectedChannel.value = stored?.channelId
+          ?? null
         const defaultModel = models.value.find(model => model.model === stored?.model)
+          ?? models.value.find(model => model.model === activeChannelBinding.value?.defaultModel)
           ?? models.value.find(model => model.model === timelineModel.value)
           ?? models.value.find(model => model.isDefault)
           ?? models.value.find(model => !model.hidden)
         selectedModel.value = defaultModel?.model ?? null
-        selectedEffort.value = defaultModel?.efforts.some(item => item.id === stored?.effort)
+        modelOverridden.value = !!stored?.modelOverridden && !!stored.model
+        const storedEffortSupported = defaultModel?.efforts.some(item => item.id === stored?.effort) === true
+        selectedEffort.value = storedEffortSupported
           ? stored!.effort
-          : timelineEffort.value ?? defaultModel?.defaultEffort ?? null
+          : activeChannelBinding.value?.defaultEffort
+            ?? timelineEffort.value
+            ?? defaultModel?.defaultEffort
+            ?? null
+        effortOverridden.value = !!stored?.effortOverridden && storedEffortSupported
       } catch (_) {
         models.value = []
       }
+    }
+    if (!runtimeId.value || attachedChannel.value !== selectedChannel.value) {
+      const attached = await attachSession(reference.value, {
+        ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
+        ...(selectedModel.value ? { model: selectedModel.value } : {}),
+      })
+      runtimeId.value = attached.runtimeId
+      attachedChannel.value = selectedChannel.value
     }
   } catch (cause) {
     error.value = String(cause)
@@ -318,7 +386,7 @@ async function recoverRuntimeSnapshot() {
 async function send() {
   const text = input.value.trim()
   if (!text || !reference.value || sending.value) return
-  await ensureAttached()
+  if (!isBusy.value) await ensureAttached()
   if (!runtimeId.value) {
     error.value = runtimeUnavailableReason.value
     return
@@ -362,6 +430,43 @@ async function interrupt() {
   } catch (cause) {
     error.value = String(cause)
   }
+}
+
+function onEngineChannelChange(channelId: string | null) {
+  selectedChannel.value = channelId === OFFICIAL_CHANNEL_ID ? null : channelId
+  const channel = selectedChannel.value
+    ? channels.value.find(item => item.id === selectedChannel.value) ?? null
+    : null
+  const binding = engineChannelBinding(channel, sessionEngineId.value)
+  if (binding?.defaultModel) {
+    selectedModel.value = binding.defaultModel
+    modelOverridden.value = false
+  }
+  if (binding?.defaultEffort) {
+    selectedEffort.value = binding.defaultEffort
+    effortOverridden.value = false
+  }
+}
+
+function onEngineModelChange(model: string | null) {
+  if (model) {
+    selectedModel.value = model
+    modelOverridden.value = true
+    return
+  }
+  modelOverridden.value = false
+  selectedModel.value = activeChannelBinding.value?.defaultModel
+    ?? models.value.find(item => item.isDefault)?.model
+    ?? models.value.find(item => !item.hidden)?.model
+    ?? null
+}
+
+function onEngineEffortChange(effort: string | null) {
+  effortOverridden.value = effort !== null
+  selectedEffort.value = effort
+    ?? activeChannelBinding.value?.defaultEffort
+    ?? models.value.find(item => item.model === selectedModel.value)?.defaultEffort
+    ?? null
 }
 
 async function decide(request: RuntimeSnapshot['pendingInteractions'][number], decision: string) {
@@ -431,6 +536,10 @@ watch(() => props.session.id, async () => {
     models.value = []
     selectedModel.value = null
     selectedEffort.value = null
+    modelOverridden.value = false
+    effortOverridden.value = false
+    selectedChannel.value = null
+    attachedChannel.value = undefined
     asyncPanelOpen.value = false
     menuOpen.value = false
     await reload()
@@ -440,6 +549,9 @@ watch(() => props.session.id, async () => {
     setEngineRunConfig(props.session.id, {
       model: selectedModel.value,
       effort: selectedEffort.value,
+      channelId: selectedChannel.value,
+      modelOverridden: modelOverridden.value,
+      effortOverridden: effortOverridden.value,
     })
   }
 })
@@ -458,11 +570,18 @@ watch(selectedModel, (model) => {
   const descriptor = models.value.find(item => item.model === model)
   if (descriptor?.efforts.some(item => item.id === selectedEffort.value)) return
   selectedEffort.value = descriptor?.defaultEffort ?? null
+  effortOverridden.value = false
 })
 
-watch([selectedModel, selectedEffort], ([model, effort]) => {
+watch([selectedModel, selectedEffort, selectedChannel, modelOverridden, effortOverridden], ([model, effort, channelId, modelIsOverridden, effortIsOverridden]) => {
   if (runConfigSyncing.value) return
-  setEngineRunConfig(props.session.id, { model, effort })
+  setEngineRunConfig(props.session.id, {
+    model,
+    effort,
+    channelId,
+    modelOverridden: modelIsOverridden,
+    effortOverridden: effortIsOverridden,
+  })
 })
 
 onMounted(async () => {
@@ -476,7 +595,7 @@ onMounted(async () => {
   unlistenEvent = await listen<RuntimeEventEnvelope[]>('engine-runtime-events', event => {
     for (const envelope of event.payload) applyRuntimeEvent(envelope)
   })
-  await Promise.all([reload(), recoverRuntimeSnapshot()])
+  await Promise.all([reload(), recoverRuntimeSnapshot(), refreshChannels()])
   if (interactive.value) await ensureAttached()
 })
 
@@ -503,14 +622,16 @@ onUnmounted(() => {
         :context-capacity="contextCapacity"
         :accent="engineAccent"
       >
-        <template #controls>
+        <template #controls="{ containerWidth }">
           <span v-if="!interactive && timelineModel" class="min-w-0 max-w-48 truncate rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground" :title="timelineModel">{{ timelineModel }}</span>
-          <select v-if="interactive && models.length" v-model="selectedModel" class="form-select min-w-0 max-w-48 text-xs" :aria-label="t('engine.model')">
-            <option v-for="model in models.filter(item => !item.hidden)" :key="model.id" :value="model.model">{{ model.displayName }}</option>
-          </select>
-          <select v-if="interactive && effortOptions.length" v-model="selectedEffort" class="form-select min-w-20 max-w-28 text-xs" :aria-label="t('common.effort')">
-            <option v-for="effort in effortOptions" :key="effort.id" :value="effort.id">{{ effort.id }}</option>
-          </select>
+          <RunConfigCapsule
+            v-if="interactive"
+            :engine-config="capsuleConfig"
+            :narrow="containerWidth < 280"
+            @model-change="onEngineModelChange"
+            @effort-change="onEngineEffortChange"
+            @channel-change="onEngineChannelChange"
+          />
           <span v-if="snapshot" class="shrink-0 text-[10px] text-muted-foreground">{{ t(`engine.phase.${snapshot.phase}`) }}</span>
         </template>
 

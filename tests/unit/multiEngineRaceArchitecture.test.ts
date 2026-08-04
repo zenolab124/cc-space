@@ -11,7 +11,8 @@ describe('multi-engine race architecture', () => {
     const raceInput = source('../../src/composables/useRaceInput.ts')
 
     expect(raceInput).toContain('startTurnWithInput(context.reference')
-    expect(raceInput).toContain('forkSession(context.reference)')
+    expect(raceInput).toContain('attachSession(context.reference, engineRuntimeOptions(lane.sessionId))')
+    expect(raceInput).toContain('forkSession(context.reference, null, engineRuntimeOptions(sourceLane.sessionId))')
     expect(raceInput).toContain('interruptTurn(')
     expect(raceInput).toContain('createSession(context.project!')
   })

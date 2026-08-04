@@ -1,6 +1,31 @@
 export interface EngineRunConfig {
   model: string | null
   effort: string | null
+  channelId: string | null
+  modelOverridden: boolean
+  effortOverridden: boolean
+}
+
+export interface EngineCapsuleModel {
+  id: string
+  label: string
+  hidden?: boolean
+  defaultEffort: string | null
+  efforts: Array<{ id: string; description?: string | null }>
+}
+
+export interface EngineCapsuleConfig {
+  engineId: string
+  engineName: string
+  channelId: string | null
+  inheritedChannelLabel: string | null
+  model: string | null
+  effort: string | null
+  modelOverridden: boolean
+  effortOverridden: boolean
+  defaultModel: string | null
+  defaultEffort: string | null
+  models: EngineCapsuleModel[]
 }
 
 const configs = new Map<string, EngineRunConfig>()
@@ -16,6 +41,15 @@ export function setEngineRunConfig(sessionId: string, config: EngineRunConfig) {
 
 export function clearEngineRunConfig(sessionId: string) {
   configs.delete(sessionId)
+}
+
+export function engineRuntimeOptions(sessionId: string): Record<string, unknown> {
+  const config = configs.get(sessionId)
+  if (!config) return {}
+  return {
+    ...(config.model ? { model: config.model } : {}),
+    ...(config.channelId ? { channelId: config.channelId } : {}),
+  }
 }
 
 export function inheritEngineRunConfig(sourceSessionId: string, targetSessionId: string) {

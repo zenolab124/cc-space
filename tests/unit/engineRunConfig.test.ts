@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearEngineRunConfig,
   engineRunConfig,
+  engineRuntimeOptions,
   inheritEngineRunConfig,
   setEngineRunConfig,
 } from '../../src/engines/runConfig'
@@ -12,25 +13,37 @@ afterEach(() => clearEngineRunConfig(sessionId))
 
 describe('engine run config', () => {
   it('keeps model and effort scoped to a standard-engine session', () => {
-    setEngineRunConfig(sessionId, { model: 'gpt-test', effort: 'high' })
+    setEngineRunConfig(sessionId, {
+      model: 'gpt-test', effort: 'high', channelId: null, modelOverridden: true, effortOverridden: true,
+    })
 
-    expect(engineRunConfig(sessionId)).toEqual({ model: 'gpt-test', effort: 'high' })
+    expect(engineRunConfig(sessionId)).toEqual({
+      model: 'gpt-test', effort: 'high', channelId: null, modelOverridden: true, effortOverridden: true,
+    })
+    expect(engineRuntimeOptions(sessionId)).toEqual({ model: 'gpt-test' })
     expect(engineRunConfig('codex:test:thread-2')).toBeNull()
   })
 
   it('returns a defensive copy after storing config', () => {
-    const config = { model: 'gpt-test', effort: 'low' }
+    const config = {
+      model: 'gpt-test', effort: 'low', channelId: 'proxy', modelOverridden: true, effortOverridden: true,
+    }
     setEngineRunConfig(sessionId, config)
     config.effort = 'high'
 
     expect(engineRunConfig(sessionId)?.effort).toBe('low')
+    expect(engineRuntimeOptions(sessionId)).toEqual({ model: 'gpt-test', channelId: 'proxy' })
   })
 
   it('inherits lane settings without sharing mutable state', () => {
     const targetId = 'codex:test:thread-2'
-    setEngineRunConfig(sessionId, { model: 'gpt-test', effort: 'medium' })
+    setEngineRunConfig(sessionId, {
+      model: 'gpt-test', effort: 'medium', channelId: 'proxy', modelOverridden: true, effortOverridden: true,
+    })
     inheritEngineRunConfig(sessionId, targetId)
-    setEngineRunConfig(sessionId, { model: 'gpt-test', effort: 'high' })
+    setEngineRunConfig(sessionId, {
+      model: 'gpt-test', effort: 'high', channelId: null, modelOverridden: true, effortOverridden: true,
+    })
 
     expect(engineRunConfig(targetId)?.effort).toBe('medium')
     clearEngineRunConfig(targetId)

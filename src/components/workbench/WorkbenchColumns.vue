@@ -10,7 +10,7 @@ import { useHorizontalWheelScroll } from '@/composables/useHorizontalWheelScroll
 import { useColumnResize } from '@/composables/useColumnResize'
 import { forkSession } from '@/engines/client'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
-import { inheritEngineRunConfig } from '@/engines/runConfig'
+import { engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
 import SortableColumn from './SortableColumn.vue'
 
@@ -60,7 +60,7 @@ async function onStartRace(sessionId: string) {
         notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
-      const created = await forkSession(reference)
+      const created = await forkSession(reference, null, engineRuntimeOptions(sessionId))
       const forkedSessionId = sessionUiId(created.session)
       stageEngineDraft(forkedSessionId, {
         reference: created.session,

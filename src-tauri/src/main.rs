@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-  app_lib::run();
+    if let Some(code) = app_lib::run_internal_command() {
+        std::process::exit(code);
+    }
+    app_lib::run();
 }

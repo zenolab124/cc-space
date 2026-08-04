@@ -21,6 +21,28 @@ export interface ChannelInfo {
   defaultModel: string | null
   /** 渠道默认思考强度:五档 | 'ultracode'(official 存元数据;第三方即文件顶层 effortLevel/ultracode) */
   defaultEffort: string | null
+  /** 同一渠道可绑定多个引擎；每个引擎由自己的 adapter 解释配置。 */
+  engineSupport: string[]
+  codex: CodexChannelInfo | null
+}
+
+export interface CodexChannelInfo {
+  mode: 'external' | 'managed'
+  providerId: string
+  baseUrl: string | null
+  authMode: 'bearer' | 'openai' | 'none'
+  authTokenMasked: string | null
+  defaultModel: string | null
+  defaultEffort: string | null
+  availableModels: string[]
+}
+
+/** 通用会话外壳只消费这组字段；引擎原生渠道结构在此处适配。 */
+export interface EngineChannelBindingInfo {
+  providerId: string | null
+  defaultModel: string | null
+  defaultEffort: string | null
+  availableModels: string[]
 }
 
 export const APPLE_FM_CHANNEL_ID = 'apple-fm'
@@ -35,6 +57,36 @@ interface ChannelListResult {
 export const OFFICIAL_CHANNEL_ID = 'official'
 /** 官方直连:压制 CLI 配置中的第三方键,强制 Anthropic 官方 + OAuth(虚拟渠道,无文件) */
 export const OFFICIAL_DIRECT_CHANNEL_ID = 'official-direct'
+
+export function channelSupportsEngine(channel: ChannelInfo, engineId: string): boolean {
+  return channel.engineSupport.includes(engineId)
+}
+
+export function engineChannelBinding(
+  channel: ChannelInfo | null | undefined,
+  engineId: string,
+): EngineChannelBindingInfo | null {
+  if (!channel || !channelSupportsEngine(channel, engineId)) return null
+  if (engineId === 'codex' && channel.codex) {
+    return {
+      providerId: channel.codex.providerId,
+      defaultModel: channel.codex.defaultModel,
+      defaultEffort: channel.codex.defaultEffort,
+      availableModels: channel.codex.availableModels,
+    }
+  }
+  return null
+}
+
+export function engineProviderIdFromSource(
+  sourceMeta: Record<string, unknown> | null | undefined,
+  engineId: string,
+): string | null {
+  if (engineId === 'codex' && typeof sourceMeta?.modelProvider === 'string') {
+    return sourceMeta.modelProvider
+  }
+  return null
+}
 
 const channels = ref<ChannelInfo[]>([])
 const defaultSessionChannel = ref<string | null>(null)
@@ -92,6 +144,17 @@ export interface SaveChannelPayload {
   modelEnv?: Record<string, string>
   /** 渠道默认思考强度:传字符串=按值重写(空串=清除),不传=不动(默认模型走 modelEnv.ANTHROPIC_MODEL) */
   defaultEffort?: string
+  engineSupport?: string[]
+  codex?: {
+    mode: 'external' | 'managed'
+    providerId: string
+    baseUrl?: string
+    authMode: 'bearer' | 'openai' | 'none'
+    authToken?: string
+    defaultModel?: string
+    defaultEffort?: string
+    availableModels?: string[]
+  }
 }
 
 async function saveChannel(payload: SaveChannelPayload): Promise<void> {
@@ -107,6 +170,8 @@ async function saveChannel(payload: SaveChannelPayload): Promise<void> {
     availableModels: payload.availableModels ?? null,
     modelEnv: payload.modelEnv ?? null,
     defaultEffort: payload.defaultEffort ?? null,
+    engineSupport: payload.engineSupport ?? null,
+    codex: payload.codex ?? null,
   })
   await refreshChannels()
 }
@@ -189,17 +254,19 @@ async function setChannelEnabled(id: string, enabled: boolean): Promise<void> {
 
 const revealedTokens = ref<Record<string, string>>({})
 
-async function revealToken(id: string): Promise<string | null> {
-  if (revealedTokens.value[id]) return revealedTokens.value[id]
+async function revealToken(id: string, engine = 'claude-code'): Promise<string | null> {
+  const key = `${engine}:${id}`
+  if (revealedTokens.value[key]) return revealedTokens.value[key]
   try {
-    const token = await invoke<string | null>('get_channel_token', { id })
-    if (token) revealedTokens.value = { ...revealedTokens.value, [id]: token }
+    const token = await invoke<string | null>('get_channel_token', { id, engine })
+    if (token) revealedTokens.value = { ...revealedTokens.value, [key]: token }
     return token
   } catch { return null }
 }
 
-function hideToken(id: string) {
-  const { [id]: _, ...rest } = revealedTokens.value
+function hideToken(id: string, engine = 'claude-code') {
+  const key = `${engine}:${id}`
+  const { [key]: _, ...rest } = revealedTokens.value
   revealedTokens.value = rest
 }
 
@@ -245,7 +312,9 @@ async function probeChannel(id: string, draft?: ProbeDraft): Promise<ProbeResult
 async function probeAllChannels(): Promise<void> {
   // 内置虚拟渠道(official/official-direct)无文件无探测目标,跳过
   const ids = channels.value
-    .filter(c => c.id !== OFFICIAL_CHANNEL_ID && c.id !== OFFICIAL_DIRECT_CHANNEL_ID)
+    .filter(c => c.id !== OFFICIAL_CHANNEL_ID
+      && c.id !== OFFICIAL_DIRECT_CHANNEL_ID
+      && channelSupportsEngine(c, 'claude-code'))
     .map(c => c.id)
   await Promise.allSettled(ids.map(id => probeChannel(id)))
 }

@@ -131,6 +131,7 @@ function mapSession(descriptor: EngineDescriptor, session: EngineSessionSummary)
     file_size: numericMeta(session.sourceMeta.fileSize),
     message_count: typeof session.sourceMeta.messageCount === 'number' ? session.sourceMeta.messageCount : 0,
     context_window: typeof session.sourceMeta.contextWindow === 'number' ? session.sourceMeta.contextWindow : null,
+    source_meta: { ...session.sourceMeta },
   }
 }
 

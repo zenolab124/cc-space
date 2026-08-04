@@ -480,12 +480,15 @@ impl AgentRuntime for CodexRuntime {
                 &mut params,
                 &[
                     "model",
+                    "modelProvider",
+                    "config",
                     "approvalPolicy",
                     "sandbox",
                     "serviceTier",
                     "ephemeral",
                 ],
             );
+            apply_channel_options(&request.options, &mut params)?;
             let response = self
                 .supervisor
                 .request("thread/start", Value::Object(params))?;
@@ -506,7 +509,7 @@ impl AgentRuntime for CodexRuntime {
 
     fn fork_session(&self, request: ForkSessionRequest) -> EngineFuture<'_, RuntimeSession> {
         Box::pin(async move {
-            let params = fork_params(&request);
+            let params = fork_params(&request)?;
             let response = self
                 .supervisor
                 .request("thread/fork", Value::Object(params))?;
@@ -539,8 +542,16 @@ impl AgentRuntime for CodexRuntime {
             copy_options(
                 &options.options,
                 &mut params,
-                &["model", "approvalPolicy", "sandbox", "serviceTier"],
+                &[
+                    "model",
+                    "modelProvider",
+                    "config",
+                    "approvalPolicy",
+                    "sandbox",
+                    "serviceTier",
+                ],
             );
+            apply_channel_options(&options.options, &mut params)?;
             self.supervisor
                 .request("thread/resume", Value::Object(params))?;
             let runtime = self.runtime_session(session.native_id(), true)?;
@@ -749,7 +760,20 @@ fn copy_options(source: &BTreeMap<String, Value>, target: &mut Map<String, Value
     }
 }
 
-fn fork_params(request: &ForkSessionRequest) -> Map<String, Value> {
+fn apply_channel_options(
+    source: &BTreeMap<String, Value>,
+    target: &mut Map<String, Value>,
+) -> EngineResult<()> {
+    let Some(channel_id) = source.get("channelId").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let options = crate::channels::codex_runtime_channel_options(channel_id)
+        .map_err(|message| EngineError::new(EngineErrorKind::Protocol, message))?;
+    target.extend(options);
+    Ok(())
+}
+
+fn fork_params(request: &ForkSessionRequest) -> EngineResult<Map<String, Value>> {
     let mut params = Map::from_iter([(
         "threadId".into(),
         Value::String(request.session.native_id().to_string()),
@@ -762,6 +786,8 @@ fn fork_params(request: &ForkSessionRequest) -> Map<String, Value> {
         &mut params,
         &[
             "model",
+            "modelProvider",
+            "config",
             "approvalPolicy",
             "sandbox",
             "serviceTier",
@@ -769,7 +795,8 @@ fn fork_params(request: &ForkSessionRequest) -> Map<String, Value> {
             "ephemeral",
         ],
     );
-    params
+    apply_channel_options(&request.options, &mut params)?;
+    Ok(params)
 }
 
 fn map_input(input: Vec<InputItem>) -> Vec<Value> {
@@ -906,7 +933,7 @@ mod tests {
                 ("model".into(), Value::String("gpt-test".into())),
                 ("ignored".into(), Value::Bool(true)),
             ]),
-        });
+        }).unwrap();
         assert_eq!(params["threadId"], "source-thread");
         assert_eq!(params["lastTurnId"], "turn-2");
         assert_eq!(params["model"], "gpt-test");

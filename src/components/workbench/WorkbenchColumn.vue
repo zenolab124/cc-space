@@ -22,7 +22,7 @@ import { createSession, forkSession } from '@/engines/client'
 import { sameInstance } from '@/engines/identity'
 import { useEngines } from '@/engines/useEngines'
 import { resolveWorkbenchEngineActions } from '@/engines/workbenchActions'
-import { inheritEngineRunConfig } from '@/engines/runConfig'
+import { engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import type { SessionSummary } from '@/types'
 
 const { getMeta } = useSessionMeta()
@@ -193,7 +193,7 @@ async function onFork() {
         notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
-      const created = await forkSession(session.reference)
+      const created = await forkSession(session.reference, null, engineRuntimeOptions(props.column.sessionId))
       const sessionId = sessionUiId(created.session)
       registerEngineDraft(sessionId, {
         reference: created.session,
@@ -231,7 +231,7 @@ async function onNewSession() {
         notifyTransient(t('common.newSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
-      const created = await createSession(session.project_reference, cwd)
+      const created = await createSession(session.project_reference, cwd, engineRuntimeOptions(props.column.sessionId))
       const sessionId = sessionUiId(created.session)
       registerEngineDraft(sessionId, {
         reference: created.session,

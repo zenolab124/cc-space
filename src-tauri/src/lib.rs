@@ -66,6 +66,35 @@ extern "C" {
     fn monet_install_high_refresh_unlock();
 }
 
+/// 供 Codex command-backed auth 调用的最小内部命令入口。
+/// 令牌只写给子进程 stdout，不进入 argv、日志或 App Server IPC。
+pub fn run_internal_command() -> Option<i32> {
+    let mut args = std::env::args();
+    let _program = args.next();
+    if args.next().as_deref() != Some("--monet-codex-channel-token") {
+        return None;
+    }
+    let Some(channel_id) = args.next() else {
+        return Some(2);
+    };
+    if args.next().is_some() {
+        return Some(2);
+    }
+    match channels::codex_channel_token(&channel_id) {
+        Ok(token) => {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            if stdout.write_all(token.as_bytes()).is_err()
+                || stdout.write_all(b"\n").is_err()
+            {
+                return Some(1);
+            }
+            Some(0)
+        }
+        Err(_) => Some(1),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]

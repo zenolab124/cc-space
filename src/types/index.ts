@@ -57,6 +57,8 @@ export interface SessionSummary {
   engine?: EngineInstanceId
   engine_name?: string
   native_id?: string
+  /** 引擎原生摘要元数据（例如 Codex modelProvider）；只读透传。 */
+  source_meta?: Record<string, unknown>
 }
 
 export interface Project {

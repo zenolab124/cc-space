@@ -29,7 +29,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Codex uses the local official `codex app-server` for history, create/resume, native fork, streaming text and tool progress, steering, interruption, three approval classes, and model/effort discovery
 - Engine Center reports installation, authentication, version, capabilities, and diagnostics per engine; one failure does not block another
 - The Engine Adapter contract unifies identity, source, runtime, capabilities, and facets, so a third engine needs no new top-level IPC or shared-storage branch
-- Claude Code retains its channels, Workshop, automation, and mature specialized session surface; the standard surface exposes actions from capabilities
+- Both engines reuse the same session shell, composer, and channel/model/effort capsule; one channel entry is translated by each engine adapter into its native protocol
 
 ### 3.1 Workbench — parallel session mission control
 
@@ -172,11 +172,12 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 
 > If you've accumulated more than one channel — an official subscription, a few third-party APIs, a self-hosted proxy, a local model — Monet was practically built for you: different sessions on different channels and models, hot-switching mid-conversation, price and capability each used where they shine. This is one of Monet's signature strengths.
 
-- Two built-in channels side by side: **"Follow CLI"** (zero-injection passthrough — whatever the CLI config says, with the settings page showing live whether it currently points at official or a third party) and **"Official"** (forced direct connection to Anthropic official + OAuth login, ignoring any third-party config in the CLI) — users whose CLI defaults to a third party can still switch back to their official subscription in one click
-- Channel CRUD: third-party APIs and self-hosted proxies side by side; set a default in one click, switch per session
-- Channel files are standard Claude Code settings format: `claude --settings <file>` in a terminal reuses the exact same channel
-- Credential red lines: tokens never enter command-line arguments (invisible in process lists), runtime temp files are deleted right after use, leftovers swept at startup
-- Channel liveness probe + model list fetching; per-channel default model and effort
+- Unified channel CRUD: every channel explicitly declares support for Claude Code, Codex, or both. The name and selector entry are shared while each engine keeps its native connection format
+- Claude Code bindings support Anthropic Messages and OpenAI Chat Completions. Channel files remain standard settings files that can be reused with `claude --settings <file>`
+- A Codex binding can reference an existing `model_provider` or let Monet inject a Responses Provider for create, resume, and fork; managed bindings never rewrite Codex's `config.toml`
+- Both engines use the same channel/model/effort capsule, filtered by channel capabilities; per-binding default model, effort, and available-model lists feed that shared selector
+- Credential red lines: tokens never enter command-line arguments (invisible in process lists). Claude runtime temp files are deleted after use; managed Codex Providers fetch credentials through command-backed authentication only when needed
+- Claude Code channels support liveness probing and model-list discovery
 - Apple local models: when Apple Foundation Models are available on the machine, they auto-register as a free local channel
 - One-click migration from cc-switch
 - Each AI value-add feature can pin its own channel and model (cheap model for titles, strong model for review)
@@ -269,5 +270,5 @@ The user's biggest unspoken worry: this software reads all my session data. You 
 - **Is my data safe?** Session files are read-only by architecture and local data paths have zero telemetry; subscription quota contacts only official provider services. See section 5
 - **Windows/Linux?** Windows is supported — core features complete, with widgets/menu bar/wake-from-sleep system integrations being macOS-only; Linux not yet
 - **Do I have to enable the AI features?** All of them can be turned off — with them off, it's a pure read-only viewer
-- **Anything to configure after install?** No. With no channel configured, Monet runs your `claude` CLI with its own existing config — if the CLI runs, Monet runs; multi-channel is an upgrade, not a barrier
+- **Anything to configure after install?** No. With no channel configured, Monet reuses the existing login and configuration of each Claude Code or Codex CLI — if that CLI runs, Monet runs; multi-channel is an upgrade, not a barrier
 - **What if something breaks after install?** There's a troubleshooting doc written for AI agents (troubleshoot.md): you can self-diagnose and fix for the user; if it's a real bug you can file it for them — no GitHub account needed, the project runs an anonymous report channel

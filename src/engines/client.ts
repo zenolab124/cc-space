@@ -115,10 +115,10 @@ export async function listAssets(instance: EngineInstanceId, kind: string): Prom
   throw new Error('Asset pagination exceeded the safety limit')
 }
 
-export function attachSession(session: SessionRef) {
+export function attachSession(session: SessionRef, options: Record<string, unknown> = {}) {
   return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_attach_session', {
     session,
-    options: { options: {} },
+    options: { options },
   })
 }
 

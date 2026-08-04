@@ -7,6 +7,7 @@ import {
   useChannels,
   refreshChannels,
   channelDisplayName,
+  channelSupportsEngine,
   OFFICIAL_CHANNEL_ID,
   OFFICIAL_DIRECT_CHANNEL_ID,
   APPLE_FM_CHANNEL_ID,
@@ -449,7 +450,9 @@ async function onDelete(ch: ChannelInfo) {
   }
 }
 
-const sessionChannels = () => channels.value.filter(c => c.scope !== 'agent-only')
+const sessionChannels = () => channels.value.filter(c => c.scope !== 'agent-only' || channelSupportsEngine(c, 'codex'))
+const supportsClaude = (channel: ChannelInfo) => channelSupportsEngine(channel, 'claude-code')
+const supportsCodex = (channel: ChannelInfo) => channelSupportsEngine(channel, 'codex')
 
 // 官方渠道 Agent 可选模型:从 modelContext 的 MODELS 派生(单源,消灭第二份清单)。
 // 取具体版本 id 并剥 [1m] 后缀(Agent 用的是 API 模型名,1M 由 CLI/请求侧处理),去重。
@@ -467,6 +470,7 @@ const agentChannelCards = computed(() =>
     c.id !== OFFICIAL_CHANNEL_ID
     && c.id !== OFFICIAL_DIRECT_CHANNEL_ID
     && c.id !== APPLE_FM_CHANNEL_ID
+    && supportsClaude(c)
     && (c.enabled || c.scope === 'agent-only'),
   )
 )
@@ -743,10 +747,10 @@ function onSaved() {
                   :key="ch.id"
                   class="chain-item"
                   :class="{
-                    'chain-item-active': (defaultSessionChannel ?? OFFICIAL_CHANNEL_ID) === ch.id,
+                    'chain-item-active': supportsClaude(ch) && (defaultSessionChannel ?? OFFICIAL_CHANNEL_ID) === ch.id,
                     'opacity-50': !ch.enabled,
                   }"
-                  @click="ch.enabled && setDefaultSessionChannel(ch.id === OFFICIAL_CHANNEL_ID ? null : ch.id)"
+                  @click="ch.enabled && supportsClaude(ch) && setDefaultSessionChannel(ch.id === OFFICIAL_CHANNEL_ID ? null : ch.id)"
                 >
                   <div class="chain-content">
                     <div class="chain-row-1">
@@ -754,6 +758,12 @@ function onSaved() {
                       <span v-if="isBuiltinChannel(ch.id)" class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t(ch.id === OFFICIAL_CHANNEL_ID ? 'channel.followCliHint' : 'channel.officialDirectHint')">
                         <span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" />
                       </span>
+                      <span
+                        v-for="engine in ch.engineSupport"
+                        :key="engine"
+                        class="engine-support-badge"
+                        :class="engine === 'codex' ? 'text-codex' : 'text-claude'"
+                      >{{ engine === 'codex' ? 'Codex' : 'Claude Code' }}</span>
                       <div class="chain-actions">
                         <button v-if="!isBuiltinChannel(ch.id)" :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
                         <template v-if="!isBuiltinChannel(ch.id)">
@@ -765,13 +775,16 @@ function onSaved() {
                     </div>
                     <div class="chain-row-2">
                       <template v-if="ch.id !== OFFICIAL_CHANNEL_ID">
-                        <span v-if="ch.baseUrl" class="font-mono truncate">{{ ch.baseUrl }}</span>
+                        <span v-if="ch.baseUrl && supportsClaude(ch)" class="font-mono truncate">{{ ch.baseUrl }}</span>
+                        <span v-else-if="ch.codex && supportsCodex(ch)" class="font-mono truncate">{{ ch.codex.mode === 'managed' ? ch.codex.baseUrl : ch.codex.providerId }}</span>
                       </template>
                       <span v-else class="text-muted-foreground/60 italic">
                         {{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}
                       </span>
-                      <span v-if="ch.defaultModel" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultModelLabel')">{{ ch.defaultModel }}</span>
-                      <span v-if="ch.defaultEffort" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultEffortLabel')">{{ ch.defaultEffort }}</span>
+                      <span v-if="ch.defaultModel && supportsClaude(ch)" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultModelLabel')">{{ ch.defaultModel }}</span>
+                      <span v-if="ch.defaultEffort && supportsClaude(ch)" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultEffortLabel')">{{ ch.defaultEffort }}</span>
+                      <span v-if="supportsCodex(ch) && ch.codex?.defaultModel" class="chain-model-tag text-codex" v-tooltip="$t('settings.channelForm.defaultModelLabel')">{{ ch.codex.defaultModel }}</span>
+                      <span v-if="supportsCodex(ch) && ch.codex?.defaultEffort" class="chain-model-tag text-codex" v-tooltip="$t('settings.channelForm.defaultEffortLabel')">{{ ch.codex.defaultEffort }}</span>
                       <span v-if="ch.agentModel" class="chain-model-tag">{{ ch.agentModel }}</span>
                       <span class="ml-auto shrink-0 flex items-center gap-1.5">
                         <template v-if="probing[ch.id]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
@@ -781,7 +794,7 @@ function onSaved() {
                           <span v-else-if="!probeResults[ch.id].online">{{ probeResults[ch.id].status === 'auth_error' ? '401' : probeResults[ch.id].status }}</span>
                           <span v-if="probeResults[ch.id].latencyMs" class="text-muted-foreground/50">{{ probeResults[ch.id].latencyMs }}ms</span>
                         </template>
-                        <button v-if="!isBuiltinChannel(ch.id)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
+                        <button v-if="!isBuiltinChannel(ch.id) && supportsClaude(ch)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
                       </span>
                     </div>
                   </div>
@@ -1733,6 +1746,15 @@ function onSaved() {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--muted-foreground);
   opacity: 0.7;
+}
+.engine-support-badge {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 9px;
+  line-height: 15px;
+  opacity: 0.72;
 }
 .agent-item {
   display: flex;

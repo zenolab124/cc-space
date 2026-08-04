@@ -10,11 +10,11 @@ import { refreshCliDefaults, readCliDefaults } from './useCliDefaults'
 import { resolveRunConfig } from './useRunConfig'
 import { getSessionSettings } from './useSessionSettings'
 import { parseCommand } from './useSlashCommands'
-import { createSession, forkSession, interruptTurn, startTurnWithInput } from '@/engines/client'
+import { attachSession, createSession, forkSession, interruptTurn, startTurnWithInput } from '@/engines/client'
 import { resolveSession } from '@/engines/directory'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
 import { engineRuntimeSnapshot } from '@/engines/runtimeState'
-import { engineRunConfig, inheritEngineRunConfig } from '@/engines/runConfig'
+import { engineRunConfig, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import type { ProjectRef, RuntimeInputItem, SessionRef } from '@/engines/types'
 
 export function useRaceInput(tab: Ref<WorkbenchTab>) {
@@ -117,10 +117,11 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       cliSettings: readCliDefaults(race.cwd),
     }
 
-    const promises = race.lanes.map((lane, index) => {
+    const promises = race.lanes.map(async (lane, index) => {
       const context = contexts[index]
       if (!context.native && context.reference) {
         const config = engineRunConfig(lane.sessionId)
+        await attachSession(context.reference, engineRuntimeOptions(lane.sessionId))
         return startTurnWithInput(context.reference, genericInput, {
           cwd: context.cwd,
           ...(config?.model ? { model: config.model } : {}),
@@ -176,7 +177,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     raceMutationLoading.value = true
     try {
       if (!context.native && context.reference && context.project) {
-        const created = await forkSession(context.reference)
+        const created = await forkSession(context.reference, null, engineRuntimeOptions(sourceLane.sessionId))
         const sessionId = sessionUiId(created.session)
         stageEngineDraft(sessionId, {
           reference: created.session,
@@ -218,7 +219,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     raceMutationLoading.value = true
     try {
       const created = await Promise.all(
-        race.lanes.map(() => createSession(context.project!, race.cwd)),
+        race.lanes.map(lane => createSession(context.project!, race.cwd, engineRuntimeOptions(lane.sessionId))),
       )
       const ids = created.map((runtime, index) => {
         const sourceSessionId = race.lanes[index].sessionId

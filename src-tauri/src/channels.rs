@@ -142,6 +142,32 @@ pub fn validate_id(id: &str) -> Result<(), String> {
 pub struct ChannelExt {
     pub available_models: Vec<String>,
     pub agent_model: Option<String>,
+    /// None 表示旧渠道，按兼容规则仅支持 Claude Code。
+    pub engine_support: Option<Vec<String>>,
+    pub codex: Option<CodexChannelExt>,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodexChannelExt {
+    /// external:引用用户 Codex 配置中的 provider；managed:由 Monet 注入 provider 定义。
+    pub mode: String,
+    pub provider_id: String,
+    pub base_url: Option<String>,
+    /// bearer:渠道令牌；openai:复用 Codex 登录；none:无认证。
+    pub auth_mode: String,
+    pub auth_token: Option<String>,
+    pub default_model: Option<String>,
+    pub default_effort: Option<String>,
+    pub available_models: Vec<String>,
+}
+
+impl ChannelExt {
+    fn supports_engine(&self, engine_id: &str) -> bool {
+        self.engine_support.as_ref().map_or(engine_id == "claude-code", |engines| {
+            engines.iter().any(|engine| engine == engine_id)
+        })
+    }
 }
 
 pub(crate) fn read_channel_ext(id: &str) -> Option<ChannelExt> {
@@ -149,6 +175,15 @@ pub(crate) fn read_channel_ext(id: &str) -> Option<ChannelExt> {
     let root: Value = serde_json::from_str(&text).ok()?;
     root.get("_ccSpace")
         .and_then(|v| serde_json::from_value::<ChannelExt>(v.clone()).ok())
+}
+
+fn channel_supports_engine(id: &str, engine_id: &str) -> bool {
+    match id {
+        OFFICIAL_ID => matches!(engine_id, "claude-code" | "codex"),
+        OFFICIAL_DIRECT_ID => engine_id == "claude-code",
+        APPLE_FM_ID => false,
+        _ => read_channel_ext(id).is_some_and(|extension| extension.supports_engine(engine_id)),
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -624,6 +659,22 @@ pub struct ChannelView {
     pub default_model: Option<String>,
     /// 渠道默认思考强度:五档 | "ultracode"(official 读 meta;第三方读文件顶层 ultracode/effortLevel)
     pub default_effort: Option<String>,
+    /// 渠道在统一引擎系统中的可用范围。旧渠道自动为 ["claude-code"]。
+    pub engine_support: Vec<String>,
+    pub codex: Option<CodexChannelView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexChannelView {
+    pub mode: String,
+    pub provider_id: String,
+    pub base_url: Option<String>,
+    pub auth_mode: String,
+    pub auth_token_masked: Option<String>,
+    pub default_model: Option<String>,
+    pub default_effort: Option<String>,
+    pub available_models: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -653,6 +704,8 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             model_env: BTreeMap::new(),
             default_model: meta.default_model.clone().filter(|s| !s.is_empty()),
             default_effort: meta.default_effort.clone().filter(|s| !s.is_empty()),
+            engine_support: vec!["claude-code".to_string(), "codex".to_string()],
+            codex: None,
         };
     }
     if id == OFFICIAL_DIRECT_ID {
@@ -672,6 +725,8 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             model_env: BTreeMap::new(),
             default_model: meta.default_model.clone().filter(|s| !s.is_empty()),
             default_effort: meta.default_effort.clone().filter(|s| !s.is_empty()),
+            engine_support: vec!["claude-code".to_string()],
+            codex: None,
         };
     }
     if id == APPLE_FM_ID {
@@ -691,6 +746,8 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             model_env: BTreeMap::new(),
             default_model: None,
             default_effort: None,
+            engine_support: vec![],
+            codex: None,
         };
     }
     let path = channel_file_path(id);
@@ -733,6 +790,19 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
         .and_then(|v| v.get("_ccSpace"))
         .and_then(|v| serde_json::from_value::<ChannelExt>(v.clone()).ok())
         .unwrap_or_default();
+    let engine_support = cc_ext.engine_support.clone().unwrap_or_else(|| {
+        vec!["claude-code".to_string()]
+    });
+    let codex = cc_ext.codex.as_ref().map(|config| CodexChannelView {
+        mode: if config.mode.is_empty() { "external".to_string() } else { config.mode.clone() },
+        provider_id: config.provider_id.clone(),
+        base_url: config.base_url.clone(),
+        auth_mode: if config.auth_mode.is_empty() { "bearer".to_string() } else { config.auth_mode.clone() },
+        auth_token_masked: config.auth_token.as_deref().filter(|token| !token.is_empty()).map(mask_token),
+        default_model: config.default_model.clone().filter(|value| !value.is_empty()),
+        default_effort: config.default_effort.clone().filter(|value| !value.is_empty()),
+        available_models: config.available_models.clone(),
+    });
     // 从 env 块过滤出 Monet 托管的模型角色映射键(明文回传)
     let model_env = env
         .map(|e| {
@@ -780,6 +850,8 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
         model_env,
         default_model,
         default_effort,
+        engine_support,
+        codex,
     }
 }
 
@@ -828,6 +900,93 @@ fn validate_effort_value(effort: &str) -> Result<(), String> {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCodexChannel {
+    pub mode: String,
+    pub provider_id: String,
+    pub base_url: Option<String>,
+    pub auth_mode: String,
+    pub auth_token: Option<String>,
+    pub default_model: Option<String>,
+    pub default_effort: Option<String>,
+    #[serde(default)]
+    pub available_models: Vec<String>,
+}
+
+fn normalize_engine_support(engines: &[String]) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    for engine in engines {
+        if engine != "claude-code" && engine != "codex" {
+            return Err(format!("不支持的渠道引擎: {engine}"));
+        }
+        if !normalized.contains(engine) {
+            normalized.push(engine.clone());
+        }
+    }
+    if normalized.is_empty() {
+        return Err("渠道至少需要支持一个引擎".to_string());
+    }
+    Ok(normalized)
+}
+
+fn normalize_codex_channel(
+    input: SaveCodexChannel,
+    existing_token: Option<String>,
+) -> Result<CodexChannelExt, String> {
+    let mode = input.mode.trim();
+    if mode != "external" && mode != "managed" {
+        return Err("Codex 渠道接入方式无效".to_string());
+    }
+    let provider_id = input.provider_id.trim();
+    validate_id(provider_id)?;
+    if mode == "managed" && matches!(provider_id, "openai" | "ollama" | "lmstudio") {
+        return Err(format!("{provider_id} 为 Codex 内置 Provider ID，请换一个自定义 ID"));
+    }
+    let auth_mode = input.auth_mode.trim();
+    if !matches!(auth_mode, "bearer" | "openai" | "none") {
+        return Err("Codex 渠道认证方式无效".to_string());
+    }
+    let base_url = input
+        .base_url
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty());
+    if mode == "managed" && base_url.is_none() {
+        return Err("Codex Responses Provider 的 Base URL 不能为空".to_string());
+    }
+    let auth_token = input
+        .auth_token
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or(existing_token);
+    if mode == "managed" && auth_mode == "bearer" && auth_token.is_none() {
+        return Err("Codex Bearer Token 不能为空".to_string());
+    }
+    let default_effort = input
+        .default_effort
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(effort) = default_effort.as_deref() {
+        validate_effort_value(effort)?;
+    }
+    Ok(CodexChannelExt {
+        mode: mode.to_string(),
+        provider_id: provider_id.to_string(),
+        base_url,
+        auth_mode: auth_mode.to_string(),
+        auth_token,
+        default_model: input.default_model
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        default_effort,
+        available_models: input.available_models
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+    })
+}
+
 #[allow(clippy::too_many_arguments)] // Tauri command 参数由前端调用签名决定
 #[tauri::command]
 pub fn save_channel(
@@ -842,11 +1001,23 @@ pub fn save_channel(
     available_models: Option<Vec<String>>,
     model_env: Option<std::collections::HashMap<String, String>>,
     default_effort: Option<String>,
+    engine_support: Option<Vec<String>>,
+    codex: Option<SaveCodexChannel>,
 ) -> Result<(), String> {
     validate_id(&id)?;
     let is_virtual = id == APPLE_FM_ID;
+    let normalized_engine_support = engine_support
+        .as_deref()
+        .map(normalize_engine_support)
+        .transpose()?;
+    let supports_claude = normalized_engine_support
+        .as_ref()
+        .map_or(true, |engines| engines.iter().any(|engine| engine == "claude-code"));
+    let supports_codex = normalized_engine_support
+        .as_ref()
+        .is_some_and(|engines| engines.iter().any(|engine| engine == "codex"));
     let base_url = base_url.trim().to_string();
-    if !is_virtual && base_url.is_empty() {
+    if !is_virtual && supports_claude && base_url.is_empty() {
         return Err("Base URL 不能为空".to_string());
     }
     let is_openai = protocol.as_deref() == Some("openai");
@@ -864,40 +1035,40 @@ pub fn save_channel(
         let obj = root
             .as_object_mut()
             .ok_or("渠道文件顶层不是 JSON 对象,请手动修复后重试")?;
-        let env = obj.entry("env").or_insert_with(|| json!({}));
-        let env_obj = env.as_object_mut().ok_or("渠道文件 env 字段不是对象")?;
-        let token = auth_token.as_deref().map(str::trim).filter(|t| !t.is_empty());
-        if is_openai {
-            env_obj.insert("OPENAI_BASE_URL".to_string(), json!(base_url));
-            if let Some(t) = token {
-                env_obj.insert("OPENAI_API_KEY".to_string(), json!(t));
+        if supports_claude {
+            let env = obj.entry("env").or_insert_with(|| json!({}));
+            let env_obj = env.as_object_mut().ok_or("渠道文件 env 字段不是对象")?;
+            let token = auth_token.as_deref().map(str::trim).filter(|t| !t.is_empty());
+            if is_openai {
+                env_obj.insert("OPENAI_BASE_URL".to_string(), json!(base_url));
+                if let Some(t) = token {
+                    env_obj.insert("OPENAI_API_KEY".to_string(), json!(t));
+                }
+            } else {
+                env_obj.insert("ANTHROPIC_BASE_URL".to_string(), json!(base_url));
+                if let Some(t) = token {
+                    env_obj.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(t));
+                } else if env_obj
+                    .get("ANTHROPIC_AUTH_TOKEN")
+                    .and_then(|v| v.as_str())
+                    .filter(|t| !t.is_empty())
+                    .is_none()
+                {
+                    return Err("新建渠道必须提供 Auth Token".to_string());
+                }
             }
-        } else {
-            env_obj.insert("ANTHROPIC_BASE_URL".to_string(), json!(base_url));
-            if let Some(t) = token {
-                env_obj.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(t));
-            } else if env_obj
-                .get("ANTHROPIC_AUTH_TOKEN")
-                .and_then(|v| v.as_str())
-                .filter(|t| !t.is_empty())
-                .is_none()
-            {
-                return Err("新建渠道必须提供 Auth Token".to_string());
-            }
-        }
 
-        // 模型角色映射:替换语义只作用于 UI 管理键。
-        // Some(map)=先移除 UI 管理键再写入 map 中的非空值;None=完全不动(向后兼容)。
-        // _DESCRIPTION/_CAPABILITIES 等无 UI 键不在替换范围,手编值保留
-        if let Some(map) = model_env.as_ref() {
-            for k in UI_MANAGED_MODEL_ENV_KEYS {
-                env_obj.remove(*k);
-            }
-            for k in UI_MANAGED_MODEL_ENV_KEYS {
-                if let Some(v) = map.get(*k) {
-                    let v = v.trim();
-                    if !v.is_empty() {
-                        env_obj.insert(k.to_string(), json!(v));
+            // 模型角色映射:替换语义只作用于 UI 管理键。
+            if let Some(map) = model_env.as_ref() {
+                for k in UI_MANAGED_MODEL_ENV_KEYS {
+                    env_obj.remove(*k);
+                }
+                for k in UI_MANAGED_MODEL_ENV_KEYS {
+                    if let Some(v) = map.get(*k) {
+                        let v = v.trim();
+                        if !v.is_empty() {
+                            env_obj.insert(k.to_string(), json!(v));
+                        }
                     }
                 }
             }
@@ -906,28 +1077,48 @@ pub fn save_channel(
         // 渠道默认思考强度:替换语义(Some=按值重写,None=不动,向后兼容)。
         // 原生 settings 字段承载:五档写顶层 effortLevel;"ultracode" 写顶层 ultracode=true——
         // 终端 `claude --settings <渠道文件>` 吃到同一默认
-        if let Some(effort) = default_effort.as_deref() {
-            let effort = effort.trim();
-            obj.remove("effortLevel");
-            obj.remove("ultracode");
-            if !effort.is_empty() {
-                validate_effort_value(effort)?;
-                if effort == "ultracode" {
-                    obj.insert("ultracode".to_string(), json!(true));
-                } else {
-                    obj.insert("effortLevel".to_string(), json!(effort));
+        if supports_claude {
+            if let Some(effort) = default_effort.as_deref() {
+                let effort = effort.trim();
+                obj.remove("effortLevel");
+                obj.remove("ultracode");
+                if !effort.is_empty() {
+                    validate_effort_value(effort)?;
+                    if effort == "ultracode" {
+                        obj.insert("ultracode".to_string(), json!(true));
+                    } else {
+                        obj.insert("effortLevel".to_string(), json!(effort));
+                    }
                 }
             }
         }
 
-        let am = agent_model.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let av = available_models.as_deref().unwrap_or(&[]);
-        if am.is_some() || !av.is_empty() {
-            obj.insert("_ccSpace".to_string(), json!({
-                "agentModel": am,
-                "availableModels": av,
-            }));
+        let mut extension = obj
+            .get("_ccSpace")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<ChannelExt>(value).ok())
+            .unwrap_or_default();
+        extension.agent_model = agent_model.as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(String::from);
+        if let Some(models) = available_models {
+            extension.available_models = models;
         }
+        if let Some(engines) = normalized_engine_support.clone() {
+            extension.engine_support = Some(engines);
+        }
+        if let Some(input) = codex {
+            let existing_token = extension.codex.as_ref()
+                .and_then(|config| config.auth_token.clone());
+            extension.codex = Some(normalize_codex_channel(input, existing_token)?);
+        } else if supports_codex && extension.codex.is_none() {
+            return Err("启用 Codex 前需要配置 Provider".to_string());
+        }
+        obj.insert(
+            "_ccSpace".to_string(),
+            serde_json::to_value(extension).map_err(|error| error.to_string())?,
+        );
 
         write_json_0600(&path, &root)?;
     }
@@ -939,6 +1130,9 @@ pub fn save_channel(
     meta.protocol = protocol;
     meta.scope = scope;
     meta.agent_model = agent_model.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if !supports_claude {
+        clear_channel_references(&mut settings, &id);
+    }
 
     save_app_settings(&settings)
 }
@@ -1000,6 +1194,12 @@ pub fn set_default_session_channel(id: Option<String>) -> Result<(), String> {
     {
         return Err("已禁用的渠道不能设为会话默认渠道".to_string());
     }
+    if channel
+        .as_deref()
+        .is_some_and(|id| !channel_supports_engine(id, "claude-code"))
+    {
+        return Err("该渠道未启用 Claude Code，不能设为会话默认渠道".to_string());
+    }
     settings.default_session_channel = channel;
     save_app_settings(&settings)
 }
@@ -1050,6 +1250,12 @@ pub fn set_default_agent_model(channel: Option<String>, model: Option<String>) -
         .is_some_and(|id| !is_channel_enabled(&settings, id))
     {
         return Err("已禁用的渠道不能设为 Agent 默认渠道".to_string());
+    }
+    if channel
+        .as_deref()
+        .is_some_and(|id| id != APPLE_FM_ID && !channel_supports_engine(id, "claude-code"))
+    {
+        return Err("该渠道未启用 Claude Code，不能设为 Agent 默认渠道".to_string());
     }
     settings.default_agent_model = if channel.is_some() {
         model.filter(|s| !s.is_empty())
@@ -1119,11 +1325,17 @@ pub fn set_agent_feature_model(key: String, channel: Option<String>, model: Opti
 }
 
 #[tauri::command]
-pub fn get_channel_token(id: String) -> Result<Option<String>, String> {
+pub fn get_channel_token(id: String, engine: Option<String>) -> Result<Option<String>, String> {
     if id == OFFICIAL_ID || id == APPLE_FM_ID {
         return Ok(None);
     }
     validate_id(&id)?;
+    if engine.as_deref() == Some("codex") {
+        return Ok(read_channel_ext(&id)
+            .and_then(|extension| extension.codex)
+            .and_then(|config| config.auth_token)
+            .filter(|token| !token.is_empty()));
+    }
     let path = channel_file_path(&id);
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let root: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -1136,6 +1348,84 @@ pub fn get_channel_token(id: String) -> Result<Option<String>, String> {
         .and_then(|v| v.as_str())
         .filter(|t| !t.is_empty())
         .map(String::from))
+}
+
+pub(crate) fn codex_channel_token(id: &str) -> Result<String, String> {
+    validate_id(id)?;
+    let extension = read_channel_ext(id).ok_or("渠道配置不存在或不可读")?;
+    extension
+        .codex
+        .and_then(|config| config.auth_token)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| "Codex 渠道凭据不可用".to_string())
+}
+
+/// 将统一渠道绑定转换为 Codex App Server 的 thread/* 运行参数。
+/// 托管 Provider 的凭据不进入 App Server 请求或 argv，使用短命令按需读取渠道令牌。
+pub(crate) fn codex_runtime_channel_options(id: &str) -> Result<Map<String, Value>, String> {
+    if id == OFFICIAL_ID {
+        return Ok(Map::new());
+    }
+    validate_id(id)?;
+    let extension = read_channel_ext(id)
+        .ok_or_else(|| format!("渠道配置不存在或不可读: {id}"))?;
+    if !extension.supports_engine("codex") {
+        return Err(format!("渠道 {id} 未启用 Codex"));
+    }
+    let channel = extension.codex
+        .ok_or_else(|| format!("渠道 {id} 缺少 Codex Provider 配置"))?;
+    let provider_id = channel.provider_id.trim();
+    if provider_id.is_empty() {
+        return Err(format!("渠道 {id} 缺少 Codex Provider ID"));
+    }
+    let mut options = Map::new();
+    options.insert("modelProvider".to_string(), Value::String(provider_id.to_string()));
+    if channel.mode != "managed" {
+        return Ok(options);
+    }
+
+    if matches!(provider_id, "openai" | "ollama" | "lmstudio") {
+        return Err(format!("Codex 内置 Provider ID {provider_id} 不能被自定义渠道覆盖"));
+    }
+    let base_url = channel.base_url.as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("渠道 {id} 缺少 Codex Base URL"))?;
+    let mut provider = Map::from_iter([
+        ("name".to_string(), Value::String(id.to_string())),
+        ("base_url".to_string(), Value::String(base_url.to_string())),
+        ("wire_api".to_string(), Value::String("responses".to_string())),
+    ]);
+    match channel.auth_mode.as_str() {
+        "openai" => {
+            provider.insert("requires_openai_auth".to_string(), Value::Bool(true));
+        }
+        "none" => {}
+        "bearer" | "" => {
+            if channel.auth_token.as_deref().is_none_or(str::is_empty) {
+                return Err(format!("渠道 {id} 缺少 Codex Bearer Token"));
+            }
+            let executable = std::env::current_exe()
+                .map_err(|error| format!("无法定位 Monet 可执行文件: {error}"))?;
+            provider.insert(
+                "auth".to_string(),
+                json!({
+                    "command": executable.to_string_lossy(),
+                    "args": ["--monet-codex-channel-token", id],
+                    "timeout_ms": 5000,
+                    "refresh_interval_ms": 300000
+                }),
+            );
+        }
+        value => return Err(format!("渠道 {id} 的 Codex 认证方式无效: {value}")),
+    }
+    let mut providers = Map::new();
+    providers.insert(provider_id.to_string(), Value::Object(provider));
+    options.insert(
+        "config".to_string(),
+        json!({ "model_providers": Value::Object(providers) }),
+    );
+    Ok(options)
 }
 
 #[tauri::command]
@@ -1621,4 +1911,36 @@ pub fn import_cc_switch(ids: Vec<String>) -> Result<u32, String> {
         save_app_settings(&settings)?;
     }
     Ok(imported)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_channel_support_defaults_to_claude_only() {
+        let extension = ChannelExt::default();
+        assert!(extension.supports_engine("claude-code"));
+        assert!(!extension.supports_engine("codex"));
+    }
+
+    #[test]
+    fn codex_managed_provider_normalizes_runtime_fields() {
+        let channel = normalize_codex_channel(
+            SaveCodexChannel {
+                mode: "managed".into(),
+                provider_id: "work-proxy".into(),
+                base_url: Some("https://example.com/v1/".into()),
+                auth_mode: "bearer".into(),
+                auth_token: Some("secret".into()),
+                default_model: Some(" model-a ".into()),
+                default_effort: Some("high".into()),
+                available_models: vec![" model-a ".into(), "model-b".into()],
+            },
+            None,
+        ).unwrap();
+        assert_eq!(channel.base_url.as_deref(), Some("https://example.com/v1"));
+        assert_eq!(channel.default_model.as_deref(), Some("model-a"));
+        assert_eq!(channel.available_models, vec!["model-a", "model-b"]);
+    }
 }
