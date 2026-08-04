@@ -38,7 +38,7 @@ import {
 } from '@/composables/useSlashCommands'
 import { useWorkshop } from '@/composables/useWorkshop'
 import { useSessionMeta } from '@/composables/useSessionMeta'
-import { shortId, hasReportedUsage, shouldReplaceUsage } from '@/types'
+import { displayTitle, shortId, hasReportedUsage, shouldReplaceUsage } from '@/types'
 import { inferModel } from '@/utils/modelContext'
 import {
   summarizeAssistantResponse,
@@ -60,8 +60,17 @@ import SlashHelpCard from './SlashHelpCard.vue'
 import PermissionCard from './PermissionCard.vue'
 import QuestionCard from './QuestionCard.vue'
 import PlanApprovalCard from './PlanApprovalCard.vue'
-import MsgClamp from './MsgClamp.vue'
 import UserMsgContent from './UserMsgContent.vue'
+import SessionSurface from './session/SessionSurface.vue'
+import SessionComposer from './session/SessionComposer.vue'
+import SessionComposerField from './session/SessionComposerField.vue'
+import SessionViewport from './session/SessionViewport.vue'
+import SessionContentState from './session/SessionContentState.vue'
+import SessionBackToBottom from './session/SessionBackToBottom.vue'
+import SessionInteractionPanel from './session/SessionInteractionPanel.vue'
+import SessionReadonlyBar from './session/SessionReadonlyBar.vue'
+import SessionIdentityBar from './session/SessionIdentityBar.vue'
+import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
 import { useHtmlVisual } from '@/features'
 import SessionBanner from './SessionBanner.vue'
@@ -151,9 +160,13 @@ const bannerHookEvents = ref<HookEvent[]>([])
 
 const inputText = ref('')
 const scrollContainer = ref<HTMLElement>()
+function bindScrollContainer(element: HTMLElement | null) {
+  scrollContainer.value = element ?? undefined
+}
 /** 滚动内容包裹层:布局层滚动跟随的 RO 观察对象(内容总高度的单一载体) */
 const scrollContentEl = ref<HTMLElement>()
-const textareaRef = ref<HTMLTextAreaElement>()
+const composerFieldRef = ref<InstanceType<typeof SessionComposerField>>()
+const textareaRef = computed(() => composerFieldRef.value?.element ?? null)
 
 interface SessionConnectedPayload {
   session_id: string
@@ -908,6 +921,9 @@ const forkBadgeSource = computed(() => {
 
 // 图片输入:粘贴绑 textarea;拖拽收图区放大到整个详情面板(多列并排时拖到哪列进哪列),仅可输入时生效
 const detailRootRef = ref<HTMLElement>()
+function bindDetailRoot(element: HTMLElement | null) {
+  detailRootRef.value = element ?? undefined
+}
 const renderSurfaceId = Symbol('session-detail-render-surface')
 let renderVisibilityObserver: IntersectionObserver | null = null
 let registeredRenderSessionId: string | null = null
@@ -1031,6 +1047,10 @@ const summaryGenerating = ref(false)
 const currentSummary = computed(() => {
   const sid = effectiveSessionId.value
   return sid ? getMeta(sid)?.summary : undefined
+})
+const archiveTitle = computed(() => {
+  const session = currentSession.value?.summary
+  return session ? displayTitle(session, getMeta(session.id)?.title) : ''
 })
 
 async function onGenerateSummary() {
@@ -2708,18 +2728,22 @@ async function onReload() {
 
 <template>
   <!-- 空态 -->
-  <div v-if="!currentSession" class="h-full flex items-center justify-center">
-    <p class="text-muted-foreground text-sm">{{ mode === 'workbench' ? $t('session.notExist') : $t('archive.selectSession') }}</p>
-  </div>
+  <SessionContentState v-if="!currentSession" fill class="h-full">
+    {{ mode === 'workbench' ? $t('session.notExist') : $t('archive.selectSession') }}
+  </SessionContentState>
 
-  <div
+  <SessionSurface
     v-else
-    ref="detailRootRef"
-    class="h-full flex min-h-0 relative"
+    :root-ref="bindDetailRoot"
     @pointerdown.capture="activateRenderSurface"
   >
-    <!-- 主内容区 -->
-    <div class="flex-1 min-w-0 flex flex-col relative">
+    <SessionIdentityBar
+      v-if="mode === 'archive'"
+      engine-name="Claude Code"
+      :title="archiveTitle"
+      accent="claude"
+      :tags="getMeta(currentSession.summary.id)?.tags ?? []"
+    />
     <!-- 会话顶栏(单行极简:标题由列头/列表承担,不重复显示) -->
     <SessionTopBar
       :session-id="currentSession.summary.id"
@@ -2797,29 +2821,29 @@ async function onReload() {
     </SessionTopBar>
 
     <!-- 加载态 -->
-    <div v-if="loading" class="flex-1 flex items-center justify-center">
-      <p class="text-muted-foreground text-sm">{{ $t('session.loadingChat') }}</p>
-    </div>
+    <SessionContentState v-if="loading" fill>{{ $t('session.loadingChat') }}</SessionContentState>
 
     <!-- 错误态 -->
-    <div v-else-if="error" class="flex-1 flex items-center justify-center">
-      <p class="text-destructive text-sm">{{ error }}</p>
-    </div>
+    <SessionContentState v-else-if="error" tone="danger" fill>{{ error }}</SessionContentState>
 
     <!-- 无记录(草稿会话给引导文案) -->
-    <div v-else-if="messages.length === 0 && !stream.streaming && !stream.streamingTurns.length && !stream.pendingUserMessage && !showHelpCard" class="flex-1 flex items-center justify-center">
-      <p class="text-muted-foreground text-sm">
-        {{ effectiveSessionId && draftCwd(effectiveSessionId) ? $t('session.draftGuide') : $t('session.noRecords') }}
-      </p>
-    </div>
+    <SessionContentState v-else-if="messages.length === 0 && !stream.streaming && !stream.streamingTurns.length && !stream.pendingUserMessage && !showHelpCard" fill>
+      {{ effectiveSessionId && draftCwd(effectiveSessionId) ? $t('session.draftGuide') : $t('session.noRecords') }}
+    </SessionContentState>
 
     <!-- 对话消息流 -->
-    <div v-else class="flex-1 min-h-0 relative">
-    <SessionAnchorNav
-      :anchors="anchorItems"
-      :scroll-container="scrollContainer"
-      :on-scroll-to-index="onAnchorScrollToIndex"
-    />
+    <SessionViewport
+      v-else
+      :scroll-ref="bindScrollContainer"
+      @wheel="onScrollWheel"
+      @scroll="onScroll"
+    >
+      <template #overlay>
+        <SessionAnchorNav
+          :anchors="anchorItems"
+          :scroll-container="scrollContainer"
+          :on-scroll-to-index="onAnchorScrollToIndex"
+        />
     <!-- 分叉草稿悬浮标注:垫底渲染期常显(不随滚动消失,原横线置于消息流顶部会被
          默认滚底藏走);发出首条消息即隐,落盘收割后 forkBadgeSource 自然为 null -->
     <div
@@ -2852,24 +2876,13 @@ async function onReload() {
         </div>
       </div>
     </Transition>
-    <div
-      ref="scrollContainer"
-      class="h-full overflow-y-auto min-h-0 px-4 py-3 overscroll-contain relative"
-      @wheel.passive="onScrollWheel"
-      @scroll.passive="onScroll"
-    >
+      </template>
     <!-- 虚拟化下的自绘吸顶:原生 sticky 被虚拟项 transform 劫持,此层吸在滚动视口顶,内容为视口顶部所在组的用户消息克隆;点击回跳该组 -->
     <div v-if="stickyGroup?.user" class="sticky-user-overlay" :title="$t('session.stickyJumpHint')" @click="jumpToStickyGroup">
-      <div class="flex gap-3">
-        <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
-        <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
-          <div class="text-xs font-medium mb-1 text-primary flex items-center gap-0.5">
-            <span>{{ $t('session.you') }}</span>
-            <span
-              v-if="stickyTimeLabel"
-              class="text-muted-foreground/60 font-normal tabular-nums ml-1.5"
-            >{{ stickyTimeLabel }}</span>
-            <span class="flex-1" />
+      <ConversationUserMessage :time-label="stickyTimeLabel">
+        <UserMsgContent :blocks="contentBlocks(stickyGroup.user as any)" :record-uuid="stickyGroup.user.uuid ?? undefined" />
+        <template #actions>
+          <span class="flex items-center gap-0.5">
             <button
               class="sticky-nav-btn"
               :disabled="stickyPrevIndex < 0"
@@ -2882,12 +2895,9 @@ async function onReload() {
               :title="$t('session.stickyNext')"
               @click.stop="jumpStickyNext"
             ><span class="i-carbon-chevron-down w-3.5 h-3.5" /></button>
-          </div>
-          <MsgClamp>
-            <UserMsgContent :blocks="contentBlocks(stickyGroup.user as any)" :record-uuid="stickyGroup.user.uuid ?? undefined" />
-          </MsgClamp>
-        </div>
-      </div>
+          </span>
+        </template>
+      </ConversationUserMessage>
     </div>
 
     <!-- 内容包裹层:所有增高源(打字机/晚到turn/落账替换/图片/cv解冻/横幅)都反映为它的高度变化,
@@ -2998,21 +3008,9 @@ async function onReload() {
       <div v-if="stream.pendingUserMessage || stream.pendingImages?.length || stream.streamingTurns.length || (stream.streaming && stream.streamingTurns.length === 0)" class="space-y-4">
         <!-- 落账接管即让位:pendingLandedUuid 非 null 时历史条与气泡同帧原子切换,无双显无空窗 -->
         <div v-if="(stream.pendingUserMessage || stream.pendingImages?.length) && !pendingLandedUuid" ref="pendingStickyRef" class="user-msg-sticky">
-          <div class="flex gap-3">
-            <div class="w-0.5 shrink-0 rounded-full bg-primary/60" />
-            <div class="min-w-0 flex-1 bg-card border border-border rounded px-3 py-2 shadow-paper">
-              <div class="text-xs font-medium mb-1 text-primary flex items-baseline gap-2">
-                <span>{{ $t('session.you') }}</span>
-                <span
-                  v-if="pendingTimeLabel"
-                  class="text-muted-foreground/60 font-normal tabular-nums"
-                >{{ pendingTimeLabel }}</span>
-              </div>
-              <MsgClamp>
-                <UserMsgContent :blocks="pendingUserBlocks" />
-              </MsgClamp>
-            </div>
-          </div>
+          <ConversationUserMessage :time-label="pendingTimeLabel">
+            <UserMsgContent :blocks="pendingUserBlocks" />
+          </ConversationUserMessage>
         </div>
 
         <AssistantResponseFrame
@@ -3066,28 +3064,13 @@ async function onReload() {
       <SlashHelpCard v-if="showHelpCard" :commands="allSlashCommands" />
 
       <!-- 回到底部:用户上滚脱离底部时,贴滚动视口底部 -->
-      <div
-        v-if="!followStreaming"
-        class="sticky bottom-0 flex justify-center pointer-events-none"
-      >
-        <button
-          class="pointer-events-auto px-3 py-1 text-xs rounded-full bg-popover border border-border
-                 shadow-paper text-muted-foreground hover:text-foreground transition-colors
-                 flex items-center gap-1"
-          @click="resumeFollow"
-        >
-          <span class="i-carbon-arrow-down w-3 h-3" />
-          {{ $t('session.backToBottom') }}
-        </button>
-      </div>
+      <SessionBackToBottom v-if="!followStreaming" @click="resumeFollow" />
     </div>
-    </div>
-    </div>
+    </SessionViewport>
 
     <!-- 工作台列:权限/提问/计划卡片(固定在输入栏上方,按工具分发) -->
-    <div
+    <SessionInteractionPanel
       v-if="interactive && permissionRequest"
-      class="px-4 pb-2 shrink-0 flex justify-center"
     >
       <component
         :is="requestCard"
@@ -3095,110 +3078,119 @@ async function onReload() {
         :request="permissionRequest"
         @decide="onPermissionDecide"
       />
-    </div>
+    </SessionInteractionPanel>
 
     <!-- 工作台列:输入栏 + 斜杠命令面板(档案馆只读化:整块不渲染;赛马模式由共享输入替代) -->
-    <div
+    <SessionComposer
       v-if="interactive && !hideInput && currentSession.summary.cwd"
-      class="px-4 py-3 border-t border-border shrink-0 relative transition-colors"
-      :class="imageInput.isDragging.value && 'ring-1 ring-primary/40 ring-inset bg-primary/5'"
+      :dragging="imageInput.isDragging.value"
     >
-      <div v-if="slashError" class="mb-1 text-xs text-destructive">
-        {{ slashError }}
-      </div>
-
-      <div v-if="slashNotice" class="mb-1 text-xs text-muted-foreground flex items-center gap-1.5">
-        <span class="i-carbon-terminal w-3 h-3 shrink-0" />
-        {{ slashNotice }}
-      </div>
-
-      <!-- 外部运行跟随提示（能解析出归属方时点名是谁在跑） -->
-      <div v-if="externalRunning" class="mb-1 text-xs text-muted-foreground flex items-center gap-1.5">
-        <span class="w-1.5 h-1.5 rounded-full bg-claude animate-pulse shrink-0" />
-        {{ externalOwner ? $t('session.externalRunningBy', { owner: externalOwner }) : $t('session.externalRunning') }}
-      </div>
-
-      <SlashCommandPanel
-        :visible="slashPanelVisible"
-        :query="inputText"
-        :skills="workshopAssets?.skills"
-        :commands="workshopAssets?.commands"
-        class="absolute bottom-full left-4 mb-1"
-        @select="onSlashSelect"
-        @close="onSlashClose"
-      />
-
-      <div v-if="stream.pendingQueue.length" class="mb-2 flex flex-col gap-1">
-        <div
-          v-for="(item, i) in stream.pendingQueue"
-          :key="i"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-muted/60 border border-border/50 text-xs group"
-        >
-          <span class="i-carbon-time w-3 h-3 text-muted-foreground shrink-0" />
-          <span class="truncate text-muted-foreground flex-1">{{ item.message }}</span>
-          <button
-            class="i-carbon-close w-3 h-3 text-muted-foreground/50 hover:text-destructive shrink-0
-                   opacity-0 group-hover:opacity-100 transition-opacity"
-            :title="$t('common.delete')"
-            @click="removePendingQueueItem(effectiveSessionId!, i)"
-          />
+      <template #notices>
+        <div v-if="slashError" class="mb-1 text-xs text-destructive">
+          {{ slashError }}
         </div>
-      </div>
 
-      <!-- 拖拽指引(pointer-events-none:避免提示自身触发 dragleave 抖动) -->
-      <div
-        v-if="imageInput.isDragging.value"
-        class="mb-1 text-xs text-primary flex items-center gap-1.5 pointer-events-none"
-      >
-        <span class="i-carbon-image w-3.5 h-3.5" />
-        {{ $t('image.dropHint') }}
-      </div>
+        <div v-if="slashNotice" class="mb-1 text-xs text-muted-foreground flex items-center gap-1.5">
+          <span class="i-carbon-terminal w-3 h-3 shrink-0" />
+          {{ slashNotice }}
+        </div>
 
-      <div v-if="imageInput.images.value.length" class="mb-2 flex gap-2 flex-wrap">
-        <div
-          v-for="img in imageInput.images.value"
-          :key="img.id"
-          class="relative w-14 h-14 rounded border border-border overflow-hidden group"
-        >
-          <img :src="img.dataUrl" class="w-full h-full object-cover" />
-          <button
-            class="absolute top-0 right-0 w-4 h-4 rounded-bl bg-destructive/80 text-destructive-foreground
-                   flex items-center justify-center text-2.5 leading-none opacity-0 group-hover:opacity-100 transition-opacity"
-            @click="imageInput.removeImage(img.id)"
+        <!-- 外部运行跟随提示（能解析出归属方时点名是谁在跑） -->
+        <div v-if="externalRunning" class="mb-1 text-xs text-muted-foreground flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-claude animate-pulse shrink-0" />
+          {{ externalOwner ? $t('session.externalRunningBy', { owner: externalOwner }) : $t('session.externalRunning') }}
+        </div>
+      </template>
+
+      <template #overlay>
+        <SlashCommandPanel
+          :visible="slashPanelVisible"
+          :query="inputText"
+          :skills="workshopAssets?.skills"
+          :commands="workshopAssets?.commands"
+          class="absolute bottom-full left-4 mb-1"
+          @select="onSlashSelect"
+          @close="onSlashClose"
+        />
+      </template>
+
+      <template #queue>
+        <div v-if="stream.pendingQueue.length" class="mb-2 flex flex-col gap-1">
+          <div
+            v-for="(item, i) in stream.pendingQueue"
+            :key="i"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-muted/60 border border-border/50 text-xs group"
           >
-            &times;
-          </button>
+            <span class="i-carbon-time w-3 h-3 text-muted-foreground shrink-0" />
+            <span class="truncate text-muted-foreground flex-1">{{ item.message }}</span>
+            <button
+              type="button"
+              class="i-carbon-close w-3 h-3 text-muted-foreground/50 hover:text-destructive shrink-0
+                     opacity-0 group-hover:opacity-100 transition-opacity"
+              :title="$t('common.delete')"
+              @click="removePendingQueueItem(effectiveSessionId!, i)"
+            />
+          </div>
         </div>
-      </div>
+      </template>
 
-      <div v-if="imageInput.lastError.value" class="mb-1 text-xs text-destructive">
-        {{ imageInput.lastError.value.message }}
-      </div>
+      <template #attachments>
+        <!-- 拖拽指引(pointer-events-none:避免提示自身触发 dragleave 抖动) -->
+        <div
+          v-if="imageInput.isDragging.value"
+          class="mb-1 text-xs text-primary flex items-center gap-1.5 pointer-events-none"
+        >
+          <span class="i-carbon-image w-3.5 h-3.5" />
+          {{ $t('image.dropHint') }}
+        </div>
 
-      <div class="flex items-center gap-2">
-        <textarea
-          ref="textareaRef"
+        <div v-if="imageInput.images.value.length" class="mb-2 flex gap-2 flex-wrap">
+          <div
+            v-for="img in imageInput.images.value"
+            :key="img.id"
+            class="relative w-14 h-14 rounded border border-border overflow-hidden group"
+          >
+            <img :src="img.dataUrl" class="w-full h-full object-cover" />
+            <button
+              type="button"
+              class="absolute top-0 right-0 w-4 h-4 rounded-bl bg-destructive/80 text-destructive-foreground
+                     flex items-center justify-center text-2.5 leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+              @click="imageInput.removeImage(img.id)"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+
+        <div v-if="imageInput.lastError.value" class="mb-1 text-xs text-destructive">
+          {{ imageInput.lastError.value.message }}
+        </div>
+      </template>
+
+      <template #field="{ fieldClass }">
+        <SessionComposerField
+          ref="composerFieldRef"
           v-model="inputText"
           :placeholder="$t('session.inputPlaceholder')"
-          rows="1"
-          class="flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border
-                 text-foreground placeholder-muted-foreground resize-none
-                 overflow-x-hidden placeholder:[white-space:pre-wrap]
-                 focus:outline-none focus:border-ring transition-colors"
+          :class="fieldClass"
           @keydown="onInputKeydown"
           @input="onInputChange"
           @keyup="syncCursor"
           @click="syncCursor"
           @select="syncCursor"
         />
+      </template>
+
+      <template #actions="{ primaryActionClass, secondaryActionClass, dangerActionClass }">
         <!-- 停止/终止按钮:应用内是温和中断自家生成(停止,含 streaming=false 的自发轮 ownProcessBusy);外部运行是 SIGTERM 别家进程(终止,destructive 色 + 进行中锁定) -->
         <button
           v-if="(stream.streaming || externalRunning || ownProcessBusy) && !inputText.trim() && !imageInput.images.value.length"
+          type="button"
           :disabled="stopping"
-          :class="['px-3 py-2 text-xs rounded-md hover:shadow-paper transition-shadow shrink-0 flex items-center gap-1.5',
+          :class="['flex items-center gap-1.5',
                    externalRunning && !stream.streaming
-                     ? 'bg-destructive/10 text-destructive border border-destructive/30 disabled:opacity-60 disabled:cursor-default'
-                     : 'bg-accent text-accent-foreground']"
+                     ? dangerActionClass
+                     : [secondaryActionClass, 'border-accent bg-accent text-accent-foreground']]"
           @click="onStop"
         >
           <span v-if="stopping" class="i-carbon-circle-dash w-3 h-3 animate-spin shrink-0" />
@@ -3209,24 +3201,21 @@ async function onReload() {
         </button>
         <button
           v-else
+          type="button"
           :disabled="!inputText.trim() && !imageInput.images.value.length"
-          class="px-3 py-2 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper transition-shadow shrink-0
-                 disabled:opacity-30 disabled:cursor-not-allowed"
+          :class="primaryActionClass"
           @click="handleSend"
         >
           {{ $t('common.send') }}
         </button>
-      </div>
-    </div>
+      </template>
+    </SessionComposer>
 
     <!-- 档案馆:常驻只读条(FR-009) -->
-    <div
+    <SessionReadonlyBar
       v-if="!interactive"
-      class="px-4 py-2 border-t border-border shrink-0 flex items-center gap-2 text-xs text-muted-foreground"
+      :label="workbenchHome ? $t('session.runningInWorkbench', { name: workbenchHome.name }) : $t('session.readonlyPreview')"
     >
-      <span class="i-carbon-document w-3.5 h-3.5 shrink-0" />
-      <span v-if="workbenchHome" class="truncate">{{ $t('session.runningInWorkbench', { name: workbenchHome.name }) }}</span>
-      <span v-else class="truncate">{{ $t('session.readonlyPreview') }}</span>
       <button
         class="shrink-0 px-2.5 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors flex items-center gap-1"
         :disabled="summaryGenerating"
@@ -3237,12 +3226,12 @@ async function onReload() {
         {{ currentSummary ? $t('archive.refreshSummary') : $t('archive.generateSummary') }}
       </button>
       <button
-        class="ml-auto shrink-0 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper transition-shadow"
+        class="shrink-0 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper transition-shadow"
         @click="onOpenInWorkbench"
       >
         {{ workbenchHome ? $t('session.goTo') : $t('session.openInWorkbench') }}
       </button>
-    </div>
+    </SessionReadonlyBar>
     
     <!-- Runner 悬浮面板：列内 absolute，随列滚动/缩放天然跟随 -->
     <div
@@ -3262,7 +3251,7 @@ async function onReload() {
       />
       <div class="runner-float-resize" @mousedown="onRunnerResizeStart" />
     </div>
-    </div>
+    <template #side-panel>
     <!-- 异步任务面板：width transition 手风琴展开,列宽同步翻倍,主栏宽度恒定 -->
     <div
       v-if="sidePanelDom"
@@ -3320,8 +3309,8 @@ async function onReload() {
         @toggle-dock="toggleRunnerDock"
       />
     </div>
-
-  </div>
+    </template>
+  </SessionSurface>
 
 </template>
 

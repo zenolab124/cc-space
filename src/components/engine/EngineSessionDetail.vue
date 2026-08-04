@@ -1,13 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
-import type { SessionSummary } from '@/types'
+import { relativeTime, type SessionSummary } from '@/types'
 import type { ConversationRecord, EngineSegment, ModelDescriptor, RuntimeEventEnvelope, RuntimeSnapshot, SessionActions } from '@/engines/types'
 import { attachSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurn, steerTurn } from '@/engines/client'
-import { sameInstance, sessionKey } from '@/engines/identity'
-import EngineSegmentBlock from './EngineSegmentBlock.vue'
+import { sameInstance } from '@/engines/identity'
+import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
+import { resolveEnginePresentation } from '@/engines/presentation'
+import EngineConversationGroup from './EngineConversationGroup.vue'
+import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
+import SessionSurface from '@/components/session/SessionSurface.vue'
+import SessionComposer from '@/components/session/SessionComposer.vue'
+import SessionComposerField from '@/components/session/SessionComposerField.vue'
+import SessionViewport from '@/components/session/SessionViewport.vue'
+import SessionContentState from '@/components/session/SessionContentState.vue'
+import SessionBackToBottom from '@/components/session/SessionBackToBottom.vue'
+import SessionInteractionPanel from '@/components/session/SessionInteractionPanel.vue'
+import SessionInteractionCard from '@/components/session/SessionInteractionCard.vue'
+import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
+import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
+import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
+import SessionTokenBreakdown from '@/components/topbar/SessionTokenBreakdown.vue'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useUiState } from '@/composables/useUiState'
@@ -21,7 +36,7 @@ const props = withDefaults(defineProps<{
   hideInput?: boolean
 }>(), { mode: 'archive', hideInput: false })
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const records = ref<ConversationRecord[]>([])
 const liveRecords = ref<ConversationRecord[]>([])
 const loading = ref(false)
@@ -38,6 +53,10 @@ const models = ref<ModelDescriptor[]>([])
 const actions = ref<SessionActions | null>(null)
 const selectedModel = ref<string | null>(null)
 const selectedEffort = ref<string | null>(null)
+const asyncPanelOpen = ref(false)
+const menuOpen = ref(false)
+const viewportElement = ref<HTMLElement | null>(null)
+const followTimeline = ref(true)
 const { getMeta, updateMeta } = useSessionMeta()
 const { openSession, removeSession, findSession } = useWorkbench()
 const { switchSection } = useUiState()
@@ -49,30 +68,112 @@ let unlistenEvent: UnlistenFn | null = null
 let recoveringSnapshot = false
 
 const reference = computed(() => props.session.reference)
+const nativeSessionId = computed(() => props.session.native_id || props.session.id)
 const allRecords = computed(() => [...records.value, ...liveRecords.value])
+const asyncTasks = computed(() => buildEngineAsyncTasks(allRecords.value))
+const latestUsage = computed(() => [...allRecords.value]
+  .reverse()
+  .find(record => record.usage)?.usage ?? null)
+const usedContextTokens = computed(() => {
+  const usage = latestUsage.value
+  return usage ? usage.inputTokens + (usage.cachedInputTokens ?? 0) : 0
+})
+const contextCapacity = computed(() => props.session.context_window ?? 0)
+const enginePresentation = computed(() => resolveEnginePresentation(
+  props.session.engine?.engineId,
+  props.session.engine_name,
+))
+const engineAccent = computed(() => enginePresentation.value.accent)
+const engineAccentColor = computed(() => `var(--${engineAccent.value})`)
+const timelineModel = computed(() => {
+  const value = [...allRecords.value]
+    .reverse()
+    .map(record => record.sourceMeta.model)
+    .find(model => typeof model === 'string' && !!model.trim())
+  return typeof value === 'string' ? value : props.session.model
+})
+const conversationGroups = computed(() => {
+  const groups: Array<{
+    key: string
+    turnId: string | null
+    records: ConversationRecord[]
+    dayLabel: string | null
+  }> = []
+  for (const record of allRecords.value) {
+    const current = groups[groups.length - 1]
+    const startsNewTurn = !current
+      || (!!record.turnId && record.turnId !== current.turnId)
+      || (record.role === 'user' && current.records.some(item => item.role === 'user'))
+    if (startsNewTurn) {
+      groups.push({
+        key: record.turnId || record.id,
+        turnId: record.turnId,
+        records: [record],
+        dayLabel: null,
+      })
+    } else {
+      current.records.push(record)
+    }
+  }
+  let previousDay: string | null = null
+  const thisYear = new Date().getFullYear()
+  for (const group of groups) {
+    const timestamp = group.records.find(record => record.role === 'user')?.timestamp
+      ?? group.records.find(record => record.timestamp)?.timestamp
+    const date = timestamp ? new Date(timestamp) : null
+    if (!date || Number.isNaN(date.getTime())) continue
+    const day = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+    if (day === previousDay) continue
+    previousDay = day
+    const options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric', weekday: 'short' }
+    if (date.getFullYear() !== thisYear) options.year = 'numeric'
+    group.dayLabel = date.toLocaleDateString(locale.value, options)
+  }
+  return groups
+})
 const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
 const runtimeUnavailableReason = computed(() => {
   const reason = actions.value?.send.reasonCode ?? actions.value?.resume.reasonCode
-  return reason ? t(reason, t('engine.runtimeUnavailable')) : t('engine.runtimeUnavailable')
+  return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
 })
 const isBusy = computed(() => snapshot.value?.phase === 'running' || snapshot.value?.phase === 'awaitingInteraction' || sending.value)
 const activeTurnId = computed(() => snapshot.value?.activeTurnId ?? null)
 const pendingInteractions = computed(() => snapshot.value?.pendingInteractions ?? [])
 const effortOptions = computed(() => models.value.find(model => model.model === selectedModel.value)?.efforts ?? [])
 const starred = computed(() => !!getMeta(props.session.id)?.starred)
-const resolvedTitle = computed(() => getMeta(props.session.id)?.title || props.session.title || props.session.first_user_message || props.session.native_id)
+const resolvedTitle = computed(() => getMeta(props.session.id)?.title
+  || props.session.title
+  || props.session.first_user_message
+  || props.session.native_id
+  || t('session.noTitleSession'))
 const tags = computed(() => getMeta(props.session.id)?.tags ?? [])
 const resumeUnavailableReason = computed(() => {
   const reason = actions.value?.resume.reasonCode
-  return reason ? t(reason, t('engine.runtimeUnavailable')) : t('engine.runtimeUnavailable')
+  return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
 })
 
+function bindViewport(element: HTMLElement | null) {
+  viewportElement.value = element
+}
+
+function onTimelineScroll(event: Event) {
+  const element = event.currentTarget as HTMLElement
+  followTimeline.value = element.scrollHeight - element.scrollTop - element.clientHeight < 24
+}
+
+function resumeTimelineFollow() {
+  followTimeline.value = true
+  viewportElement.value?.scrollTo({ top: viewportElement.value.scrollHeight, behavior: 'smooth' })
+}
+
 async function toggleStar() {
+  menuOpen.value = false
   await updateMeta(props.session.id, { starred: !starred.value }, reference.value)
 }
 
 function beginEditMeta() {
+  menuOpen.value = false
   titleDraft.value = getMeta(props.session.id)?.title || props.session.title || ''
   tagsDraft.value = tags.value.join(', ')
   editingMeta.value = true
@@ -96,6 +197,7 @@ async function saveMeta() {
 }
 
 async function openCwd() {
+  menuOpen.value = false
   if (!props.session.cwd || actions.value?.openCwd.available !== true) return
   try {
     await invoke('open_in_finder', { path: props.session.cwd })
@@ -110,12 +212,27 @@ function openInWorkbench() {
 }
 
 async function softDelete() {
-  const approved = await confirm(t('engine.softDeleteConfirm'), t('common.delete'))
+  menuOpen.value = false
+  const approved = await confirm(t('common.softDeleteConfirm'), t('common.delete'))
   if (!approved) return
   await updateMeta(props.session.id, { deleted: true, deletedAt: new Date().toISOString() }, reference.value)
   if (findSession(props.session.id)) removeSession(props.session.id)
   selectSession(null)
   await loadProjects()
+}
+
+async function copySessionId() {
+  menuOpen.value = false
+  try {
+    await navigator.clipboard.writeText(nativeSessionId.value)
+  } catch (cause) {
+    error.value = String(cause)
+  }
+}
+
+async function reloadFromMenu() {
+  menuOpen.value = false
+  await reload()
 }
 
 function ownsSession(candidate: RuntimeSnapshot['session']): boolean {
@@ -150,7 +267,9 @@ async function ensureAttached() {
     runtimeId.value = attached.runtimeId
     try {
       models.value = await listModels(reference.value.engine)
-      const defaultModel = models.value.find(model => model.isDefault) ?? models.value.find(model => !model.hidden)
+      const defaultModel = models.value.find(model => model.model === timelineModel.value)
+        ?? models.value.find(model => model.isDefault)
+        ?? models.value.find(model => !model.hidden)
       selectedModel.value = defaultModel?.model ?? null
       selectedEffort.value = defaultModel?.defaultEffort ?? null
     } catch (_) {
@@ -252,7 +371,10 @@ function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
         timestamp: envelope.timestamp,
         segments: [],
         usage: null,
-        sourceMeta: {},
+        sourceMeta: {
+          ...(selectedModel.value ? { model: selectedModel.value } : {}),
+          ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
+        },
       }
       liveRecords.value.push(record)
     }
@@ -275,14 +397,6 @@ function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
   }
 }
 
-function roleLabel(role: ConversationRecord['role']) {
-  return t(`engine.role.${role}`)
-}
-
-function roleClass(role: ConversationRecord['role']) {
-  return role === 'user' ? 'ml-10 bg-primary/8' : 'mr-10 bg-card'
-}
-
 function onInputKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
@@ -295,8 +409,20 @@ watch(() => props.session.id, async () => {
   liveRecords.value = []
   snapshot.value = null
   runtimeId.value = null
+  asyncPanelOpen.value = false
+  menuOpen.value = false
   await reload()
   if (interactive.value) await ensureAttached()
+})
+
+watch(() => asyncTasks.value.length, length => {
+  if (length === 0) asyncPanelOpen.value = false
+})
+
+watch(() => allRecords.value.length, async () => {
+  if (!followTimeline.value) return
+  await nextTick()
+  viewportElement.value?.scrollTo({ top: viewportElement.value.scrollHeight })
 })
 
 watch(selectedModel, (model) => {
@@ -325,34 +451,80 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full min-h-0 flex flex-col bg-background">
-    <header class="shrink-0 flex items-center gap-2 border-b border-border bg-card px-3 py-2">
-      <span class="px-1.5 py-0.5 rounded bg-secondary text-[10px] text-muted-foreground">{{ session.engine_name }}</span>
-      <div class="min-w-0 flex-1 truncate text-xs font-semibold">{{ resolvedTitle }}</div>
-      <span v-for="tag in tags.slice(0, 2)" :key="tag" class="max-w-24 truncate rounded bg-secondary px-1.5 py-0.5 text-[9px] text-muted-foreground">{{ tag }}</span>
-      <span v-if="snapshot" class="text-[10px] text-muted-foreground">{{ t(`engine.phase.${snapshot.phase}`) }}</span>
-      <button type="button" class="icon-btn icon-btn-sm" :aria-label="t('engine.editMetadata')" :title="t('engine.editMetadata')" @click="beginEditMeta">
-        <span class="i-carbon-edit h-3.5 w-3.5" />
-      </button>
-      <button type="button" class="icon-btn icon-btn-sm" :aria-label="t('engine.star')" :title="t('engine.star')" @click="toggleStar">
-        <span class="h-3.5 w-3.5" :class="starred ? 'i-carbon-star-filled text-primary' : 'i-carbon-star'" />
-      </button>
-      <button v-if="actions?.openCwd.available" type="button" class="icon-btn icon-btn-sm" :aria-label="t('engine.openCwd')" :title="t('engine.openCwd')" @click="openCwd">
-        <span class="i-carbon-folder h-3.5 w-3.5" />
-      </button>
-      <button v-if="mode === 'archive'" type="button" class="rounded border border-border px-2 py-1 text-[10px] hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45" :disabled="actions?.resume.available !== true" :title="actions?.resume.available === true ? t('asyncTask.openInWorkbench') : resumeUnavailableReason" @click="openInWorkbench">{{ t('asyncTask.openInWorkbench') }}</button>
-      <button v-if="mode === 'archive'" type="button" class="icon-btn icon-btn-sm text-destructive" :aria-label="t('common.delete')" :title="t('common.delete')" @click="softDelete">
-        <span class="i-carbon-trash-can h-3.5 w-3.5" />
-      </button>
-      <select v-if="interactive && models.length" v-model="selectedModel" class="form-select max-w-44 text-xs" :aria-label="t('engine.model')">
-        <option v-for="model in models.filter(item => !item.hidden)" :key="model.id" :value="model.model">{{ model.displayName }}</option>
-      </select>
-      <select v-if="interactive && effortOptions.length" v-model="selectedEffort" class="form-select max-w-32 text-xs" :aria-label="t('engine.effort')">
-        <option v-for="effort in effortOptions" :key="effort.id" :value="effort.id">{{ effort.id }}</option>
-      </select>
-    </header>
+  <SessionSurface>
+    <template #topbar>
+      <SessionIdentityBar
+        v-if="mode === 'archive'"
+        :engine-name="enginePresentation.displayName"
+        :title="resolvedTitle"
+        :accent="engineAccent"
+        :tags="tags"
+      />
 
-    <form v-if="editingMeta" class="shrink-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 border-b border-border bg-card px-3 py-2" @submit.prevent="saveMeta">
+      <SessionToolbar
+        v-model:menu-open="menuOpen"
+        :used-context-tokens="usedContextTokens"
+        :context-capacity="contextCapacity"
+        :accent="engineAccent"
+      >
+        <template #controls>
+          <span v-if="!interactive && timelineModel" class="min-w-0 max-w-48 truncate rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground" :title="timelineModel">{{ timelineModel }}</span>
+          <select v-if="interactive && models.length" v-model="selectedModel" class="form-select min-w-0 max-w-48 text-xs" :aria-label="t('engine.model')">
+            <option v-for="model in models.filter(item => !item.hidden)" :key="model.id" :value="model.model">{{ model.displayName }}</option>
+          </select>
+          <select v-if="interactive && effortOptions.length" v-model="selectedEffort" class="form-select min-w-20 max-w-28 text-xs" :aria-label="t('common.effort')">
+            <option v-for="effort in effortOptions" :key="effort.id" :value="effort.id">{{ effort.id }}</option>
+          </select>
+          <span v-if="snapshot" class="shrink-0 text-[10px] text-muted-foreground">{{ t(`engine.phase.${snapshot.phase}`) }}</span>
+        </template>
+
+        <template #actions>
+          <button
+            v-if="asyncTasks.length"
+            type="button"
+            class="inline-flex shrink-0 items-center gap-1 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            :style="asyncPanelOpen ? {
+              color: engineAccentColor,
+              background: `color-mix(in srgb, ${engineAccentColor} 10%, transparent)`,
+            } : undefined"
+            :title="t('engine.async.title')"
+            :aria-pressed="asyncPanelOpen"
+            @click="asyncPanelOpen = !asyncPanelOpen"
+          >
+            <span class="i-carbon-lightning h-3.5 w-3.5" />
+            <span class="text-[10px] font-semibold tabular-nums">{{ asyncTasks.length }}</span>
+          </button>
+        </template>
+
+        <template #menu>
+            <div class="flex flex-col gap-1 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
+              <button type="button" class="flex items-center gap-1.5 text-left transition-colors hover:text-foreground" :title="t('topbar.copySessionId')" @click="copySessionId">
+                <span class="font-mono">{{ nativeSessionId.slice(0, 8) }}</span>
+                <span class="i-carbon-copy h-3 w-3" />
+              </button>
+              <span v-if="timelineModel" class="truncate">{{ timelineModel }}</span>
+              <span>{{ relativeTime(session.last_modified) }}</span>
+              <SessionTokenBreakdown :total-tokens="session.total_tokens" :subagent-tokens="session.subagent_tokens" />
+            </div>
+            <button type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="reloadFromMenu">
+              <span class="i-carbon-renew h-3.5 w-3.5" />{{ t('topbar.refreshSession') }}
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="beginEditMeta">
+              <span class="i-carbon-edit h-3.5 w-3.5" />{{ t('engine.editMetadata') }}
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="toggleStar">
+              <span class="h-3.5 w-3.5" :class="starred ? 'i-carbon-star-filled text-primary' : 'i-carbon-star'" />{{ t('common.star') }}
+            </button>
+            <button v-if="actions?.openCwd.available" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="openCwd">
+              <span class="i-carbon-folder h-3.5 w-3.5" />{{ t('engine.openCwd') }}
+            </button>
+            <button v-if="mode === 'archive'" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-muted" @click="softDelete">
+              <span class="i-carbon-trash-can h-3.5 w-3.5" />{{ t('common.delete') }}
+            </button>
+        </template>
+      </SessionToolbar>
+
+      <form v-if="editingMeta" class="shrink-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 border-b border-border bg-card px-3 py-2" @submit.prevent="saveMeta">
       <label class="min-w-0 text-[10px] text-muted-foreground">
         <span class="mb-1 block">{{ t('engine.metadataTitle') }}</span>
         <input v-model="titleDraft" class="w-full rounded border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-ring" />
@@ -365,41 +537,125 @@ onUnmounted(() => {
         <button type="button" class="rounded border border-border px-2.5 py-1.5 text-xs hover:bg-muted" @click="editingMeta = false">{{ t('common.cancel') }}</button>
         <button type="submit" class="rounded bg-primary px-2.5 py-1.5 text-xs text-primary-foreground">{{ t('common.save') }}</button>
       </div>
-    </form>
+      </form>
+    </template>
 
-    <div class="flex-1 min-h-0 overflow-y-auto p-3">
-      <div v-if="loading && !records.length" class="py-10 text-center text-xs text-muted-foreground">{{ t('common.loading') }}</div>
-      <div v-else-if="!allRecords.length" class="py-10 text-center text-xs text-muted-foreground">{{ t('session.noRecords') }}</div>
-      <div v-else class="mx-auto max-w-220 space-y-2">
-        <article v-for="record in allRecords" :key="`${record.id}:${record.timestamp}`" class="rounded border border-border p-3 shadow-paper" :class="roleClass(record.role)">
-          <div class="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{{ roleLabel(record.role) }}</div>
-          <EngineSegmentBlock v-for="(segment, index) in record.segments" :key="index" :segment="segment" />
-        </article>
+    <SessionViewport :scroll-ref="bindViewport" @scroll="onTimelineScroll">
+      <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
+      <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
+      <div v-else class="space-y-4 pb-2">
+        <EngineConversationGroup
+          v-for="group in conversationGroups"
+          :key="group.key"
+          :records="group.records"
+          :engine-name="enginePresentation.displayName"
+          :model="timelineModel"
+          :accent="engineAccent"
+          :show-reasoning-summaries="enginePresentation.showReasoningSummaries"
+          :day-label="group.dayLabel"
+        />
       </div>
-      <p v-if="error" role="alert" class="mx-auto mt-3 max-w-220 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">{{ error }}</p>
-    </div>
+      <SessionContentState v-if="error" tone="danger">{{ error }}</SessionContentState>
+      <SessionBackToBottom v-if="!followTimeline" @click="resumeTimelineFollow" />
+    </SessionViewport>
 
-    <section v-if="interactive && pendingInteractions.length" class="shrink-0 border-t border-border bg-card px-3 py-2" aria-live="polite">
-      <div v-for="request in pendingInteractions" :key="request.reference.requestId" class="mx-auto max-w-220 rounded border border-border bg-muted/40 p-2">
-        <div class="text-xs font-medium">{{ request.title || t('engine.approvalRequired') }}</div>
-        <pre class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap text-[10px] text-muted-foreground">{{ JSON.stringify(request.payload, null, 2) }}</pre>
-        <div class="mt-2 flex flex-wrap gap-1.5">
-          <button v-for="option in request.options" :key="option.id" type="button" class="rounded border border-border px-2 py-1 text-xs hover:bg-muted" :class="option.dangerous ? 'text-destructive' : 'text-foreground'" @click="decide(request, option.id)">
-            {{ t(`engine.decision.${option.id}`, option.label) }}
+    <template #interaction>
+      <SessionInteractionPanel v-if="interactive && pendingInteractions.length">
+        <SessionInteractionCard
+          v-for="request in pendingInteractions"
+          :key="request.reference.requestId"
+          :danger="request.options.some(option => option.dangerous)"
+          role="alertdialog"
+          :aria-label="request.title || t('engine.approvalRequired')"
+        >
+          <div class="flex items-center gap-2 border-b border-border px-3 py-2">
+            <span class="i-carbon-locked h-4 w-4 shrink-0 text-muted-foreground" />
+            <div class="text-sm font-medium">{{ request.title || t('engine.approvalRequired') }}</div>
+          </div>
+          <pre class="max-h-48 overflow-auto whitespace-pre-wrap px-3 py-2 text-[10px] text-muted-foreground">{{ JSON.stringify(request.payload, null, 2) }}</pre>
+          <div class="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
+            <button
+              v-for="option in request.options"
+              :key="option.id"
+              type="button"
+              class="rounded border border-border px-2.5 py-1 text-xs transition-colors hover:bg-muted"
+              :class="option.dangerous ? 'text-destructive' : 'text-foreground'"
+              @click="decide(request, option.id)"
+            >
+              {{ t(`engine.decision.${option.id}`, option.label) }}
+            </button>
+          </div>
+        </SessionInteractionCard>
+      </SessionInteractionPanel>
+    </template>
+
+    <template #input>
+      <SessionComposer v-if="canSend && !hideInput">
+        <template #field="{ fieldClass }">
+          <SessionComposerField
+            v-model="input"
+            :class="fieldClass"
+            :placeholder="t('engine.inputPlaceholder')"
+            :disabled="attaching"
+            @keydown="onInputKeydown"
+          />
+        </template>
+        <template #actions="{ primaryActionClass, dangerActionClass }">
+          <button
+            v-if="isBusy && activeTurnId && actions?.steer.available"
+            type="button"
+            :class="primaryActionClass"
+            :disabled="!input.trim() || sending"
+            @click="send"
+          >
+            {{ t('engine.steer') }}
           </button>
-        </div>
-      </div>
-    </section>
+          <button
+            v-if="isBusy && activeTurnId && actions?.interrupt.available !== false"
+            type="button"
+            :class="dangerActionClass"
+            @click="interrupt"
+          >
+            {{ t('engine.interrupt') }}
+          </button>
+          <button
+            v-if="!isBusy"
+            type="button"
+            :class="primaryActionClass"
+            :disabled="!input.trim() || attaching || sending"
+            @click="send"
+          >
+            {{ t('engine.send') }}
+          </button>
+        </template>
+      </SessionComposer>
+      <div v-else-if="interactive && !hideInput" class="shrink-0 border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground">{{ runtimeUnavailableReason }}</div>
+    </template>
 
-    <form v-if="canSend && !hideInput" class="shrink-0 border-t border-border bg-card p-2" @submit.prevent="send">
-      <div class="mx-auto flex max-w-220 items-end gap-2">
-        <textarea v-model="input" rows="2" class="min-h-14 flex-1 resize-none rounded border border-input bg-background px-2.5 py-2 text-sm outline-none focus:border-ring" :placeholder="t('engine.inputPlaceholder')" :disabled="attaching" @keydown="onInputKeydown" />
-        <button v-if="isBusy && activeTurnId && actions?.steer.available" type="submit" class="rounded bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50" :disabled="!input.trim() || sending">{{ t('engine.steer') }}</button>
-        <button v-if="isBusy && activeTurnId && actions?.interrupt.available !== false" type="button" class="rounded border border-border px-3 py-2 text-xs text-destructive hover:bg-muted" @click="interrupt">{{ t('engine.interrupt') }}</button>
-        <button v-if="!isBusy" type="submit" class="rounded bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50" :disabled="!input.trim() || attaching || sending">{{ t('engine.send') }}</button>
-      </div>
-    </form>
-    <div v-else-if="interactive && !hideInput" class="shrink-0 border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground">{{ runtimeUnavailableReason }}</div>
-    <div v-else-if="mode === 'archive'" class="shrink-0 border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground">{{ t('session.readonlyPreview') }}</div>
-  </div>
+    <template #footer>
+      <SessionReadonlyBar v-if="mode === 'archive'" :label="t('session.readonlyPreview')">
+        <button
+          type="button"
+          class="shrink-0 rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-shadow hover:shadow-paper disabled:cursor-not-allowed disabled:opacity-45"
+          :disabled="actions?.resume.available !== true"
+          :title="actions?.resume.available === true ? t('session.openInWorkbench') : resumeUnavailableReason"
+          @click="openInWorkbench"
+        >
+          {{ t('session.openInWorkbench') }}
+        </button>
+      </SessionReadonlyBar>
+    </template>
+
+    <template #side-panel>
+      <section v-if="asyncPanelOpen && asyncTasks.length && reference" class="h-full min-w-72 w-[38%] max-w-md shrink-0 border-l border-border">
+        <EngineAsyncTaskPanel
+          :session="reference"
+          :engine-name="enginePresentation.displayName"
+          :tasks="asyncTasks"
+          :accent="engineAccent"
+          @close="asyncPanelOpen = false"
+        />
+      </section>
+    </template>
+  </SessionSurface>
 </template>

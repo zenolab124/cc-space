@@ -7,6 +7,7 @@ import type { AssistantResponseMeta } from '@/utils/assistantResponse'
 const props = defineProps<{
   meta?: AssistantResponseMeta | null
   position: 'header' | 'footer'
+  speaker?: string
 }>()
 
 const { t } = useI18n()
@@ -30,7 +31,7 @@ const usageParts = computed(() => {
     :class="position === 'header' ? 'is-header' : 'is-footer'"
     v-tooltip="position === 'footer' ? meta?.completedFull : undefined"
   >
-    <span v-if="position === 'header'" class="assistant-meta-speaker">{{ t('session.claude') }}</span>
+    <span v-if="position === 'header'" class="assistant-meta-speaker">{{ speaker || t('session.claude') }}</span>
     <span v-if="position === 'footer' && meta?.completedText">{{ meta.completedText }}</span>
     <span v-if="modelLabel">{{ modelLabel }}</span>
     <span v-if="meta?.tier">{{ t('topbar.roleTier', { role: meta.tier }) }}</span>
@@ -64,7 +65,7 @@ const usageParts = computed(() => {
   margin-top: 7px;
 }
 .assistant-meta-speaker {
-  color: var(--claude);
+  color: var(--assistant-accent, var(--claude));
   font-size: 12px;
   font-weight: 600;
 }

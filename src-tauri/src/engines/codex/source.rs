@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -15,6 +16,8 @@ const UNCLASSIFIED_PROJECT: &str = "uncategorized";
 const PAGE_LIMIT: usize = 100;
 const MAX_PAGES: usize = 100;
 const THREAD_CACHE_TTL: Duration = Duration::from_secs(2);
+const TOKEN_USAGE_TAIL_BYTES: u64 = 1024 * 1024;
+const USAGE_CACHE_LIMIT: usize = 2048;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +44,8 @@ struct CodexThread {
     cwd: String,
     #[serde(default)]
     model_provider: String,
+    #[serde(default)]
+    path: Option<String>,
     created_at: i64,
     updated_at: i64,
     #[serde(default)]
@@ -55,6 +60,8 @@ struct CodexTurn {
     items: Vec<Value>,
     #[serde(default)]
     started_at: Option<i64>,
+    #[serde(default)]
+    completed_at: Option<i64>,
 }
 
 type ThreadCache = Arc<Mutex<Option<(Instant, Vec<CodexThread>)>>>;
@@ -222,37 +229,67 @@ impl CodexSource {
 
     fn map_summary(&self, thread: CodexThread) -> EngineResult<CoreSessionSummary> {
         let project = self.project_ref(&thread)?;
-        let source_meta = if thread.model_provider.is_empty() {
-            SourceMetadata::default()
-        } else {
-            SourceMetadata::new(BTreeMap::from([(
+        let usage_snapshot = read_usage_snapshot(thread.path.as_deref());
+        let mut source_values = BTreeMap::new();
+        if !thread.model_provider.is_empty() {
+            source_values.insert(
                 "modelProvider".into(),
                 Value::String(thread.model_provider.clone()),
-            )]))?
-        };
+            );
+        }
+        if let Some(context_window) = usage_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.context_window)
+        {
+            source_values.insert("contextWindow".into(), Value::from(context_window));
+        }
+        let source_meta = SourceMetadata::new(source_values)?;
         Ok(CoreSessionSummary {
             reference: SessionRef::new(self.instance.clone(), thread.id)?,
             project,
             title: thread.name,
             preview: (!thread.preview.is_empty()).then_some(thread.preview),
             cwd: (!thread.cwd.is_empty()).then_some(thread.cwd),
-            model: None,
+            model: usage_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.model.clone()),
             created_at: Some(epoch_seconds(thread.created_at)),
             updated_at: Some(epoch_seconds(thread.updated_at)),
-            usage: None,
+            usage: usage_snapshot.map(|snapshot| snapshot.total),
             source_meta,
         })
     }
 
     fn timeline(&self, session: &SessionRef) -> EngineResult<Vec<ConversationRecord>> {
         let thread = self.read_thread(session)?;
+        let timeline_snapshot = read_timeline_snapshot(thread.path.as_deref());
         let mut records = Vec::new();
         for turn in thread.turns {
+            let turn_snapshot = timeline_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.turns.get(&turn.id));
+            let mut turn_records = Vec::new();
             for item in &turn.items {
                 if let Some(record) = map_item(session, &turn, item)? {
-                    records.push(record);
+                    turn_records.push(record);
                 }
             }
+            if let Some(snapshot) = turn_snapshot {
+                let source_meta = turn_source_metadata(snapshot)?;
+                for record in &mut turn_records {
+                    if record.role != ConversationRole::User {
+                        record.source_meta = source_meta.clone();
+                    }
+                }
+                if let Some(record) = turn_records
+                    .iter_mut()
+                    .rev()
+                    .find(|record| record.role == ConversationRole::Assistant)
+                {
+                    record.usage = snapshot.usage.clone();
+                }
+            }
+            records.extend(turn_records);
         }
         Ok(records)
     }
@@ -479,10 +516,17 @@ fn map_item(
     let role = match type_name {
         "userMessage" => ConversationRole::User,
         "agentMessage" | "plan" | "reasoning" => ConversationRole::Assistant,
-        "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" => {
-            ConversationRole::Tool
-        }
+        "commandExecution"
+        | "fileChange"
+        | "mcpToolCall"
+        | "dynamicToolCall"
+        | "collabAgentToolCall" => ConversationRole::Tool,
         _ => ConversationRole::Unknown,
+    };
+    let timestamp = if type_name == "userMessage" {
+        turn.started_at
+    } else {
+        turn.completed_at.or(turn.started_at)
     };
     Ok(Some(ConversationRecord {
         id,
@@ -490,7 +534,7 @@ fn map_item(
         turn_id: Some(turn.id.clone()),
         parent_id: None,
         role,
-        timestamp: turn.started_at.map(epoch_seconds),
+        timestamp: timestamp.map(epoch_seconds),
         segments: map_item_segments(session, item)?,
         usage: None,
         source_meta: SourceMetadata::default(),
@@ -613,6 +657,15 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .to_string(),
             input: bounded_segment_value(item.get("arguments").cloned().unwrap_or(Value::Null)),
         }],
+        "collabAgentToolCall" => vec![Segment::ToolCall {
+            id,
+            name: item
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("collaboration")
+                .to_string(),
+            input: bounded_segment_value(item.clone()),
+        }],
         "imageView" => vec![Segment::Attachment {
             asset: AssetRef {
                 session: session.clone(),
@@ -630,6 +683,263 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
         }],
     };
     Ok(segments)
+}
+
+#[derive(Clone, Debug)]
+struct CodexUsageSnapshot {
+    total: Usage,
+    last: Usage,
+    context_window: Option<u64>,
+    model: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedCodexUsage {
+    length: u64,
+    modified: Option<SystemTime>,
+    snapshot: Option<CodexUsageSnapshot>,
+}
+
+static USAGE_CACHE: OnceLock<Mutex<HashMap<String, CachedCodexUsage>>> = OnceLock::new();
+
+#[derive(Clone, Debug, Default)]
+struct CodexTurnSnapshot {
+    model: Option<String>,
+    effort: Option<String>,
+    usage: Option<Usage>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CodexTimelineSnapshot {
+    turns: BTreeMap<String, CodexTurnSnapshot>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedCodexTimeline {
+    file_length: u64,
+    processed_length: u64,
+    modified: Option<SystemTime>,
+    snapshot: CodexTimelineSnapshot,
+    current_turn_id: Option<String>,
+}
+
+static TIMELINE_CACHE: OnceLock<Mutex<HashMap<String, CachedCodexTimeline>>> = OnceLock::new();
+
+fn read_timeline_snapshot(path: Option<&str>) -> Option<CodexTimelineSnapshot> {
+    let path = path?;
+    let metadata = fs::metadata(path).ok()?;
+    let length = metadata.len();
+    let modified = metadata.modified().ok();
+    let cache = TIMELINE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let (mut snapshot, mut current_turn_id, offset) = {
+        let cache = cache.lock().unwrap_or_else(|error| error.into_inner());
+        match cache.get(path) {
+            Some(cached)
+                if cached.file_length == length
+                    && (cached.modified == modified || modified.is_none()) =>
+            {
+                return Some(cached.snapshot.clone());
+            }
+            Some(cached) if cached.file_length < length => (
+                cached.snapshot.clone(),
+                cached.current_turn_id.clone(),
+                cached.processed_length,
+            ),
+            _ => (CodexTimelineSnapshot::default(), None, 0),
+        }
+    };
+
+    let mut file = fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut appended = Vec::with_capacity(length.saturating_sub(offset) as usize);
+    file.read_to_end(&mut appended).ok()?;
+    let mut processed_length = offset;
+    for chunk in appended.split_inclusive(|byte| *byte == b'\n') {
+        let complete_line = chunk.ends_with(b"\n");
+        let line = chunk.strip_suffix(b"\n").unwrap_or(chunk);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        match serde_json::from_slice::<Value>(line) {
+            Ok(value) => {
+                update_timeline_snapshot(&mut snapshot, &mut current_turn_id, &value);
+                processed_length = processed_length.saturating_add(chunk.len() as u64);
+            }
+            Err(_) if complete_line => {
+                // A complete malformed row cannot become valid after a later append.
+                processed_length = processed_length.saturating_add(chunk.len() as u64);
+            }
+            Err(_) => break,
+        }
+    }
+    let mut cache = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if cache.len() >= 12 && !cache.contains_key(path) {
+        if let Some(key) = cache.keys().next().cloned() {
+            cache.remove(&key);
+        }
+    }
+    cache.insert(
+        path.to_string(),
+        CachedCodexTimeline {
+            file_length: length,
+            processed_length,
+            modified,
+            snapshot: snapshot.clone(),
+            current_turn_id,
+        },
+    );
+    Some(snapshot)
+}
+
+fn update_timeline_snapshot(
+    snapshot: &mut CodexTimelineSnapshot,
+    current_turn_id: &mut Option<String>,
+    value: &Value,
+) {
+    if value.get("type").and_then(Value::as_str) == Some("turn_context") {
+        let context = value.get("payload").unwrap_or(value);
+        let Some(turn_id) = context
+            .get("turn_id")
+            .or_else(|| context.get("turnId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        *current_turn_id = Some(turn_id.to_string());
+        let turn = snapshot.turns.entry(turn_id.to_string()).or_default();
+        turn.model = context
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(String::from);
+        turn.effort = context
+            .get("effort")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(String::from);
+        return;
+    }
+
+    let Some(turn_id) = current_turn_id.as_deref() else {
+        return;
+    };
+    if let Some(usage) = usage_snapshot_from_event(value) {
+        snapshot.turns.entry(turn_id.to_string()).or_default().usage = Some(usage.last);
+    }
+}
+
+fn turn_source_metadata(snapshot: &CodexTurnSnapshot) -> EngineResult<SourceMetadata> {
+    let mut values = BTreeMap::new();
+    if let Some(model) = &snapshot.model {
+        values.insert("model".into(), Value::String(model.clone()));
+    }
+    if let Some(effort) = &snapshot.effort {
+        values.insert("effort".into(), Value::String(effort.clone()));
+    }
+    SourceMetadata::new(values)
+}
+
+fn read_usage_snapshot(path: Option<&str>) -> Option<CodexUsageSnapshot> {
+    let path = path?;
+    let metadata = fs::metadata(path).ok()?;
+    let length = metadata.len();
+    let modified = metadata.modified().ok();
+    let cache = USAGE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let cache = cache.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(cached) = cache.get(path) {
+            if cached.length == length && (cached.modified == modified || modified.is_none()) {
+                return cached.snapshot.clone();
+            }
+        }
+    }
+
+    let mut file = fs::File::open(path).ok()?;
+    let read_length = length.min(TOKEN_USAGE_TAIL_BYTES);
+    file.seek(SeekFrom::Start(length.saturating_sub(read_length)))
+        .ok()?;
+    let mut bytes = Vec::with_capacity(read_length as usize);
+    file.take(read_length).read_to_end(&mut bytes).ok()?;
+    let tail = String::from_utf8_lossy(&bytes);
+    let mut usage = None;
+    let mut model = None;
+    for line in tail.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if usage.is_none() {
+            usage = usage_snapshot_from_event(&value);
+        }
+        if model.is_none() {
+            model = model_from_event(&value);
+        }
+        if usage.is_some() && model.is_some() {
+            break;
+        }
+    }
+    let snapshot = usage.map(|mut snapshot| {
+        snapshot.model = model;
+        snapshot
+    });
+    let mut cache = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if cache.len() >= USAGE_CACHE_LIMIT && !cache.contains_key(path) {
+        if let Some(key) = cache.keys().next().cloned() {
+            cache.remove(&key);
+        }
+    }
+    cache.insert(
+        path.to_string(),
+        CachedCodexUsage {
+            length,
+            modified,
+            snapshot: snapshot.clone(),
+        },
+    );
+    snapshot
+}
+
+fn usage_snapshot_from_event(value: &Value) -> Option<CodexUsageSnapshot> {
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+    let info = payload.get("info")?;
+    Some(CodexUsageSnapshot {
+        total: normalized_usage(info.get("total_token_usage")?)?,
+        last: normalized_usage(info.get("last_token_usage")?)?,
+        context_window: info.get("model_context_window").and_then(Value::as_u64),
+        model: None,
+    })
+}
+
+fn model_from_event(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("turn_context") {
+        return None;
+    }
+    value
+        .get("payload")
+        .unwrap_or(value)
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+        .map(String::from)
+}
+
+fn normalized_usage(value: &Value) -> Option<Usage> {
+    let input_tokens = value.get("input_tokens")?.as_u64()?;
+    let cached_input_tokens = value
+        .get("cached_input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let cache_creation_input_tokens = value
+        .get("cache_write_input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    Some(Usage {
+        input_tokens: input_tokens.saturating_sub(cached_input_tokens),
+        output_tokens: value.get("output_tokens")?.as_u64()?,
+        total_tokens: value.get("total_tokens").and_then(Value::as_u64),
+        cached_input_tokens: Some(cached_input_tokens),
+        cache_creation_input_tokens: Some(cache_creation_input_tokens),
+    })
 }
 
 fn map_status(status: Option<&str>) -> ItemStatus {
@@ -718,6 +1028,7 @@ mod tests {
             preview: String::new(),
             cwd: String::new(),
             model_provider: String::new(),
+            path: None,
             created_at: 0,
             updated_at: 0,
             turns: Vec::new(),
@@ -726,6 +1037,214 @@ mod tests {
             CodexSource::project_native_id(&thread),
             UNCLASSIFIED_PROJECT
         );
+    }
+
+    #[test]
+    fn maps_codex_token_usage_without_double_counting_cache() {
+        let snapshot = usage_snapshot_from_event(&json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 1200,
+                        "cached_input_tokens": 900,
+                        "cache_write_input_tokens": 25,
+                        "output_tokens": 80,
+                        "total_tokens": 1280
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 500,
+                        "cached_input_tokens": 400,
+                        "cache_write_input_tokens": 0,
+                        "output_tokens": 30,
+                        "total_tokens": 530
+                    },
+                    "model_context_window": 258400
+                }
+            }
+        }))
+        .unwrap();
+        assert_eq!(snapshot.total.input_tokens, 300);
+        assert_eq!(snapshot.total.cached_input_tokens, Some(900));
+        assert_eq!(snapshot.total.cache_creation_input_tokens, Some(25));
+        assert_eq!(snapshot.last.input_tokens, 100);
+        assert_eq!(snapshot.context_window, Some(258400));
+    }
+
+    #[test]
+    fn maps_codex_turn_context_model() {
+        assert_eq!(
+            model_from_event(&json!({
+                "type": "turn_context",
+                "payload": { "model": "gpt-5.6-sol" }
+            })),
+            Some("gpt-5.6-sol".into())
+        );
+        assert_eq!(model_from_event(&json!({ "type": "event_msg" })), None);
+    }
+
+    #[test]
+    fn associates_codex_model_effort_and_usage_with_each_turn() {
+        let mut snapshot = CodexTimelineSnapshot::default();
+        let mut current_turn_id = None;
+        update_timeline_snapshot(
+            &mut snapshot,
+            &mut current_turn_id,
+            &json!({
+                "type": "turn_context",
+                "payload": {
+                    "turn_id": "turn-1",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high"
+                }
+            }),
+        );
+        update_timeline_snapshot(
+            &mut snapshot,
+            &mut current_turn_id,
+            &json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 100,
+                            "cached_input_tokens": 40,
+                            "output_tokens": 20
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 80,
+                            "cached_input_tokens": 30,
+                            "output_tokens": 12
+                        }
+                    }
+                }
+            }),
+        );
+
+        let turn = snapshot.turns.get("turn-1").unwrap();
+        assert_eq!(turn.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(turn.effort.as_deref(), Some("high"));
+        assert_eq!(turn.usage.as_ref().unwrap().input_tokens, 50);
+        assert_eq!(turn.usage.as_ref().unwrap().cached_input_tokens, Some(30));
+    }
+
+    #[test]
+    fn timeline_cache_retries_an_incomplete_jsonl_row_after_append() {
+        use std::io::Write as _;
+
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "monet-codex-timeline-cache-{}-{unique}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            br#"{"type":"turn_context","payload":{"turn_id":"turn-partial","model":"gpt-"#,
+        )
+        .unwrap();
+
+        let first = read_timeline_snapshot(path.to_str()).unwrap();
+        assert!(first.turns.is_empty());
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(br#"5.6-sol","effort":"medium"}}"#).unwrap();
+        file.flush().unwrap();
+
+        let complete = read_timeline_snapshot(path.to_str()).unwrap();
+        let turn = complete.turns.get("turn-partial").unwrap();
+        assert_eq!(turn.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(turn.effort.as_deref(), Some("medium"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn usage_cache_refreshes_when_codex_appends_a_turn() {
+        use std::io::Write as _;
+
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "monet-codex-usage-cache-{}-{unique}.jsonl",
+            std::process::id()
+        ));
+        let context = json!({
+            "type": "turn_context",
+            "payload": { "turn_id": "turn-1", "model": "model-1" }
+        });
+        let usage = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": { "input_tokens": 10, "output_tokens": 2 },
+                    "last_token_usage": { "input_tokens": 10, "output_tokens": 2 }
+                }
+            }
+        });
+        fs::write(&path, format!("{context}\n{usage}\n")).unwrap();
+
+        let first = read_usage_snapshot(path.to_str()).unwrap();
+        assert_eq!(first.model.as_deref(), Some("model-1"));
+        assert_eq!(first.total.output_tokens, 2);
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let context = json!({
+            "type": "turn_context",
+            "payload": { "turn_id": "turn-2", "model": "model-2" }
+        });
+        let usage = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": { "input_tokens": 20, "output_tokens": 5 },
+                    "last_token_usage": { "input_tokens": 10, "output_tokens": 3 }
+                }
+            }
+        });
+        writeln!(file, "{context}").unwrap();
+        writeln!(file, "{usage}").unwrap();
+        file.flush().unwrap();
+
+        let refreshed = read_usage_snapshot(path.to_str()).unwrap();
+        assert_eq!(refreshed.model.as_deref(), Some("model-2"));
+        assert_eq!(refreshed.total.output_tokens, 5);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn maps_collaboration_item_to_generic_tool_call() {
+        let session = SessionRef::new(default_instance().unwrap(), "parent").unwrap();
+        let segments = map_item_segments(
+            &session,
+            &json!({
+                "id": "collab-1",
+                "type": "collabAgentToolCall",
+                "tool": "spawnAgent",
+                "receiverThreadIds": ["child-1"],
+                "prompt": "Review the engine boundary",
+                "status": "completed",
+                "agentsStates": {
+                    "child-1": { "status": "running", "message": null }
+                }
+            }),
+        )
+        .unwrap();
+        assert!(matches!(
+            segments.as_slice(),
+            [Segment::ToolCall { name, input, .. }]
+                if name == "spawnAgent"
+                    && input.get("receiverThreadIds").and_then(Value::as_array).is_some()
+        ));
     }
 
     #[test]

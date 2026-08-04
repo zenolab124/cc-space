@@ -36,6 +36,7 @@
   --ring: oklch(0.43 0.06 145);
 
   --claude: oklch(0.71 0.12 40);
+  --codex: oklch(0.50 0.09 255);                /* #4F6592 深靛蓝 */
 
   --hv-border: oklch(0.82 0.018 70);
   --hv-warm: oklch(0.96 0.018 75);

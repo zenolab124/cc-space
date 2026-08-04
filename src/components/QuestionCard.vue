@@ -15,6 +15,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { parseQuestions } from '@/utils/askQuestions'
 import type { PermissionRequest, PermissionDecision, RespondExtra } from '@/composables/usePermissionRequests'
+import SessionInteractionCard from '@/components/session/SessionInteractionCard.vue'
 
 const props = defineProps<{
   request: PermissionRequest
@@ -149,8 +150,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, { capture
 </script>
 
 <template>
-  <div
-    class="question-card rounded-md border border-border bg-popover shadow-paper-lifted"
+  <SessionInteractionCard
     role="dialog"
     :aria-label="$t('permission.question.title')"
   >
@@ -238,7 +238,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, { capture
         {{ $t('permission.question.skip') }}
       </button>
     </div>
-  </div>
+  </SessionInteractionCard>
 </template>
 
 <style scoped>

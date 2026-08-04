@@ -27,6 +27,7 @@ import {
   type PermissionDecision,
 } from '@/composables/usePermissionRequests'
 import { getHint } from '@/composables/usePermissionHints'
+import SessionInteractionCard from '@/components/session/SessionInteractionCard.vue'
 
 const { t } = useI18n()
 
@@ -106,9 +107,8 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div
-    class="permission-card rounded-md border bg-popover shadow-paper-lifted"
-    :class="isDanger ? 'border-accent/60 ring-1 ring-accent/25' : 'border-border'"
+  <SessionInteractionCard
+    :danger="isDanger"
     role="alertdialog"
     :aria-label="isDanger ? t('permission.highRisk') : t('permission.title')"
   >
@@ -211,7 +211,7 @@ function onKeydown(e: KeyboardEvent) {
         {{ $t('common.deny') }}
       </button>
     </div>
-  </div>
+  </SessionInteractionCard>
 </template>
 
 <style scoped>

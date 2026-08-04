@@ -12,6 +12,7 @@ import {
   type ToolVisualState,
 } from '@/composables/useToolDisplay'
 import ToolProcessItems from './ToolProcessItems.vue'
+import SessionProcessDisclosure from './session/SessionProcessDisclosure.vue'
 
 const props = defineProps<{
   blocks: ContentBlock[]
@@ -112,16 +113,13 @@ function toggle(event: MouseEvent) {
 </script>
 
 <template>
-  <div class="tool-process-group">
-    <button
-      type="button"
-      class="tool-process-line"
-      :class="[`is-${groupState}`, { 'is-expanded': expanded }]"
-      :aria-expanded="expanded"
+  <SessionProcessDisclosure
+      :expanded="expanded"
+      :state="groupState"
       :title="summaryTitle"
-      @click="toggle"
+      @toggle="toggle"
     >
-      <span class="i-carbon-chevron-right tool-process-chevron" :class="{ 'rotate-90': expanded }" />
+    <template #summary>
       <span class="tool-process-summary">
         <template v-for="(item, index) in visibleSummary" :key="`${item.kind}:${item.name}`">
           <span v-if="index" class="tool-process-separator" aria-hidden="true">·</span>
@@ -129,6 +127,8 @@ function toggle(event: MouseEvent) {
         </template>
         <span v-if="hiddenToolCount" class="tool-process-more">+{{ hiddenToolCount }}</span>
       </span>
+    </template>
+    <template #status>
       <span
         v-if="stateLabel"
         class="tool-process-running"
@@ -137,45 +137,18 @@ function toggle(event: MouseEvent) {
         {{ stateLabel }}
         <span v-if="groupState === 'running'" class="tool-process-dots" aria-hidden="true"><i /><i /><i /></span>
       </span>
-    </button>
-    <div v-if="expanded" class="tool-process-items">
-      <slot>
-        <ToolProcessItems
-          :blocks="blocks"
-          :block-record-uuids="blockRecordUuids"
-          :streaming="streaming"
-        />
-      </slot>
-    </div>
-  </div>
+    </template>
+    <slot>
+      <ToolProcessItems
+        :blocks="blocks"
+        :block-record-uuids="blockRecordUuids"
+        :streaming="streaming"
+      />
+    </slot>
+  </SessionProcessDisclosure>
 </template>
 
 <style scoped>
-.tool-process-group { min-width: 0; margin: 0; }
-.tool-process-line {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  min-height: var(--tool-row-height);
-  padding: 0;
-  border: 0;
-  color: color-mix(in srgb, var(--muted-foreground) 56%, transparent);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  line-height: var(--tool-row-line-height);
-  transition: color 120ms ease;
-}
-.tool-process-line:hover,
-.tool-process-line:focus-visible,
-.tool-process-line.is-expanded,
-.tool-process-line.is-running,
-.tool-process-line.is-permission,
-.tool-process-line.is-error,
-.tool-process-line.is-interrupted { color: var(--foreground); }
-.tool-process-line:focus-visible { outline: 1px solid var(--ring); outline-offset: 2px; }
-.tool-process-chevron { width: 11px; height: 11px; flex: none; transition: transform 150ms; }
 .tool-process-summary {
   display: flex;
   min-width: 0;
@@ -202,7 +175,6 @@ function toggle(event: MouseEvent) {
 .tool-process-running.is-error,
 .tool-process-running.is-interrupted { color: var(--destructive); }
 .tool-process-running.is-background { color: var(--primary); }
-.tool-process-items { margin: 0 0 4px 15px; padding-left: 9px; border-left: 1px solid var(--border); }
 .tool-process-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-process-dots i {
   width: 3px;

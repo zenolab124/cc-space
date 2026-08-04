@@ -2,12 +2,10 @@
 import { ref, computed, onUnmounted } from 'vue'
 import ProjectSidebar from '@/components/ProjectSidebar.vue'
 import SessionList from '@/components/SessionList.vue'
-import SessionDetail from '@/components/SessionDetail.vue'
-import EngineSessionDetail from '@/components/engine/EngineSessionDetail.vue'
+import UnifiedSessionDetail from '@/components/session/UnifiedSessionDetail.vue'
 import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
-import { usesNativeSessionSurface } from '@/engines/integration'
 
 const { sidebarsCollapsed, projectSidebarWidth, sessionListWidth } = useUiState()
 const { projects } = useProjects()
@@ -15,7 +13,6 @@ const { selectedSessionId } = useSessions()
 const selectedSession = computed(() => projects.value
   .flatMap(project => project.sessions)
   .find(session => session.id === selectedSessionId.value) ?? null)
-const useNativeDetail = computed(() => !selectedSession.value?.engine || usesNativeSessionSurface(selectedSession.value.engine))
 
 const isResizing = ref(false)
 
@@ -101,8 +98,7 @@ onUnmounted(() => {
 
     <main class="flex-1 min-w-0 p-2.5">
       <div class="h-full bg-card border border-border rounded shadow-paper overflow-hidden">
-        <SessionDetail v-if="useNativeDetail" />
-        <EngineSessionDetail v-else-if="selectedSession" :session="selectedSession" mode="archive" />
+        <UnifiedSessionDetail :session="selectedSession" :session-id="selectedSessionId" mode="archive" />
       </div>
     </main>
   </div>

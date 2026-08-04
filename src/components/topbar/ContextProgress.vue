@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { EngineAccent } from '@/engines/presentation'
 import { formatTokens } from '@/types'
 
 const props = defineProps<{
@@ -9,6 +10,8 @@ const props = defineProps<{
   capacity: number
   /** 紧凑形态(单行顶栏用):条 + 百分比,完整数字进 title */
   compact?: boolean
+  /** 引擎身份色；警示状态仍使用全局警示色。 */
+  accent?: EngineAccent
 }>()
 
 /** 0..1 的占用率(防越界) */
@@ -37,6 +40,8 @@ const barColorClass = computed(() => {
   }
 })
 
+const normalBarColor = computed(() => `var(--${props.accent ?? 'primary'})`)
+
 const textColorClass = computed(() => {
   switch (level.value) {
     case 2: return 'text-destructive'
@@ -44,6 +49,8 @@ const textColorClass = computed(() => {
     default: return 'text-muted-foreground'
   }
 })
+
+const normalTextColor = computed(() => `var(--${props.accent ?? 'primary'})`)
 
 const usedText = computed(() => formatTokens(props.used))
 const capacityText = computed(() => formatTokens(props.capacity))
@@ -63,11 +70,11 @@ const capacityText = computed(() => formatTokens(props.capacity))
       <div
         class="absolute inset-y-0 left-0 rounded-full transition-all duration-200"
         :class="barColorClass"
-        :style="{ width: `${percent}%` }"
+        :style="{ width: `${percent}%`, ...(level === 0 ? { backgroundColor: normalBarColor } : {}) }"
       />
     </div>
     <!-- 紧凑形态:仅百分比(将满时染警示色已足够提示) -->
-    <span v-if="compact" class="text-xs tabular-nums shrink-0" :class="textColorClass">{{ percent }}%</span>
+    <span v-if="compact" class="text-xs tabular-nums shrink-0" :class="textColorClass" :style="level === 0 ? { color: normalTextColor } : undefined">{{ percent }}%</span>
     <!-- 完整形态:数字 + 百分比 + 将满提示 -->
     <template v-else>
       <span class="text-xs whitespace-nowrap" :class="textColorClass">

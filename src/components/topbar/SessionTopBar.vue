@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
-import { shortModel, relativeTime, formatTokens, type TokenUsage } from '@/types'
+import { shortModel, relativeTime, type TokenUsage } from '@/types'
 import { inferModel, getContextWindow, MODELS } from '@/utils/modelContext'
 import { ROLE_DISPLAY, resolveMappedRoles } from '@/utils/modelEnv'
 import { useChannels } from '@/composables/useChannels'
@@ -13,7 +13,8 @@ import { useNotifications } from '@/composables/useNotifications'
 import { useRunners } from '@/composables/useRunners'
 import RunConfigCapsule from './RunConfigCapsule.vue'
 import PermissionModeDropdown from './PermissionModeDropdown.vue'
-import ContextProgress from './ContextProgress.vue'
+import SessionToolbar from './SessionToolbar.vue'
+import SessionTokenBreakdown from './SessionTokenBreakdown.vue'
 import type { PermissionMode } from '@/composables/useSessionSettings'
 
 /**
@@ -127,65 +128,9 @@ const capacity = computed(() =>
     ?? getContextWindow(props.runConfig.display.model ?? null),
 )
 
-// --- 窄列折叠 ---
-//
-// 权限模式优先在 < 520px 时收进 ⋯ 二级菜单；更窄(< 280px)时胶囊再收起渠道段。
-// 模型与 token 进度始终保留，避免关键运行状态在窄列中消失。
-
-const containerRef = ref<HTMLElement>()
-const containerWidth = ref(Number.POSITIVE_INFINITY)
-
-const showPermission = computed(() => containerWidth.value >= 520)
-const showChannel = computed(() => containerWidth.value >= 280)
-
-let resizeObserver: ResizeObserver | null = null
-
-onMounted(() => {
-  const el = containerRef.value
-  if (!el) return
-  containerWidth.value = el.clientWidth
-  resizeObserver = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      containerWidth.value = entry.contentRect.width
-    }
-  })
-  resizeObserver.observe(el)
-})
-
-onUnmounted(() => {
-  resizeObserver?.disconnect()
-  resizeObserver = null
-})
-
 // --- ⋯ 统一菜单(折叠控件 + 元数据 + 操作) ---
 
 const menuOpen = ref(false)
-const menuRef = ref<HTMLElement>()
-const menuPanelRef = ref<HTMLElement>()
-const menuAlignLeft = ref(false)
-
-function onDocClick(e: MouseEvent) {
-  if (!menuOpen.value) return
-  const target = e.target as Node
-  if (menuRef.value && !menuRef.value.contains(target)) {
-    menuOpen.value = false
-  }
-}
-
-function toggleMenu() {
-  menuOpen.value = !menuOpen.value
-  if (menuOpen.value) {
-    nextTick(() => {
-      const panel = menuPanelRef.value
-      if (!panel) return
-      const rect = panel.getBoundingClientRect()
-      menuAlignLeft.value = rect.right > window.innerWidth - 4
-    })
-  }
-}
-
-onMounted(() => document.addEventListener('mousedown', onDocClick))
-onUnmounted(() => document.removeEventListener('mousedown', onDocClick))
 
 // --- 菜单操作 ---
 
@@ -275,62 +220,41 @@ function onPermissionModeChange(mode: PermissionMode | null) {
 </script>
 
 <template>
-  <div
-    ref="containerRef"
-    class="px-3 py-1 border-b border-border shrink-0 flex items-center gap-1.5"
+  <SessionToolbar
+    v-model:menu-open="menuOpen"
+    :used-context-tokens="usedContextTokens"
+    :context-capacity="capacity"
   >
-    <!-- 运行配置胶囊:渠道·模型·强度三段一枚(点哪段开哪层渐进面板);窄列收渠道段 -->
-    <RunConfigCapsule
-      :settings="capsuleSettings"
-      :run-config="runConfig"
-      :cwd="cwd"
-      :narrow="!showChannel"
-      @model-change="onModelChange"
-      @effort-change="onEffortChange"
-      @channel-change="onChannelChange"
-      @chrome-change="(v: boolean) => emit('chromeChange', v)"
-      @extra-args-change="(v: string) => emit('extraArgsChange', v)"
-    />
+    <template #controls="{ containerWidth }">
+      <!-- 运行配置胶囊:渠道·模型·强度三段一枚(点哪段开哪层渐进面板);窄列收渠道段 -->
+      <RunConfigCapsule
+        :settings="capsuleSettings"
+        :run-config="runConfig"
+        :cwd="cwd"
+        :narrow="containerWidth < 280"
+        @model-change="onModelChange"
+        @effort-change="onEffortChange"
+        @channel-change="onChannelChange"
+        @chrome-change="(v: boolean) => emit('chromeChange', v)"
+        @extra-args-change="(v: string) => emit('extraArgsChange', v)"
+      />
 
-    <!-- 权限模式 -->
-    <PermissionModeDropdown
-      v-if="showPermission"
-      :selected="selectedPermissionMode"
-      :effective="runConfig.display.permissionMode"
-      @select="onPermissionModeChange"
-    />
+      <PermissionModeDropdown
+        v-if="containerWidth >= 520"
+        :selected="selectedPermissionMode"
+        :effective="runConfig.display.permissionMode"
+        @select="onPermissionModeChange"
+      />
+    </template>
 
-    <!-- token 进度(紧凑形态:条 + 百分比,永不折叠) -->
-    <ContextProgress
-      :used="usedContextTokens"
-      :capacity="capacity"
-      compact
-    />
+    <template #actions>
+      <!-- 外部注入控件(异步任务按钮等) -->
+      <slot />
+    </template>
 
-    <!-- 外部注入控件(异步任务按钮等) -->
-    <slot />
-
-    <!-- ⋯ 统一菜单 -->
-    <div ref="menuRef" class="relative inline-flex shrink-0">
-      <button
-        type="button"
-        class="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        :title="$t('topbar.sessionMenu')"
-        :aria-expanded="menuOpen"
-        @click="toggleMenu"
-      >
-        <span class="i-carbon-overflow-menu-horizontal w-3.5 h-3.5" />
-      </button>
-
-      <div
-        v-if="menuOpen"
-        ref="menuPanelRef"
-        class="absolute top-full mt-1 z-50 py-1 rounded-md border border-border
-               shadow-paper-lifted bg-popover w-52"
-        :class="menuAlignLeft ? 'left-0' : 'right-0'"
-      >
-        <!-- 窄列收纳项 -->
-        <div v-if="!showPermission" class="py-0.5 border-b border-border">
+    <template #menu="{ containerWidth }">
+      <!-- 窄列收纳项 -->
+      <div v-if="containerWidth < 520" class="py-0.5 border-b border-border">
           <PermissionModeDropdown
             variant="submenu"
             :selected="selectedPermissionMode"
@@ -357,69 +281,7 @@ function onPermissionModeChange(mode: PermissionMode | null) {
           </span>
           <span>{{ relativeTime(lastModified) }}</span>
           <!-- 会话 token 统计 -->
-          <div class="flex flex-col gap-0.5 pt-1 border-t border-border/50 tabular-nums">
-            <!-- 原始四项 -->
-            <div class="flex items-center justify-between">
-              <span>input_tokens</span>
-              <span>{{ formatTokens(totalTokens.input_tokens) }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>output_tokens</span>
-              <span>{{ formatTokens(totalTokens.output_tokens) }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>cache_creation</span>
-              <span>{{ formatTokens(totalTokens.cache_creation_input_tokens) }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>cache_read</span>
-              <span>{{ formatTokens(totalTokens.cache_read_input_tokens) }}</span>
-            </div>
-            <!-- 派生指标 -->
-            <div class="flex items-center justify-between pt-1 border-t border-border/50">
-              <span>{{ $t('topbar.tokenTotalInput') }}</span>
-              <span>{{ formatTokens(totalTokens.input_tokens + totalTokens.cache_creation_input_tokens + totalTokens.cache_read_input_tokens) }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>{{ $t('topbar.tokenTotalOutput') }}</span>
-              <span>{{ formatTokens(totalTokens.output_tokens) }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>{{ $t('topbar.tokenCacheHitRate') }}</span>
-              <span>{{ (totalTokens.input_tokens + totalTokens.cache_read_input_tokens + totalTokens.cache_creation_input_tokens) > 0 ? Math.round(totalTokens.cache_read_input_tokens / (totalTokens.input_tokens + totalTokens.cache_read_input_tokens + totalTokens.cache_creation_input_tokens) * 100) + '%' : '—' }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>{{ $t('topbar.tokenCacheRatio') }}</span>
-              <span>{{ (totalTokens.input_tokens + totalTokens.output_tokens + totalTokens.cache_read_input_tokens + totalTokens.cache_creation_input_tokens) > 0 ? Math.round(totalTokens.cache_read_input_tokens / (totalTokens.input_tokens + totalTokens.output_tokens + totalTokens.cache_read_input_tokens + totalTokens.cache_creation_input_tokens) * 100) + '%' : '—' }}</span>
-            </div>
-            <div class="flex items-center justify-between font-medium text-foreground">
-              <span>{{ $t('topbar.tokenTotal') }}</span>
-              <span>{{ formatTokens(totalTokens.input_tokens + totalTokens.output_tokens + totalTokens.cache_read_input_tokens + totalTokens.cache_creation_input_tokens) }}</span>
-            </div>
-            <!-- 子 Agent/工作流分项(合计已含,仅拆帐展示) -->
-            <template v-if="subagentTokens.input_tokens + subagentTokens.output_tokens + subagentTokens.cache_read_input_tokens + subagentTokens.cache_creation_input_tokens > 0">
-              <div class="flex items-center justify-between pt-1 border-t border-border/50 font-medium text-foreground">
-                <span>{{ $t('topbar.tokenSubagents') }}</span>
-                <span>{{ formatTokens(subagentTokens.input_tokens + subagentTokens.output_tokens + subagentTokens.cache_read_input_tokens + subagentTokens.cache_creation_input_tokens) }}</span>
-              </div>
-              <div class="flex items-center justify-between pl-2">
-                <span>input_tokens</span>
-                <span>{{ formatTokens(subagentTokens.input_tokens) }}</span>
-              </div>
-              <div class="flex items-center justify-between pl-2">
-                <span>output_tokens</span>
-                <span>{{ formatTokens(subagentTokens.output_tokens) }}</span>
-              </div>
-              <div class="flex items-center justify-between pl-2">
-                <span>cache_creation</span>
-                <span>{{ formatTokens(subagentTokens.cache_creation_input_tokens) }}</span>
-              </div>
-              <div class="flex items-center justify-between pl-2">
-                <span>cache_read</span>
-                <span>{{ formatTokens(subagentTokens.cache_read_input_tokens) }}</span>
-              </div>
-            </template>
-          </div>
+          <SessionTokenBreakdown :total-tokens="totalTokens" :subagent-tokens="subagentTokens" />
         </div>
 
         <!-- 操作 -->
@@ -440,10 +302,8 @@ function onPermissionModeChange(mode: PermissionMode | null) {
             <span class="i-carbon-trash-can w-3.5 h-3.5" />{{ $t('topbar.deleteSession') }}
           </button>
         </div>
-      </div>
-    </div>
-
-  </div>
+    </template>
+  </SessionToolbar>
 </template>
 
 <style scoped>

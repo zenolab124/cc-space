@@ -17,11 +17,11 @@ import { fileName } from '@/utils/path'
 import { collectSessionCapabilities } from '@/features'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 import { usesNativeSessionSurface } from '@/engines/integration'
+import { resolveEnginePresentation } from '@/engines/presentation'
 import type { SessionSummary } from '@/types'
 
 const { getMeta } = useSessionMeta()
-import SessionDetail from '../SessionDetail.vue'
-import EngineSessionDetail from '../engine/EngineSessionDetail.vue'
+import UnifiedSessionDetail from '../session/UnifiedSessionDetail.vue'
 
 const props = defineProps<{
   column: WorkbenchColumn
@@ -78,6 +78,19 @@ const sessionSummary = computed<SessionSummary | null>(() => {
   }
 })
 const useNativeDetail = computed(() => !sessionSummary.value?.engine || usesNativeSessionSurface(sessionSummary.value.engine))
+const enginePresentation = computed(() => resolveEnginePresentation(
+  useNativeDetail.value ? 'claude' : sessionSummary.value?.engine?.engineId,
+  sessionSummary.value?.engine_name ?? (useNativeDetail.value ? 'Claude Code' : null),
+))
+const engineName = computed(() => enginePresentation.value.displayName)
+const engineIdentityStyle = computed(() => {
+  const color = `var(--${enginePresentation.value.accent})`
+  return {
+    color,
+    borderColor: `color-mix(in srgb, ${color} 22%, transparent)`,
+    background: `color-mix(in srgb, ${color} 10%, transparent)`,
+  }
+})
 
 async function onToggleRC() {
   const enabling = !stream.value.rcActive
@@ -210,6 +223,11 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         <span class="flex-1 min-w-0 truncate text-xs font-semibold">{{ lane!.label }}</span>
       </template>
       <template v-else>
+        <span
+          v-if="engineName"
+          class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-tight"
+          :style="engineIdentityStyle"
+        >{{ engineName }}</span>
         <span v-if="projectName" class="shrink-0 text-[10px] px-1.5 py-0.5 rounded leading-tight" style="color: var(--tag-foreground); background: var(--tag)">{{ projectName }}</span>
         <span class="flex-1 min-w-0 truncate text-xs font-semibold">{{ title }}</span>
       </template>
@@ -308,8 +326,12 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
     </div>
 
     <div class="flex-1 min-h-0">
-      <SessionDetail v-if="useNativeDetail" mode="workbench" :session-id="column.sessionId" :hide-input="isRace" />
-      <EngineSessionDetail v-else-if="sessionSummary" :session="sessionSummary" mode="workbench" :hide-input="isRace" />
+      <UnifiedSessionDetail
+        :session="sessionSummary"
+        :session-id="column.sessionId"
+        mode="workbench"
+        :hide-input="isRace"
+      />
     </div>
   </div>
 </template>

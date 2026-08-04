@@ -81,6 +81,7 @@ export default defineConfig({
       ring: 'var(--ring)',
       // 项目扩展 token（见 src/styles/paper/extends.css）
       claude: 'var(--claude)',
+      codex: 'var(--codex)',
     },
     font: {
       sans: 'var(--font-sans)',

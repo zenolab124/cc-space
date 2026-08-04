@@ -1352,12 +1352,31 @@
     "openCwd": "Open working directory",
     "attachment": "Attachment",
     "loadAttachment": "Load attachment",
+    "async": {
+      "title": "Async agents",
+      "noTranscript": "No readable transcript is available for this agent"
+    },
     "model": "Model",
     "approvalRequired": "Approval required",
     "inputPlaceholder": "Send a message to the agent…",
     "interrupt": "Stop",
     "steer": "Steer",
     "send": "Send",
+    "segment": {
+      "command": "Run",
+      "fileChange": "Changed {count} files",
+      "fileChangeKind": "Files",
+      "toolCall": "Tool call",
+      "toolResult": "Tool result"
+    },
+    "itemStatus": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "declined": "Declined",
+      "interrupted": "Stopped"
+    },
     "decision": {
       "accept": "Approve",
       "acceptForSession": "Approve for session",

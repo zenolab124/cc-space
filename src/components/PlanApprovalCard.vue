@@ -12,6 +12,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { renderMarkdownCached } from '@/composables/useMarkdown'
 import type { PermissionRequest, PermissionDecision, RespondExtra } from '@/composables/usePermissionRequests'
+import SessionInteractionCard from '@/components/session/SessionInteractionCard.vue'
 
 const props = defineProps<{
   request: PermissionRequest
@@ -78,8 +79,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, { capture
 </script>
 
 <template>
-  <div
-    class="plan-card rounded-md border border-border bg-popover shadow-paper-lifted"
+  <SessionInteractionCard
     role="dialog"
     :aria-label="$t('permission.plan.title')"
   >
@@ -131,7 +131,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, { capture
         </button>
       </template>
     </div>
-  </div>
+  </SessionInteractionCard>
 </template>
 
 <style scoped>

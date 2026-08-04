@@ -31,6 +31,7 @@
 @property --input          { syntax: "<color>"; inherits: true; initial-value: #cccccc }
 @property --ring           { syntax: "<color>"; inherits: true; initial-value: #000000 }
 @property --claude         { syntax: "<color>"; inherits: true; initial-value: #cc7744 }
+@property --codex          { syntax: "<color>"; inherits: true; initial-value: #4f6592 }
 @property --tag            { syntax: "<color>"; inherits: true; initial-value: #cccccc }
 @property --tag-foreground { syntax: "<color>"; inherits: true; initial-value: #333333 }
 
@@ -41,7 +42,7 @@
               --secondary-foreground 0.35s, --muted 0.35s, --muted-foreground 0.35s,
               --accent 0.35s, --accent-foreground 0.35s, --destructive 0.35s,
               --destructive-foreground 0.35s, --border 0.35s, --input 0.35s,
-              --ring 0.35s, --claude 0.35s, --tag 0.35s, --tag-foreground 0.35s !important;
+              --ring 0.35s, --claude 0.35s, --codex 0.35s, --tag 0.35s, --tag-foreground 0.35s !important;
 }
 
 h1, h2, h3, h4 {
