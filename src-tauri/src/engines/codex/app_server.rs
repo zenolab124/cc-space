@@ -19,6 +19,7 @@ pub const CORE_CLIENT_METHODS: &[&str] = &[
     "thread/read",
     "thread/start",
     "thread/resume",
+    "thread/fork",
     "thread/unsubscribe",
     "turn/start",
     "turn/steer",

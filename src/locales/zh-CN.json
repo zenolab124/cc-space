@@ -44,6 +44,7 @@
     "effort": "思考强度",
     "newSessionEngine": "新会话引擎",
     "newSessionFailed": "新建引擎会话失败",
+    "forkSessionFailed": "分叉引擎会话失败",
     "star": "收藏会话",
     "softDeleteConfirm": "从 Monet 档案中隐藏该会话？引擎的原始会话数据不会被修改。",
     "runtimeUnavailable": "该会话当前不可恢复，运行入口已停用",
@@ -1334,7 +1335,6 @@
     },
     "codex": {
       "cliUnavailable": "未找到 Codex CLI",
-      "forkUnavailable": "Codex 当前不支持从该会话分叉",
       "versionUnsupported": "Codex CLI 版本过旧",
       "handshakeFailed": "无法连接 Codex App Server",
       "authenticationRequired": "需要先在 Codex CLI 完成登录",

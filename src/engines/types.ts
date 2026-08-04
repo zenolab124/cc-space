@@ -141,6 +141,11 @@ export interface ConversationPage {
   nextCursor: string | null
 }
 
+export type RuntimeInputItem =
+  | { kind: 'text'; text: string }
+  | { kind: 'image'; mediaType: string; data: string }
+  | { kind: 'file'; path: string }
+
 export interface InteractionRef {
   session: SessionRef
   runtimeId: { 0: string } | string

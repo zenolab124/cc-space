@@ -44,6 +44,7 @@
     "effort": "Reasoning effort",
     "newSessionEngine": "New session engine",
     "newSessionFailed": "Failed to create engine session",
+    "forkSessionFailed": "Failed to fork engine session",
     "star": "Star session",
     "softDeleteConfirm": "Hide this session from Monet? The engine's original session data will not be modified.",
     "runtimeUnavailable": "This session cannot be resumed right now; runtime actions are disabled",
@@ -1334,7 +1335,6 @@
     },
     "codex": {
       "cliUnavailable": "Codex CLI was not found",
-      "forkUnavailable": "Codex cannot fork this session",
       "versionUnsupported": "The Codex CLI version is too old",
       "handshakeFailed": "Could not connect to the Codex App Server",
       "authenticationRequired": "Sign in with the Codex CLI first",

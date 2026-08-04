@@ -8,6 +8,7 @@
         "thread/read",
         "thread/start",
         "thread/resume",
+        "thread/fork",
         "thread/unsubscribe",
         "turn/start",
         "turn/steer",

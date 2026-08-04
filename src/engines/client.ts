@@ -14,6 +14,7 @@ import type {
   SessionRef,
   SessionActions,
   RuntimeSnapshot,
+  RuntimeInputItem,
 } from './types'
 import { configureUiIntegrations } from './integration'
 
@@ -127,10 +128,20 @@ export function createSession(project: ProjectRef, cwd: string | null, options: 
   })
 }
 
+export function forkSession(session: SessionRef, lastTurnId: string | null = null, options: Record<string, unknown> = {}) {
+  return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_fork_session', {
+    request: { session, lastTurnId, options },
+  })
+}
+
 export function startTurn(session: SessionRef, text: string, options: Record<string, unknown> = {}) {
+  return startTurnWithInput(session, [{ kind: 'text', text }], options)
+}
+
+export function startTurnWithInput(session: SessionRef, input: RuntimeInputItem[], options: Record<string, unknown> = {}) {
   return invoke('engine_start_turn', {
     session,
-    request: { input: [{ kind: 'text', text }], options },
+    request: { input, options },
   })
 }
 

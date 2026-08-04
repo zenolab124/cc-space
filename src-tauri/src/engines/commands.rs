@@ -425,6 +425,11 @@ pub async fn engine_create_session(request: CreateSessionRequest) -> EngineResul
 }
 
 #[tauri::command]
+pub async fn engine_fork_session(request: ForkSessionRequest) -> EngineResult<RuntimeSession> {
+    system::get()?.coordinator().fork_session(request).await
+}
+
+#[tauri::command]
 pub async fn engine_attach_session(
     session: SessionRef,
     options: AttachOptions,

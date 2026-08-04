@@ -485,7 +485,7 @@ impl SessionSource for CodexSource {
             };
             Ok(SessionActions {
                 resume: resume.clone(),
-                fork: ActionAvailability::unavailable("engine.codex.forkUnavailable"),
+                fork: self.runtime_availability(),
                 send: resume,
                 steer: ActionAvailability::available(),
                 interrupt: ActionAvailability::available(),

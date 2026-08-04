@@ -182,7 +182,7 @@ async function selectProject(project: Project) {
     rememberEngine(cwd, engine)
     closePopover()
   } catch (cause) {
-    notifyTransient(t('engine.newSessionFailed'), String(cause))
+    notifyTransient(t('common.newSessionFailed'), String(cause))
   } finally {
     creating.value = false
   }
@@ -204,7 +204,7 @@ async function pickFolder() {
       await createForEngine(engine, { engine: engine.instance, nativeId: selected }, selected)
       rememberEngine(selected, engine)
     } catch (cause) {
-      notifyTransient(t('engine.newSessionFailed'), String(cause))
+      notifyTransient(t('common.newSessionFailed'), String(cause))
     } finally {
       creating.value = false
     }

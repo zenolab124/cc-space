@@ -365,6 +365,7 @@ pub fn run() {
             engines::commands::engine_list_runtime_commands,
             engines::commands::engine_list_models,
             engines::commands::engine_create_session,
+            engines::commands::engine_fork_session,
             engines::commands::engine_attach_session,
             engines::commands::engine_start_turn,
             engines::commands::engine_steer_turn,

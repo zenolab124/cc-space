@@ -10,7 +10,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { shortModel, formatTokens, type TokenUsage, type SessionSummary } from '@/types'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
 
-const { activeTab, resetRaceLanes, minColumnWidth, suppressColumnTransition } = useWorkbench()
+const { activeTab, minColumnWidth, suppressColumnTransition } = useWorkbench()
 const { dragging, shiftDragging, onDividerMouseDown } = useColumnResize()
 const { t } = useI18n()
 const { projects } = useProjects()
@@ -19,7 +19,7 @@ const { confirm } = useConfirm()
 async function onResetRace() {
   const ok = await confirm(t('workbench.race.resetConfirm'), t('workbench.race.reset'))
   if (!ok) return
-  resetRaceLanes(activeTab.value.id)
+  await resetAllLanes()
 }
 
 const race = computed(() => activeTab.value.race!)
@@ -30,11 +30,14 @@ const {
   dropAreaRef,
   imageInput,
   slashError,
+  raceError,
+  raceMutationLoading,
   anyStreaming,
   streamingCount,
   broadcastSend,
   stopAll,
   forkNewLane,
+  resetAllLanes,
 } = useRaceInput(activeTab)
 
 const containerRef = ref<HTMLElement>()
@@ -177,6 +180,7 @@ function onInputKeydown(e: KeyboardEvent) {
       <!-- 右侧工具栏 -->
       <div class="shrink-0 w-10 flex flex-col items-center gap-2 py-2.5 border-l border-border bg-background">
         <button
+          :disabled="raceMutationLoading"
           class="icon-btn icon-btn-lg"
           :class="showHud && 'icon-btn-active'"
           v-tooltip="$t('workbench.race.tokenHud')"
@@ -192,6 +196,7 @@ function onInputKeydown(e: KeyboardEvent) {
           <span class="i-carbon-reset w-3.5 h-3.5" />
         </button>
         <button
+          :disabled="raceMutationLoading"
           class="icon-btn icon-btn-lg icon-btn-dashed flex-1"
           v-tooltip="t('workbench.race.addLane')"
           @click="forkNewLane"
@@ -206,8 +211,8 @@ function onInputKeydown(e: KeyboardEvent) {
       class="px-4 py-3 border-t border-border shrink-0 transition-colors"
       :class="imageInput.isDragging.value && 'ring-1 ring-primary/40 ring-inset bg-primary/5'"
     >
-      <div v-if="slashError" class="mb-1 text-xs text-destructive">
-        {{ slashError }}
+      <div v-if="slashError || raceError" class="mb-1 text-xs text-destructive">
+        {{ slashError || raceError }}
       </div>
 
       <!-- 拖拽指引(pointer-events-none:避免提示自身触发 dragleave 抖动) -->

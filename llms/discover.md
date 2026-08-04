@@ -26,7 +26,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 ### 3.0 Multi-engine system
 
 - Claude Code and Codex projects, sessions, timelines, search results, Workbench columns, and notifications coexist with engine badges and filters
-- Codex uses the local official `codex app-server` for history, create/resume, streaming text and tool progress, steering, interruption, three approval classes, and model/effort discovery
+- Codex uses the local official `codex app-server` for history, create/resume, native fork, streaming text and tool progress, steering, interruption, three approval classes, and model/effort discovery
 - Engine Center reports installation, authentication, version, capabilities, and diagnostics per engine; one failure does not block another
 - The Engine Adapter contract unifies identity, source, runtime, capabilities, and facets, so a third engine needs no new top-level IPC or shared-storage branch
 - Claude Code retains its channels, Workshop, automation, and mature specialized session surface; the standard surface exposes actions from capabilities
@@ -44,7 +44,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Permission requests as GUI cards: the CLI's y/n becomes a card — dangerous commands highlighted in red, AI annotates in plain language what the command will do, four grant granularities (this once / this session / whole MCP server / deny), Enter to allow and Esc to deny (Enter deliberately never lands on "allow for this session", preventing accidental privilege escalation)
 - Plan approval cards: Claude's plans render as cards — approve, or reject with a written reason
 - AskUserQuestion cards: single/multi-select adaptive, with an "other" free-text option
-- Race mode: fork one session into parallel lanes, broadcast the same prompt to different models/channels, compare answers and token cost side by side; stop all, restart, or close lanes individually
+- Race mode: both Claude Code and Codex can fork one session into parallel lanes, broadcast the same prompt to different models/channels, compare answers and token cost side by side; stop all, restart, or close lanes individually
 - One-click column width reset
 - Confirmation before removing a running session; closing a tab or quitting the app with active sessions asks first — streams are never silently killed
 - Three-layer notifications: **system notifications** (session finished, permission requested, task failed — pushed to the OS notification center, so you get called back even when you're away; leave it running with peace of mind) + title-bar notification strip (current item with inline action buttons, dropdown for the queue) + toast stack (collapses to "N more" when crowded; allow/deny/retry/jump-to-session right on the toast)
@@ -55,7 +55,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Thinking display: lightweight summaries stay collapsed by default; a normal click expands only that block, while Shift-click toggles all and remembers the default
 - Long-lived processes: one resident CLI process per session, reused across turns — no cold start per message
 - Automatic session identity: continue → resume; branch from a point in history → native fork; fresh → new. Three intents, zero ceremony
-- Fork sessions: grow a new branch from any historical session, via the CLI's native mechanism
+- Fork sessions: grow a new branch from any historical session through each engine's native mechanism (Claude CLI / Codex App Server); Monet never copies or rewrites JSONL / rollouts
 - **Hot-switch channel / model / thinking effort mid-session**: change any of them while the session runs (five effort levels + an ultracode tier), effective immediately — no process restart, no lost context; use a strong model for the hard turn, then drop to a cheap one for chores
 - Run-config capsule: a three-segment pill showing current channel/model/effort; click any segment to change it; session-level overrides get a one-click "reset to inherited"; unsupported options stay visible with an explanation instead of disappearing
 - Permission mode switchable at runtime: six modes (approve / auto-edit / plan / auto / bypass / don't ask), each with a one-line description

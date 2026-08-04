@@ -33,7 +33,7 @@ impl CodexEngine {
                 runtime: Some(RuntimeCapabilities {
                     create: true,
                     resume: true,
-                    fork: false,
+                    fork: true,
                     steer: true,
                     interrupt: true,
                     streaming: StreamingCapabilities {

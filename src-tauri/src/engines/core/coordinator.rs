@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AttachOptions, CreateSessionRequest, EngineError, EngineErrorKind, EngineFuture,
-    EngineRegistry, InteractionRef, InteractionRequest, InteractionResponse,
+    EngineRegistry, ForkSessionRequest, InteractionRef, InteractionRequest, InteractionResponse,
     NormalizedRuntimeEvent, RuntimeEventEnvelope, RuntimeEventSink, RuntimeId, RuntimeSession,
     SessionRef, SubscriptionHandle, TurnHandle, TurnRef, TurnRequest,
 };
@@ -252,6 +252,34 @@ impl RuntimeCoordinator {
                 &session_ref,
                 generation,
                 "createSession",
+                started,
+                &result,
+            );
+            result
+        })
+    }
+
+    pub fn fork_session(&self, request: ForkSessionRequest) -> EngineFuture<'_, RuntimeSession> {
+        Box::pin(async move {
+            let started = Instant::now();
+            let observed = request.session.clone();
+            let instance = observed.engine().clone();
+            let result = async {
+                let runtime = self.registry.runtime_for(&observed)?;
+                let attached = runtime.fork_session(request).await?;
+                self.ensure_attached(&attached);
+                Ok(attached)
+            }
+            .await;
+            let (session_ref, generation) = result
+                .as_ref()
+                .map(|runtime| (short_session_ref(&runtime.session), runtime.generation))
+                .unwrap_or_else(|_| (short_session_ref(&observed), self.generation(&observed)));
+            log_runtime_action(
+                &instance,
+                &session_ref,
+                generation,
+                "forkSession",
                 started,
                 &result,
             );

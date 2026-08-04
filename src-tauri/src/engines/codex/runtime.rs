@@ -504,6 +504,27 @@ impl AgentRuntime for CodexRuntime {
         })
     }
 
+    fn fork_session(&self, request: ForkSessionRequest) -> EngineFuture<'_, RuntimeSession> {
+        Box::pin(async move {
+            let params = fork_params(&request);
+            let response = self
+                .supervisor
+                .request("thread/fork", Value::Object(params))?;
+            let thread_id = response
+                .get("thread")
+                .and_then(|thread| string_field(thread, "id"))
+                .ok_or_else(|| {
+                    EngineError::new(
+                        EngineErrorKind::Protocol,
+                        "Codex thread/fork response has no thread id",
+                    )
+                })?;
+            let runtime = self.runtime_session(&thread_id, true)?;
+            self.emit(&thread_id, NormalizedRuntimeEvent::SessionAttached);
+            Ok(runtime)
+        })
+    }
+
     fn attach_session(
         &self,
         session: SessionRef,
@@ -728,12 +749,42 @@ fn copy_options(source: &BTreeMap<String, Value>, target: &mut Map<String, Value
     }
 }
 
+fn fork_params(request: &ForkSessionRequest) -> Map<String, Value> {
+    let mut params = Map::from_iter([(
+        "threadId".into(),
+        Value::String(request.session.native_id().to_string()),
+    )]);
+    if let Some(last_turn_id) = &request.last_turn_id {
+        params.insert("lastTurnId".into(), Value::String(last_turn_id.clone()));
+    }
+    copy_options(
+        &request.options,
+        &mut params,
+        &[
+            "model",
+            "approvalPolicy",
+            "sandbox",
+            "serviceTier",
+            "cwd",
+            "ephemeral",
+        ],
+    );
+    params
+}
+
 fn map_input(input: Vec<InputItem>) -> Vec<Value> {
     input
         .into_iter()
         .map(|item| match item {
             InputItem::Text { text } => json!({ "type": "text", "text": text }),
-            InputItem::Image { data, .. } => json!({ "type": "image", "url": data }),
+            InputItem::Image { media_type, data } => {
+                let url = if data.starts_with("data:") {
+                    data
+                } else {
+                    format!("data:{media_type};base64,{data}")
+                };
+                json!({ "type": "image", "url": url })
+            }
             InputItem::File { path } => {
                 let name = std::path::Path::new(&path)
                     .file_name()
@@ -835,9 +886,31 @@ mod tests {
             InputItem::File {
                 path: "/workspace/readme.md".into(),
             },
+            InputItem::Image {
+                media_type: "image/png".into(),
+                data: "encoded".into(),
+            },
         ]);
         assert_eq!(input[0]["type"], "text");
         assert_eq!(input[1]["type"], "mention");
+        assert_eq!(input[2]["url"], "data:image/png;base64,encoded");
+    }
+
+    #[test]
+    fn maps_fork_request_to_codex_thread_fork_contract() {
+        let session = SessionRef::new(default_instance().unwrap(), "source-thread").unwrap();
+        let params = fork_params(&ForkSessionRequest {
+            session,
+            last_turn_id: Some("turn-2".into()),
+            options: BTreeMap::from([
+                ("model".into(), Value::String("gpt-test".into())),
+                ("ignored".into(), Value::Bool(true)),
+            ]),
+        });
+        assert_eq!(params["threadId"], "source-thread");
+        assert_eq!(params["lastTurnId"], "turn-2");
+        assert_eq!(params["model"], "gpt-test");
+        assert!(!params.contains_key("ignored"));
     }
 
     #[test]

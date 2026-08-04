@@ -16,8 +16,13 @@ import { displayTitle } from '@/types'
 import { fileName } from '@/utils/path'
 import { collectSessionCapabilities } from '@/features'
 import { useSessionMeta } from '@/composables/useSessionMeta'
-import { usesNativeSessionSurface } from '@/engines/integration'
+import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
 import { resolveEnginePresentation } from '@/engines/presentation'
+import { createSession, forkSession } from '@/engines/client'
+import { sameInstance } from '@/engines/identity'
+import { useEngines } from '@/engines/useEngines'
+import { resolveWorkbenchEngineActions } from '@/engines/workbenchActions'
+import { inheritEngineRunConfig } from '@/engines/runConfig'
 import type { SessionSummary } from '@/types'
 
 const { getMeta } = useSessionMeta()
@@ -36,7 +41,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const { projects } = useProjects()
-const { collapseColumn, removeSession, removeRaceLane, draftCwd, engineDraft, findLane, state, openSession, createDraftSession, registerFork, forkSourceOf } = useWorkbench()
+const { collapseColumn, removeSession, removeRaceLane, draftCwd, engineDraft, findLane, state, openSession, createDraftSession, registerEngineDraft, registerFork, forkSourceOf } = useWorkbench()
+const { engines } = useEngines()
 
 provide('columnIndex', computed(() => props.index))
 provide('tabId', computed(() => props.tabId))
@@ -48,6 +54,7 @@ const lane = computed(() => tab.value ? findLane(tab.value, props.column.session
 const isRace = computed(() => !!lane.value)
 
 const rcLoading = ref(false)
+const engineActionLoading = ref(false)
 const sessionSummary = computed<SessionSummary | null>(() => {
   const persisted = projects.value
     .flatMap(project => project.sessions)
@@ -78,6 +85,18 @@ const sessionSummary = computed<SessionSummary | null>(() => {
   }
 })
 const useNativeDetail = computed(() => !sessionSummary.value?.engine || usesNativeSessionSurface(sessionSummary.value.engine))
+const engineDescriptor = computed(() => {
+  const instance = sessionSummary.value?.engine
+  return instance ? engines.value.find(item => sameInstance(item.instance, instance)) ?? null : null
+})
+const runtimeCapabilities = computed(() => engineDescriptor.value?.capabilities.runtime ?? null)
+const workbenchActions = computed(() => resolveWorkbenchEngineActions(
+  runtimeCapabilities.value,
+  useNativeDetail.value,
+))
+const canCreate = computed(() => workbenchActions.value.create)
+const canFork = computed(() => workbenchActions.value.fork)
+const canRace = computed(() => workbenchActions.value.race)
 const enginePresentation = computed(() => resolveEnginePresentation(
   useNativeDetail.value ? 'claude' : sessionSummary.value?.engine?.engineId,
   sessionSummary.value?.engine_name ?? (useNativeDetail.value ? 'Claude Code' : null),
@@ -162,24 +181,76 @@ const title = computed(() => {
   return props.column.sessionId.slice(0, 8)
 })
 
-function onFork() {
-  const session = projects.value.flatMap(p => p.sessions).find(s => s.id === props.column.sessionId)
+async function onFork() {
+  if (engineActionLoading.value) return
+  const session = sessionSummary.value
+    ?? projects.value.flatMap(p => p.sessions).find(s => s.id === props.column.sessionId)
   if (!session?.cwd) return
-  // 懒分叉:只登记意图,落盘由首条消息时 CLI 原生 --fork-session 完成
-  const newSessionId = crypto.randomUUID()
-  registerFork(newSessionId, props.column.sessionId, session.cwd)
-  inheritRunSettings(props.column.sessionId, newSessionId)
-  openSession(newSessionId)
-  notifyTransient(t('workbench.column.forkCreated'))
+  engineActionLoading.value = true
+  try {
+    if (!useNativeDetail.value) {
+      if (!session.reference || !session.project_reference) {
+        notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
+        return
+      }
+      const created = await forkSession(session.reference)
+      const sessionId = sessionUiId(created.session)
+      registerEngineDraft(sessionId, {
+        reference: created.session,
+        project: session.project_reference,
+        engineName: session.engine_name || engineName.value,
+        cwd: session.cwd,
+      })
+      inheritEngineRunConfig(props.column.sessionId, sessionId)
+      notifyTransient(t('workbench.column.forkCreated'))
+      return
+    }
+    // 懒分叉:只登记意图,落盘由首条消息时 CLI 原生 --fork-session 完成
+    const newSessionId = crypto.randomUUID()
+    registerFork(newSessionId, props.column.sessionId, session.cwd)
+    inheritRunSettings(props.column.sessionId, newSessionId)
+    openSession(newSessionId)
+    notifyTransient(t('workbench.column.forkCreated'))
+  } catch (cause) {
+    notifyTransient(t('common.forkSessionFailed'), String(cause))
+  } finally {
+    engineActionLoading.value = false
+  }
 }
 
-function onNewSession() {
-  const session = projects.value.flatMap(p => p.sessions).find(s => s.id === props.column.sessionId)
+async function onNewSession() {
+  if (engineActionLoading.value) return
+  const session = sessionSummary.value
+    ?? projects.value.flatMap(p => p.sessions).find(s => s.id === props.column.sessionId)
   const cwd = session?.cwd || draftCwd(props.column.sessionId)
   if (!cwd) return
-  const newSessionId = createDraftSession(cwd)
-  // 同项目新建延续当前会话的模型选择(渠道/模型/effort/顾问)
-  inheritRunSettings(props.column.sessionId, newSessionId)
+  engineActionLoading.value = true
+  try {
+    if (!useNativeDetail.value) {
+      if (!session?.project_reference) {
+        notifyTransient(t('common.newSessionFailed'), t('common.runtimeUnavailable'))
+        return
+      }
+      const created = await createSession(session.project_reference, cwd)
+      const sessionId = sessionUiId(created.session)
+      registerEngineDraft(sessionId, {
+        reference: created.session,
+        project: session.project_reference,
+        engineName: session.engine_name || engineName.value,
+        cwd,
+      })
+      inheritEngineRunConfig(props.column.sessionId, sessionId)
+      notifyTransient(t('workbench.rail.newSessionReady'), t('workbench.rail.newSessionHint'))
+      return
+    }
+    const newSessionId = createDraftSession(cwd)
+    // 同项目新建延续当前会话的模型选择(渠道/模型/effort/顾问)
+    inheritRunSettings(props.column.sessionId, newSessionId)
+  } catch (cause) {
+    notifyTransient(t('common.newSessionFailed'), String(cause))
+  } finally {
+    engineActionLoading.value = false
+  }
 }
 
 function onCollapse() {
@@ -252,9 +323,11 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
       >
         <span class="i-app-chrome w-3 h-3" />
       </button>
-      <!-- 普通模式:赛马 + 分叉 + 新建 + 收起 + 关闭 -->
-      <template v-if="!isRace && useNativeDetail">
+      <!-- 普通模式:引擎通用动作按 capability 出现；RC/Chrome 仍是 Claude 专属。 -->
+      <template v-if="!isRace">
         <button
+          v-if="canRace"
+          :disabled="engineActionLoading"
           class="icon-btn icon-btn-sm"
           v-tooltip="$t('workbench.race.startRace')"
           @pointerdown.stop
@@ -263,6 +336,8 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
           <span class="i-app-horse w-3 h-3" />
         </button>
         <button
+          v-if="canFork"
+          :disabled="engineActionLoading"
           class="icon-btn icon-btn-sm"
           v-tooltip="$t('workbench.column.fork')"
           @pointerdown.stop
@@ -271,6 +346,8 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
           <span class="i-carbon-branch w-3 h-3" />
         </button>
         <button
+          v-if="canCreate"
+          :disabled="engineActionLoading"
           class="icon-btn icon-btn-sm"
           v-tooltip="$t('workbench.column.newSession')"
           @pointerdown.stop
@@ -278,24 +355,6 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         >
           <span class="i-carbon-add w-3 h-3" />
         </button>
-        <button
-          class="icon-btn icon-btn-sm"
-          v-tooltip="$t('workbench.column.collapseToRail')"
-          @pointerdown.stop
-          @click="onCollapse"
-        >
-          <span class="i-carbon-chevron-left w-3 h-3" />
-        </button>
-        <button
-          class="icon-btn icon-btn-sm icon-btn-danger"
-          v-tooltip="$t('workbench.column.closeExit')"
-          @pointerdown.stop
-          @click="onClose"
-        >
-          <span class="i-carbon-close w-3 h-3" />
-        </button>
-      </template>
-      <template v-else-if="!isRace">
         <button
           class="icon-btn icon-btn-sm"
           v-tooltip="$t('workbench.column.collapseToRail')"

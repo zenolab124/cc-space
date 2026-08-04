@@ -47,6 +47,10 @@ function storeSnapshot(snapshot: RuntimeSnapshot) {
   }
 }
 
+export function engineRuntimeSnapshot(sessionId: string): RuntimeSnapshot | null {
+  return snapshots.value.get(sessionId) ?? null
+}
+
 function tailKind(segment: EngineSegment): EngineRuntimeTailLine['kind'] {
   return segment.kind === 'text' || segment.kind === 'reasoning' ? 'text' : 'tool'
 }

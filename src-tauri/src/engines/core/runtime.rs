@@ -37,6 +37,14 @@ pub struct CreateSessionRequest {
     pub options: BTreeMap<String, Value>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkSessionRequest {
+    pub session: SessionRef,
+    pub last_turn_id: Option<String>,
+    pub options: BTreeMap<String, Value>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachOptions {
@@ -164,6 +172,15 @@ pub type RuntimeEventSink = Arc<dyn Fn(RuntimeEventEnvelope) + Send + Sync>;
 
 pub trait AgentRuntime: Send + Sync {
     fn create_session(&self, request: CreateSessionRequest) -> EngineFuture<'_, RuntimeSession>;
+
+    fn fork_session(&self, _request: ForkSessionRequest) -> EngineFuture<'_, RuntimeSession> {
+        Box::pin(async move {
+            Err(super::EngineError::new(
+                super::EngineErrorKind::Unsupported,
+                "engine runtime does not support session fork",
+            ))
+        })
+    }
 
     fn attach_session(
         &self,

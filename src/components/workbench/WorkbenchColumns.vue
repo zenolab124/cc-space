@@ -8,6 +8,9 @@ import { useProjects } from '@/composables/useProjects'
 import { useNotifications } from '@/composables/useNotifications'
 import { useHorizontalWheelScroll } from '@/composables/useHorizontalWheelScroll'
 import { useColumnResize } from '@/composables/useColumnResize'
+import { forkSession } from '@/engines/client'
+import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
+import { inheritEngineRunConfig } from '@/engines/runConfig'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
 import SortableColumn from './SortableColumn.vue'
 
@@ -19,6 +22,8 @@ const {
   createRaceTab,
   draftCwd,
   registerFork,
+  engineDraft,
+  stageEngineDraft,
   suppressColumnTransition,
 } = useWorkbench()
 const { t } = useI18n()
@@ -30,21 +35,54 @@ function resolveSessionCwd(sessionId: string): string | undefined {
     const s = p.sessions.find(s => s.id === sessionId)
     if (s?.cwd) return s.cwd
   }
-  return draftCwd(sessionId) ?? undefined
+  return draftCwd(sessionId) ?? engineDraft(sessionId)?.cwd ?? undefined
 }
 
-function onStartRace(sessionId: string) {
-  const cwd = resolveSessionCwd(sessionId)
-  if (!cwd) {
-    notifyTransient(t('workbench.race.noCwd'))
-    return
+const raceStarting = new Set<string>()
+
+async function onStartRace(sessionId: string) {
+  if (raceStarting.has(sessionId)) return
+  raceStarting.add(sessionId)
+  try {
+    const session = projects.value
+      .flatMap(project => project.sessions)
+      .find(item => item.id === sessionId)
+    const draft = engineDraft(sessionId)
+    const cwd = resolveSessionCwd(sessionId)
+    if (!cwd) {
+      notifyTransient(t('workbench.race.noCwd'))
+      return
+    }
+    const reference = session?.reference ?? draft?.reference
+    const project = session?.project_reference ?? draft?.project
+    if (reference && !usesNativeSessionSurface(reference.engine)) {
+      if (!project) {
+        notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
+        return
+      }
+      const created = await forkSession(reference)
+      const forkedSessionId = sessionUiId(created.session)
+      stageEngineDraft(forkedSessionId, {
+        reference: created.session,
+        project,
+        engineName: session?.engine_name ?? draft?.engineName ?? reference.engine.engineId,
+        cwd,
+      })
+      inheritEngineRunConfig(sessionId, forkedSessionId)
+      createRaceTab(sessionId, cwd, forkedSessionId)
+      return
+    }
+    const newSessionId = crypto.randomUUID()
+    // 无条件登记分叉意图:源有无历史由 Rust 端按源 jsonl 真值判决(未落盘则退化新建)。
+    // 前端 drafts 的收割是异步滞后的,不能当"源无历史"的判据
+    registerFork(newSessionId, sessionId, cwd)
+    inheritRunSettings(sessionId, newSessionId)
+    createRaceTab(sessionId, cwd, newSessionId)
+  } catch (cause) {
+    notifyTransient(t('common.forkSessionFailed'), String(cause))
+  } finally {
+    raceStarting.delete(sessionId)
   }
-  const newSessionId = crypto.randomUUID()
-  // 无条件登记分叉意图:源有无历史由 Rust 端按源 jsonl 真值判决(未落盘则退化新建)。
-  // 前端 drafts 的收割是异步滞后的,不能当"源无历史"的判据
-  registerFork(newSessionId, sessionId, cwd)
-  inheritRunSettings(sessionId, newSessionId)
-  createRaceTab(sessionId, cwd, newSessionId)
 }
 
 const containerRef = ref<HTMLElement>()

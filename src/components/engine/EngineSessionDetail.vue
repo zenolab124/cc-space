@@ -29,6 +29,7 @@ import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
+import { engineRunConfig, setEngineRunConfig } from '@/engines/runConfig'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -53,6 +54,7 @@ const models = ref<ModelDescriptor[]>([])
 const actions = ref<SessionActions | null>(null)
 const selectedModel = ref<string | null>(null)
 const selectedEffort = ref<string | null>(null)
+const runConfigSyncing = ref(false)
 const asyncPanelOpen = ref(false)
 const menuOpen = ref(false)
 const viewportElement = ref<HTMLElement | null>(null)
@@ -91,6 +93,13 @@ const timelineModel = computed(() => {
     .map(record => record.sourceMeta.model)
     .find(model => typeof model === 'string' && !!model.trim())
   return typeof value === 'string' ? value : props.session.model
+})
+const timelineEffort = computed(() => {
+  const value = [...allRecords.value]
+    .reverse()
+    .map(record => record.sourceMeta.effort)
+    .find(effort => typeof effort === 'string' && !!effort.trim())
+  return typeof value === 'string' ? value : null
 })
 const conversationGroups = computed(() => {
   const groups: Array<{
@@ -260,20 +269,28 @@ async function reload() {
 }
 
 async function ensureAttached() {
-  if (!reference.value || runtimeId.value || attaching.value || actions.value?.resume.available !== true) return
+  if (!reference.value || attaching.value || actions.value?.resume.available !== true) return
   attaching.value = true
   try {
-    const attached = await attachSession(reference.value)
-    runtimeId.value = attached.runtimeId
-    try {
-      models.value = await listModels(reference.value.engine)
-      const defaultModel = models.value.find(model => model.model === timelineModel.value)
-        ?? models.value.find(model => model.isDefault)
-        ?? models.value.find(model => !model.hidden)
-      selectedModel.value = defaultModel?.model ?? null
-      selectedEffort.value = defaultModel?.defaultEffort ?? null
-    } catch (_) {
-      models.value = []
+    if (!runtimeId.value) {
+      const attached = await attachSession(reference.value)
+      runtimeId.value = attached.runtimeId
+    }
+    if (models.value.length === 0) {
+      try {
+        models.value = await listModels(reference.value.engine)
+        const stored = engineRunConfig(props.session.id)
+        const defaultModel = models.value.find(model => model.model === stored?.model)
+          ?? models.value.find(model => model.model === timelineModel.value)
+          ?? models.value.find(model => model.isDefault)
+          ?? models.value.find(model => !model.hidden)
+        selectedModel.value = defaultModel?.model ?? null
+        selectedEffort.value = defaultModel?.efforts.some(item => item.id === stored?.effort)
+          ? stored!.effort
+          : timelineEffort.value ?? defaultModel?.defaultEffort ?? null
+      } catch (_) {
+        models.value = []
+      }
     }
   } catch (cause) {
     error.value = String(cause)
@@ -405,14 +422,26 @@ function onInputKeydown(event: KeyboardEvent) {
 }
 
 watch(() => props.session.id, async () => {
-  records.value = []
-  liveRecords.value = []
-  snapshot.value = null
-  runtimeId.value = null
-  asyncPanelOpen.value = false
-  menuOpen.value = false
-  await reload()
-  if (interactive.value) await ensureAttached()
+  runConfigSyncing.value = true
+  try {
+    records.value = []
+    liveRecords.value = []
+    snapshot.value = null
+    runtimeId.value = null
+    models.value = []
+    selectedModel.value = null
+    selectedEffort.value = null
+    asyncPanelOpen.value = false
+    menuOpen.value = false
+    await reload()
+    if (interactive.value) await ensureAttached()
+  } finally {
+    runConfigSyncing.value = false
+    setEngineRunConfig(props.session.id, {
+      model: selectedModel.value,
+      effort: selectedEffort.value,
+    })
+  }
 })
 
 watch(() => asyncTasks.value.length, length => {
@@ -426,7 +455,14 @@ watch(() => allRecords.value.length, async () => {
 })
 
 watch(selectedModel, (model) => {
-  selectedEffort.value = models.value.find(item => item.model === model)?.defaultEffort ?? null
+  const descriptor = models.value.find(item => item.model === model)
+  if (descriptor?.efforts.some(item => item.id === selectedEffort.value)) return
+  selectedEffort.value = descriptor?.defaultEffort ?? null
+})
+
+watch([selectedModel, selectedEffort], ([model, effort]) => {
+  if (runConfigSyncing.value) return
+  setEngineRunConfig(props.session.id, { model, effort })
 })
 
 onMounted(async () => {

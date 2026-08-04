@@ -6,6 +6,7 @@ import { useRunners } from './useRunners'
 import { readMigratedStorage } from '../utils/storageMigrate'
 import { resolveSessionRef } from '@/engines/directory'
 import type { ProjectRef, SessionRef } from '@/engines/types'
+import { clearEngineRunConfig } from '@/engines/runConfig'
 
 /**
  * 工作台状态模型（v2.1.0 FR-001/002/004 + NFR-002）
@@ -407,7 +408,7 @@ function reorderSessions(tabId: string, fromIndex: number, toIndex: number) {
  * 落盘由首条消息时 CLI 原生 --fork-session 完成。
  */
 function createRaceTab(sourceSessionId: string, cwd: string, forkedSessionId: string): WorkbenchTab {
-  removeSession(sourceSessionId)
+  detachSessionFromTabs(sourceSessionId)
 
   state.value.tabSeq += 1
   const tab = createTabObject(state.value.tabSeq)
@@ -478,30 +479,28 @@ function removeRaceLane(tabId: string, sessionId: string) {
   if (tab.race.lanes.length <= 1) {
     delete tab.race
   }
+  teardownSession(sessionId)
 }
 
 /** 重置所有赛道：保留赛道数、cwd 和每条赛道的设置（模型/强度/渠道），只清空会话 */
-function resetRaceLanes(tabId: string) {
+function resetRaceLanes(tabId: string, replacementSessionIds?: string[]) {
   const tab = state.value.tabs.find(t => t.id === tabId)
   if (!tab?.race) return
   const cwd = tab.race.cwd
   const oldLanes = tab.race.lanes
+  if (replacementSessionIds && replacementSessionIds.length !== oldLanes.length) return
 
   const oldSettings: Array<{ sid: string; raw: string | null }> = oldLanes.map(lane => ({
     sid: lane.sessionId,
     raw: localStorage.getItem(`monet:session-settings:${lane.sessionId}`),
   }))
 
-  for (const lane of oldLanes) {
-    teardownSession(lane.sessionId)
-  }
-
   tab.sessionIds = []
   tab.columns = []
   const lanes: RaceLane[] = []
   for (let i = 0; i < oldLanes.length; i++) {
-    const sid = crypto.randomUUID()
-    state.value.drafts[sid] = cwd
+    const sid = replacementSessionIds?.[i] ?? crypto.randomUUID()
+    if (!replacementSessionIds) state.value.drafts[sid] = cwd
     tab.sessionIds.push(sid)
     state.value.openSeq += 1
     tab.columns.push({
@@ -521,6 +520,7 @@ function resetRaceLanes(tabId: string) {
   }
   tab.columnSizes = equalSizes(lanes.length)
   tab.race = { cwd, lanes }
+  for (const lane of oldLanes) teardownSession(lane.sessionId)
 }
 
 function findLane(tab: WorkbenchTab, sessionId: string): RaceLane | null {
@@ -565,6 +565,11 @@ function createDraftSession(cwd: string): string {
 function registerEngineDraft(sessionId: string, draft: EngineDraft) {
   state.value.engineDrafts[sessionId] = draft
   openSession(sessionId)
+}
+
+/** 登记通用引擎草稿但不改变 Tab；赛马在一次状态变更里自行接管列归属。 */
+function stageEngineDraft(sessionId: string, draft: EngineDraft) {
+  state.value.engineDrafts[sessionId] = draft
 }
 
 function engineDraft(sessionId: string): EngineDraft | null {
@@ -682,7 +687,7 @@ function collapseColumn(tabId: string, sessionId: string) {
 }
 
 /** 退出工作台(左列 × / 列头 ×):从归属 tab 移除,展开列一并收回 */
-function removeSession(sessionId: string) {
+function detachSessionFromTabs(sessionId: string) {
   for (const tab of state.value.tabs) {
     const i = tab.sessionIds.indexOf(sessionId)
     if (i >= 0) {
@@ -691,6 +696,10 @@ function removeSession(sessionId: string) {
       if (ci >= 0) reclaimColumnWidth(tab, ci)
     }
   }
+}
+
+function removeSession(sessionId: string) {
+  detachSessionFromTabs(sessionId)
   teardownSession(sessionId)
 }
 
@@ -744,6 +753,7 @@ function teardownSession(sessionId: string) {
     // 会话彻底离开工作台 = 关闭语义:其挂载的运行命令一并停止(切走/收起不触发)
     useRunners().stopAllForSession(sessionId).catch(() => {})
     evictSessionTransients(sessionId)
+    clearEngineRunConfig(sessionId)
     delete state.value.engineDrafts[sessionId]
   }
 }
@@ -782,6 +792,7 @@ export function useWorkbench() {
     openSession,
     createDraftSession,
     registerEngineDraft,
+    stageEngineDraft,
     engineDraft,
     draftCwd,
     registerFork,
