@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { isWindows } from '@/composables/usePlatform'
 
@@ -21,6 +22,14 @@ interface UpgradeResult {
   newVersion: string | null
   command: string
   outputTail: string
+  binaryPath?: string | null
+}
+
+type InstallPhase = 'installing' | 'verifying'
+
+interface InstallProgress {
+  engine: 'claude' | 'codex'
+  phase: InstallPhase | 'completed' | 'failed'
 }
 
 interface DiagEntry {
@@ -135,20 +144,31 @@ async function copyCmd(cmd: string) {
 }
 
 const installing = ref(false)
+const installPhase = ref<InstallPhase | null>(null)
 const installMsg = ref<{ kind: 'ok' | 'err'; text: string } | null>(null)
 const installTail = ref('')
 
 async function runInstall() {
   installing.value = true
+  installPhase.value = 'installing'
   installMsg.value = null
   installTail.value = ''
   try {
     const r = await invoke<UpgradeResult>('claude_env_install')
     if (r.success) {
-      installMsg.value = { kind: 'ok', text: t('settings.claudeInstall.installOk', { version: r.newVersion ?? '?' }) }
+      installPhase.value = 'verifying'
+      if (r.newVersion && r.binaryPath) {
+        info.value = {
+          installedVersion: r.newVersion,
+          latestVersion: info.value?.latestVersion ?? null,
+          updateAvailable: false,
+          binaryPath: r.binaryPath,
+          installMethod: 'official',
+        }
+      }
       // 刷新探测状态与版本信息，卡片自动切回已安装形态
       await loadBin()
-      await check()
+      installMsg.value = { kind: 'ok', text: t('settings.claudeInstall.installOk', { version: r.newVersion ?? '?' }) }
     } else {
       installMsg.value = { kind: 'err', text: t('settings.claudeInstall.installFail') }
       installTail.value = r.outputTail
@@ -157,6 +177,7 @@ async function runInstall() {
     installMsg.value = { kind: 'err', text: String(e) }
   } finally {
     installing.value = false
+    installPhase.value = null
   }
 }
 
@@ -205,9 +226,21 @@ async function redetect() {
 
 // --- 初始化 ---
 
-onMounted(() => {
+let unlistenInstallProgress: (() => void) | null = null
+
+onMounted(async () => {
   check()
   loadBin()
+  unlistenInstallProgress = await listen<InstallProgress>('cli-install-progress', (event) => {
+    if (event.payload.engine !== 'claude') return
+    if (event.payload.phase === 'installing' || event.payload.phase === 'verifying') {
+      installPhase.value = event.payload.phase
+    }
+  })
+})
+
+onUnmounted(() => {
+  unlistenInstallProgress?.()
 })
 </script>
 
@@ -287,10 +320,15 @@ onMounted(() => {
       <div class="mt-1.5 flex items-center gap-2">
         <button class="env-btn primary" :disabled="installing" @click="runInstall">
           <span v-if="installing" class="i-carbon-circle-dash w-3 h-3 animate-spin" />
-          {{ installing ? t('settings.claudeInstall.installing') : t('settings.claudeInstall.installNow') }}
+          {{ installing
+            ? t(installPhase === 'verifying' ? 'settings.claudeInstall.verifying' : 'settings.claudeInstall.installing')
+            : t('settings.claudeInstall.installNow') }}
         </button>
         <code class="env-path flex-1 !mt-0 truncate text-muted-foreground" :title="installOptions[0].cmd">{{ installOptions[0].cmd }}</code>
       </div>
+      <p v-if="installing" class="text-[10px] text-muted-foreground mt-1">
+        {{ t(installPhase === 'verifying' ? 'settings.claudeInstall.verifyingHint' : 'settings.claudeInstall.installingHint') }}
+      </p>
       <p v-if="installMsg" :class="['text-[10.5px] mt-1', installMsg.kind === 'ok' ? 'text-primary' : 'text-destructive']">
         {{ installMsg.text }}
       </p>

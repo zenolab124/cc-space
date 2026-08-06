@@ -15,6 +15,7 @@ import {
   refreshCliEnvTarget,
   type ChannelInfo,
   type CcSwitchProvider,
+  type SessionEngineId,
 } from '@/composables/useChannels'
 import { useUiState } from '@/composables/useUiState'
 import { usePlatform } from '@/composables/usePlatform'
@@ -30,19 +31,23 @@ import TrayQuotaSelect from '@/components/settings/TrayQuotaSelect.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useZoom } from '@/composables/useZoom'
+import { useTheme } from '@/composables/useTheme'
 import { useHtmlVisual } from '@/features'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
 import { TOOL_DISPLAY_MODES, useToolDisplayMode, type ToolDisplayMode } from '@/composables/useToolDisplay'
+import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { useUpdater } from '@/composables/useUpdater'
 import { MODELS } from '@/utils/modelContext'
 import EngineCenter from '@/components/settings/EngineCenter.vue'
+import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
+import type { EffortSetting } from '@/composables/useSessionSettings'
 
 const { t } = useI18n()
 const {
-  channels, defaultSessionChannel, defaultAgentChannel, defaultAgentModel,
+  channels, defaultSessionChannels, defaultAgentChannel, defaultAgentModel, defaultAgentEffort,
   probeResults, probing,
   revealedTokens, revealToken, hideToken, agentPreferences,
-  deleteChannel, setChannelEnabled, setDefaultSessionChannel, setDefaultAgentModel,
+    deleteChannel, setChannelEnabled, setDefaultSessionChannel, setDefaultAgentModel, setDefaultAgentEffort,
   setAgentFeatureModel, revealChannelsDir,
   probeChannel, probeAllChannels, loadAgentPreferences,
   scanCcSwitch, importCcSwitch,
@@ -57,9 +62,11 @@ const {
 
 const { minColumnWidth, setMinColumnWidth } = useWorkbench()
 const { zoomLevel, setZoom, MIN_ZOOM, MAX_ZOOM, STEP } = useZoom()
+const { activeTheme, activeThemeLabel } = useTheme()
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
 const { toolDisplayMode, setToolDisplayMode } = useToolDisplayMode()
+const { stickyUserPromptEnabled, setStickyUserPrompt } = useStickyUserPrompt()
 const { status: updateStatus, newVersion: updateVersion, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
 loadChannel()
 
@@ -245,7 +252,7 @@ const agentLogsStats = computed(() => {
 
 type Tab = 'appearance' | 'channels' | 'agent' | 'engines' | 'permissions' | 'extensions' | 'lab' | 'system'
 const { isMac } = usePlatform()
-const activeTab = ref<Tab>('appearance')
+const activeTab = ref<Tab>('system')
 
 const editing = ref<'new' | ChannelInfo | null>(null)
 /** official 渠道轻量编辑(仅默认模型/思考强度两字段) */
@@ -455,6 +462,7 @@ onMounted(() => { refreshChannels(); refreshCliEnvTarget(); loadAgentToggles(); 
 
 watch(activeSection, (s) => {
   if (s === 'settings') {
+    activeTab.value = 'system'
     refreshChannels().then(() => probeAllChannels())
   }
 })
@@ -474,9 +482,19 @@ async function onDelete(ch: ChannelInfo) {
   }
 }
 
-const sessionChannels = () => channels.value.filter(c => c.scope !== 'agent-only' || channelSupportsEngine(c, 'codex'))
 const supportsClaude = (channel: ChannelInfo) => channelSupportsEngine(channel, 'claude-code')
 const supportsCodex = (channel: ChannelInfo) => channelSupportsEngine(channel, 'codex')
+const sessionChannelsFor = (engine: SessionEngineId) => channels.value.filter(c =>
+  c.scope !== 'agent-only' && channelSupportsEngine(c, engine),
+)
+
+async function onSessionDefaultChange(engine: SessionEngineId, id: string) {
+  try {
+    await setDefaultSessionChannel(engine, id === OFFICIAL_CHANNEL_ID ? null : id)
+  } catch (e) {
+    notifyTransient(t('settings.setDefaultFailed'), String(e))
+  }
+}
 
 // 官方渠道 Agent 可选模型:从 modelContext 的 MODELS 派生(单源,消灭第二份清单)。
 // 取具体版本 id 并剥 [1m] 后缀(Agent 用的是 API 模型名,1M 由 CLI/请求侧处理),去重。
@@ -486,27 +504,14 @@ const OFFICIAL_MODELS = [
 
 const agentChannelId = ref(defaultAgentChannel.value ?? OFFICIAL_CHANNEL_ID)
 watch(defaultAgentChannel, (v) => { agentChannelId.value = v ?? OFFICIAL_CHANNEL_ID })
+const agentEffort = ref<EffortSetting>((defaultAgentEffort.value as EffortSetting) ?? 'low')
+watch(defaultAgentEffort, (v) => { agentEffort.value = (v as EffortSetting) ?? 'low' })
 
-const hasAppleFm = computed(() => channels.value.some(c => c.id === APPLE_FM_CHANNEL_ID))
-const agentChannelCards = computed(() =>
-  // 已禁用的全功能渠道在左栏管理；Agent-only 渠道必须保留卡片，才能重新启用。
-  channels.value.filter(c =>
-    c.id !== OFFICIAL_CHANNEL_ID
-    && c.id !== OFFICIAL_DIRECT_CHANNEL_ID
-    && c.id !== APPLE_FM_CHANNEL_ID
-    && supportsClaude(c)
-    && (c.enabled || c.scope === 'agent-only'),
-  )
-)
-
-/** Agent 卡片的实际生效模型标签:与 Rust 侧 fallback_agent_model 同序——
- *  显式 agentModel > 渠道默认模型 > 清单中含 haiku 者 > 清单首项 > 未配置 */
-function agentModelTag(ch: ChannelInfo): string {
-  if (ch.agentModel) return ch.agentModel
-  if (ch.defaultModel) return ch.defaultModel
-  const models = ch.availableModels
-  return models.find(m => m.toLowerCase().includes('haiku')) ?? models[0] ?? '—'
-}
+const agentDefaultConfig = computed(() => ({
+  channelId: agentChannelId.value === OFFICIAL_CHANNEL_ID ? null : agentChannelId.value,
+  modelId: defaultAgentModel.value,
+  effort: agentEffort.value,
+}))
 
 /** 内置渠道由运行能力决定，不提供启停或删除。 */
 const isBuiltinChannel = (id: string) =>
@@ -516,29 +521,37 @@ const builtinChannelName = (ch: ChannelInfo) =>
   ch.id === OFFICIAL_CHANNEL_ID ? t('channel.official')
   : ch.id === OFFICIAL_DIRECT_CHANNEL_ID ? t('channel.officialDirect')
   : ch.name
-const isAppleFmAgent = computed(() => agentChannelId.value === APPLE_FM_CHANNEL_ID)
-
-function toggleAppleFmAgent() {
-  if (isAppleFmAgent.value) {
-    onAgentChannelChange(OFFICIAL_CHANNEL_ID)
-  } else {
-    agentChannelId.value = APPLE_FM_CHANNEL_ID
-    setDefaultAgentModel(APPLE_FM_CHANNEL_ID, 'system')
+async function onAgentChannelChange(selectedId: string | null) {
+  const id = selectedId ?? OFFICIAL_CHANNEL_ID
+  agentChannelId.value = id
+  const model = id === OFFICIAL_DIRECT_CHANNEL_ID
+    ? 'haiku'
+    : id === OFFICIAL_CHANNEL_ID
+      ? null
+      : channels.value.find(ch => ch.id === id)?.agentModel ?? null
+  try {
+    await setDefaultAgentModel(id, model)
+  } catch (e) {
+    notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
 }
 
-function onAgentChannelChange(id: string) {
-  agentChannelId.value = id
-  if (id === OFFICIAL_CHANNEL_ID) {
-    setDefaultAgentModel(null, null)
-    return
+async function onAgentModelChange(model: string | null) {
+  try {
+    await setDefaultAgentModel(agentChannelId.value, model)
+  } catch (e) {
+    notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
-  if (id === OFFICIAL_DIRECT_CHANNEL_ID) {
-    setDefaultAgentModel(id, 'haiku')
-    return
+}
+
+async function onAgentEffortChange(effort: EffortSetting) {
+  const value = effort ?? 'low'
+  agentEffort.value = value
+  try {
+    await setDefaultAgentEffort(value)
+  } catch (e) {
+    notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
-  const channel = channels.value.find(ch => ch.id === id)
-  setDefaultAgentModel(id, channel?.agentModel ?? null)
 }
 
 const agentModelOptions = () => {
@@ -578,8 +591,15 @@ function onSaved() {
       <h1 class="side-title">
         <span class="i-carbon-settings w-4 h-4 opacity-70" />{{ $t('settings.title') }}
       </h1>
+      <button :class="['side-item', { active: activeTab === 'system' }]" @click="activeTab = 'system'">
+        <span class="i-carbon-settings-adjust w-3.5 h-3.5" />{{ $t('settings.system') }}
+        <span v-if="updateStatus === 'available'" class="side-dot" />
+      </button>
       <button :class="['side-item', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">
         <span class="i-carbon-paint-brush w-3.5 h-3.5" />{{ $t('settings.appearance') }}
+      </button>
+      <button :class="['side-item', { active: activeTab === 'engines' }]" @click="activeTab = 'engines'">
+        <span class="i-carbon-ibm-watson-discovery w-3.5 h-3.5" />{{ $t('engineSettings.nav') }}
       </button>
       <button :class="['side-item', { active: activeTab === 'channels' }]" @click="activeTab = 'channels'">
         <span class="i-carbon-connect w-3.5 h-3.5" />{{ $t('settings.channels') }}
@@ -590,18 +610,8 @@ function onSaved() {
       <button :class="['side-item', { active: activeTab === 'extensions' }]" @click="activeTab = 'extensions'">
         <span class="i-carbon-plug w-3.5 h-3.5" />{{ $t('settings.extensions') }}
       </button>
-      <button :class="['side-item', { active: activeTab === 'engines' }]" @click="activeTab = 'engines'">
-        <span class="i-carbon-ibm-watson-discovery w-3.5 h-3.5" />{{ $t('engineSettings.nav') }}
-      </button>
       <button v-if="isMac" :class="['side-item', { active: activeTab === 'permissions' }]" @click="activeTab = 'permissions'">
         <span class="i-carbon-security w-3.5 h-3.5" />{{ $t('settings.permissionsNav') }}
-      </button>
-      <button :class="['side-item', { active: activeTab === 'lab' }]" @click="activeTab = 'lab'">
-        <span class="i-carbon-chemistry w-3.5 h-3.5" />{{ $t('settings.lab') }}
-      </button>
-      <button :class="['side-item', { active: activeTab === 'system' }]" @click="activeTab = 'system'">
-        <span class="i-carbon-settings-adjust w-3.5 h-3.5" />{{ $t('settings.system') }}
-        <span v-if="updateStatus === 'available'" class="side-dot" />
       </button>
     </nav>
 
@@ -610,322 +620,353 @@ function onSaved() {
       <div class="settings-body">
 
         <!-- ====== 外观 ====== -->
-        <section v-show="activeTab === 'appearance'">
-          <h2 class="section-title">{{ $t('settings.appearance') }}</h2>
-          <div class="settings-grid">
-            <div class="setting-cell">
-              <div class="setting-label">{{ $t('settings.themeLight') }}</div>
-              <select class="form-select w-full" disabled>
-                <option>Paper</option>
-              </select>
+        <section v-show="activeTab === 'appearance'" class="appearance-page">
+          <header class="appearance-hero">
+            <div class="appearance-hero-copy">
+              <div class="appearance-eyebrow">{{ $t('settings.appearanceKicker') }}</div>
+              <h2 class="appearance-title">{{ $t('settings.appearance') }}</h2>
+              <p class="appearance-intro">{{ $t('settings.appearanceIntro') }}</p>
             </div>
-            <div class="setting-cell">
-              <div class="setting-label">{{ $t('settings.themeDark') }}</div>
-              <select class="form-select w-full" disabled>
-                <option>Ink</option>
-              </select>
+            <div class="appearance-current" :title="$t('settings.appearanceCurrentHint')">
+              <span :class="activeTheme.isDark ? 'i-carbon-moon' : 'i-carbon-sun'" class="appearance-current-icon" />
+              <span>
+                <span class="appearance-current-label">{{ activeThemeLabel }}</span>
+              </span>
             </div>
-            <div class="setting-cell">
-              <div class="setting-label">{{ $t('settings.language') }}</div>
-              <select
-                :value="locale"
-                class="form-select w-full"
-                @change="switchLocale(($event.target as HTMLSelectElement).value)"
-              >
-                <option
-                  v-for="(meta, code) in availableLocales"
-                  :key="code"
-                  :value="code"
-                >
-                  {{ meta.nativeLabel }}
-                </option>
-              </select>
-              <!-- AI 翻译 -->
-              <div class="translate-zone">
-                <div
-                  v-for="(meta, code) in availableLocales"
-                  :key="code"
-                  class="flex items-center gap-2 text-xs"
-                >
-                  <template v-if="!isBuiltin(String(code))">
-                    <span class="font-medium">{{ meta.nativeLabel }}</span>
-                    <span class="text-muted-foreground">({{ code }})</span>
-                    <button
-                      class="ml-auto p-0.5 text-muted-foreground hover:text-destructive transition-colors"
-                      v-tooltip="$t('common.delete')"
-                      @click="deleteLocale(String(code))"
-                    >
-                      <span class="i-carbon-close w-3 h-3" />
-                    </button>
-                  </template>
+          </header>
+
+          <div class="appearance-layout">
+            <section class="appearance-card appearance-theme-card">
+              <header class="appearance-card-header">
+                <div class="appearance-card-icon"><span class="i-carbon-color-palette" /></div>
+                <div>
+                  <h3>{{ $t('settings.appearanceThemeGroup') }}</h3>
+                  <p>{{ $t('settings.appearanceThemeGroupHint') }}</p>
                 </div>
-                <button
-                  v-if="!showTranslateForm"
-                  class="text-xs text-primary hover:underline"
-                  @click="showTranslateForm = true"
+              </header>
+              <div class="appearance-theme-grid">
+                <div class="appearance-field">
+                  <div class="appearance-field-heading">
+                    <span class="setting-label">{{ $t('settings.themeLight') }}</span>
+                    <span class="appearance-field-note">{{ $t('settings.themeLightHint') }}</span>
+                  </div>
+                  <div class="theme-value">
+                    <span class="i-carbon-sun theme-option-icon" />
+                    <span class="theme-option-copy">{{ $t('theme.paper') }}</span>
+                  </div>
+                </div>
+                <div class="appearance-field">
+                  <div class="appearance-field-heading">
+                    <span class="setting-label">{{ $t('settings.themeDark') }}</span>
+                    <span class="appearance-field-note">{{ $t('settings.themeDarkHint') }}</span>
+                  </div>
+                  <div class="theme-value">
+                    <span class="i-carbon-moon theme-option-icon" />
+                    <span class="theme-option-copy">{{ $t('theme.ink') }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="appearance-card appearance-language-card">
+              <header class="appearance-card-header">
+                <div class="appearance-card-icon"><span class="i-carbon-language" /></div>
+                <div>
+                  <h3>{{ $t('settings.appearanceLanguageGroup') }}</h3>
+                  <p>{{ $t('settings.appearanceLanguageGroupHint') }}</p>
+                </div>
+              </header>
+              <div class="appearance-language-control">
+                <label class="setting-label" for="appearance-language">{{ $t('settings.language') }}</label>
+                <select
+                  id="appearance-language"
+                  :value="locale"
+                  class="form-select"
+                  @change="switchLocale(($event.target as HTMLSelectElement).value)"
                 >
-                  {{ $t('settings.addLanguage') }}
-                </button>
-                <div v-if="showTranslateForm" class="translate-form">
-                  <div class="flex gap-2">
+                  <option v-for="(meta, code) in availableLocales" :key="code" :value="code">
+                    {{ meta.nativeLabel }}
+                  </option>
+                </select>
+                <div class="appearance-language-footer">
+                  <span class="setting-hint">{{ $t('settings.languageHint') }}</span>
+                  <button
+                    v-if="!showTranslateForm"
+                    type="button"
+                    class="appearance-link-button"
+                    @click="showTranslateForm = true"
+                  >
+                    <span class="i-carbon-add-alt" />{{ $t('settings.addLanguage') }}
+                  </button>
+                </div>
+                <div v-if="!showTranslateForm" class="appearance-custom-language-list">
+                  <div v-for="(meta, code) in availableLocales" :key="`custom-${code}`">
+                    <template v-if="!isBuiltin(String(code))">
+                      <span>{{ meta.nativeLabel }}</span>
+                      <span class="appearance-custom-language-code">{{ code }}</span>
+                      <button
+                        type="button"
+                        class="appearance-delete-language"
+                        v-tooltip="$t('common.delete')"
+                        @click="deleteLocale(String(code))"
+                      >
+                        <span class="i-carbon-trash-can" />
+                      </button>
+                    </template>
+                  </div>
+                </div>
+                <div v-if="showTranslateForm" class="appearance-translate-form">
+                  <div class="appearance-translate-input-row">
                     <input
                       v-model="customLangInput"
-                      class="form-input flex-1"
+                      class="form-input"
                       :placeholder="$t('settings.customLangPlaceholder')"
                       :disabled="translating"
                       @keydown.enter="onCustomTranslate"
                     />
                     <button
-                      class="px-2 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper disabled:opacity-50 transition"
+                      type="button"
+                      class="appearance-primary-button"
                       :disabled="translating || !customLangInput.trim()"
                       @click="onCustomTranslate"
                     >
                       {{ $t('settings.startTranslate') }}
                     </button>
                     <button
-                      class="px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      type="button"
+                      class="appearance-cancel-button"
                       :disabled="translating"
                       @click="showTranslateForm = false"
                     >
                       {{ $t('common.cancel') }}
                     </button>
                   </div>
-                  <p v-if="translating" class="text-[11px] text-muted-foreground mt-1.5">
-                    <span class="i-carbon-rotate inline-block w-3 h-3 animate-spin mr-1" />{{ $t('settings.translating') }}
+                  <p v-if="translating" class="appearance-translate-status">
+                    <span class="i-carbon-rotate animate-spin" />{{ $t('settings.translating') }}
                   </p>
-                  <p v-if="translateError" class="text-[11px] text-destructive mt-1">{{ translateError }}</p>
+                  <p v-if="translateError" class="appearance-translate-error">{{ translateError }}</p>
                 </div>
               </div>
-            </div>
-            <div class="setting-cell setting-cell-wide">
-              <div class="setting-label">{{ $t('settings.toolDisplayMode') }}</div>
-              <div class="tool-display-options" role="radiogroup" :aria-label="$t('settings.toolDisplayMode')">
+            </section>
+
+            <section class="appearance-card appearance-card-wide">
+              <header class="appearance-card-header">
+                <div class="appearance-card-icon"><span class="i-carbon-book" /></div>
+                <div>
+                  <h3>{{ $t('settings.appearanceReadingGroup') }}</h3>
+                  <p>{{ $t('settings.appearanceReadingGroupHint') }}</p>
+                </div>
+              </header>
+              <div class="appearance-reading-grid">
+                <div class="appearance-reading-block">
+                  <div class="appearance-field-heading">
+                    <span class="setting-label">{{ $t('settings.toolDisplayMode') }}</span>
+                    <span class="appearance-field-note">{{ $t('settings.toolDisplayModeHint') }}</span>
+                  </div>
+                  <div class="tool-display-options" role="radiogroup" :aria-label="$t('settings.toolDisplayMode')">
+                    <button
+                      v-for="mode in TOOL_DISPLAY_MODES"
+                      :key="mode"
+                      type="button"
+                      class="tool-display-option"
+                      :class="{ active: toolDisplayMode === mode }"
+                      role="radio"
+                      :aria-checked="toolDisplayMode === mode"
+                      @click="setToolDisplayMode(mode as ToolDisplayMode)"
+                    >
+                      <span class="tool-display-option-title">{{ $t(`settings.toolDisplayMode_${mode}`) }}</span>
+                      <span class="tool-display-option-hint">{{ $t(`settings.toolDisplayMode_${mode}Hint`) }}</span>
+                    </button>
+                  </div>
+                </div>
                 <button
-                  v-for="mode in TOOL_DISPLAY_MODES"
-                  :key="mode"
                   type="button"
-                  class="tool-display-option"
-                  :class="{ active: toolDisplayMode === mode }"
-                  role="radio"
-                  :aria-checked="toolDisplayMode === mode"
-                  @click="setToolDisplayMode(mode as ToolDisplayMode)"
+                  class="appearance-setting-row"
+                  :aria-pressed="stickyUserPromptEnabled"
+                  @click="setStickyUserPrompt(!stickyUserPromptEnabled)"
                 >
-                  <span class="tool-display-option-title">{{ $t(`settings.toolDisplayMode_${mode}`) }}</span>
-                  <span class="tool-display-option-hint">{{ $t(`settings.toolDisplayMode_${mode}Hint`) }}</span>
+                  <span class="appearance-setting-row-copy">
+                    <span class="setting-label">{{ $t('settings.stickyUserPrompt') }}</span>
+                    <span class="setting-hint">{{ $t('settings.stickyUserPromptHint') }}</span>
+                  </span>
+                  <span class="appearance-setting-row-control">
+                    <span class="appearance-toggle-status">{{ $t(stickyUserPromptEnabled ? 'settings.stickyUserPromptOn' : 'settings.stickyUserPromptOff') }}</span>
+                    <span class="form-toggle" :class="{ on: stickyUserPromptEnabled }" aria-hidden="true">
+                      <span class="form-toggle-knob" />
+                    </span>
+                  </span>
                 </button>
               </div>
-              <div class="setting-hint">{{ $t('settings.toolDisplayModeHint') }}</div>
-            </div>
-            <div class="setting-cell">
-              <div class="setting-label">{{ $t('settings.zoomLevel') }}</div>
-              <div class="flex items-center gap-2.5">
-                <input
-                  type="range"
-                  :value="zoomLevel"
-                  :min="MIN_ZOOM"
-                  :max="MAX_ZOOM"
-                  :step="STEP"
-                  class="flex-1 accent-primary"
-                  @input="setZoom(Number(($event.target as HTMLInputElement).value))"
-                />
-                <span class="text-xs tabular-nums text-muted-foreground w-9 text-right">{{ Math.round(zoomLevel * 100) }}%</span>
+            </section>
+
+            <section class="appearance-card appearance-card-wide">
+              <header class="appearance-card-header">
+                <div class="appearance-card-icon"><span class="i-carbon-fit-to-screen" /></div>
+                <div>
+                  <h3>{{ $t('settings.appearanceLayoutGroup') }}</h3>
+                  <p>{{ $t('settings.appearanceLayoutGroupHint') }}</p>
+                </div>
+              </header>
+              <div class="appearance-layout-grid">
+                <div class="appearance-size-field">
+                  <div class="appearance-field-heading">
+                    <span class="setting-label">{{ $t('settings.zoomLevel') }}</span>
+                    <output class="appearance-value">{{ Math.round(zoomLevel * 100) }}%</output>
+                  </div>
+                  <div class="appearance-slider-row">
+                    <input
+                      type="range"
+                      :value="zoomLevel"
+                      :min="MIN_ZOOM"
+                      :max="MAX_ZOOM"
+                      :step="STEP"
+                      class="appearance-slider"
+                      :aria-label="$t('settings.zoomLevel')"
+                      @input="setZoom(Number(($event.target as HTMLInputElement).value))"
+                    />
+                  </div>
+                  <div class="setting-hint">{{ $t('settings.zoomLevelHint') }}</div>
+                </div>
+                <div class="appearance-size-field">
+                  <div class="appearance-field-heading">
+                    <span class="setting-label">{{ $t('settings.minColumnWidth') }}</span>
+                    <output class="appearance-value">{{ minColumnWidth }} px</output>
+                  </div>
+                  <div class="appearance-number-row">
+                    <input
+                      type="number"
+                      :value="minColumnWidth"
+                      min="200"
+                      step="10"
+                      class="form-input appearance-number-input tabular-nums"
+                      :aria-label="$t('settings.minColumnWidth')"
+                      @change="setMinColumnWidth(Number(($event.target as HTMLInputElement).value))"
+                    />
+                    <span class="appearance-number-unit">px</span>
+                  </div>
+                  <div class="setting-hint">{{ $t('settings.minColumnWidthHint') }}</div>
+                </div>
               </div>
-              <div class="setting-hint">{{ $t('settings.zoomLevelHint') }}</div>
-            </div>
-            <div class="setting-cell">
-              <div class="setting-label">{{ $t('settings.minColumnWidth') }}</div>
-              <div class="flex items-center gap-2">
-                <input
-                  type="number"
-                  :value="minColumnWidth"
-                  min="200"
-                  step="10"
-                  class="form-input w-24 tabular-nums"
-                  @change="setMinColumnWidth(Number(($event.target as HTMLInputElement).value))"
-                />
-                <span class="text-[11px] text-muted-foreground">px</span>
-              </div>
-              <div class="setting-hint">{{ $t('settings.minColumnWidthHint') }}</div>
-            </div>
+            </section>
           </div>
         </section>
 
         <!-- ====== 渠道 ====== -->
-        <section v-show="activeTab === 'channels'">
-          <h2 class="section-title">{{ $t('settings.channels') }}</h2>
-          <p class="text-xs text-muted-foreground mb-3 leading-relaxed">
-            {{ $t('settings.channelDesc1') }}{{ $t('settings.channelDesc2') }}
-          </p>
+        <section v-show="activeTab === 'channels'" class="settings-page">
+          <header class="settings-page-hero">
+            <div class="settings-page-hero-copy">
+              <div class="settings-page-eyebrow">{{ $t('settings.settingsKicker') }}</div>
+              <h2 class="settings-page-title">{{ $t('settings.channels') }}</h2>
+              <p class="settings-page-intro">
+                {{ $t('settings.channelDesc1') }}{{ $t('settings.channelDesc2') }}
+              </p>
+            </div>
+            <div class="settings-page-hero-icon"><span class="i-carbon-network-3" /></div>
+          </header>
 
-          <!-- 双列渠道 -->
-          <div class="settings-grid">
-            <!-- 左列：会话渠道 -->
-            <div>
-              <div class="chain-title">{{ $t('settings.defaultSessionChannel') }}</div>
-              <div class="chain-list">
-                <div
-                  v-for="ch in sessionChannels()"
-                  :key="ch.id"
-                  class="chain-item"
-                  :class="{
-                    'chain-item-active': supportsClaude(ch) && (defaultSessionChannel ?? OFFICIAL_CHANNEL_ID) === ch.id,
-                    'opacity-50': !ch.enabled,
-                  }"
-                  @click="ch.enabled && supportsClaude(ch) && setDefaultSessionChannel(ch.id === OFFICIAL_CHANNEL_ID ? null : ch.id)"
+          <!-- 默认会话：两个引擎各自选择，不再共用一个默认值。 -->
+          <section class="channel-panel channel-default-panel">
+            <header class="channel-panel-header">
+              <div>
+                <h3>{{ $t('settings.defaultSessionChannel') }}</h3>
+                <p>{{ $t('settings.defaultSessionChannelHint') }}</p>
+              </div>
+              <span class="i-carbon-settings-adjust channel-panel-icon" />
+            </header>
+            <div class="channel-default-grid">
+              <section v-for="engine in (['claude-code', 'codex'] as SessionEngineId[])" :key="engine" class="channel-engine-card">
+                <div class="channel-engine-heading">
+                  <span class="channel-engine-dot" :class="engine === 'codex' ? 'bg-codex' : 'bg-claude'" />
+                  <div>
+                    <h4 :class="engine === 'codex' ? 'text-codex' : 'text-claude'">{{ engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel') }}</h4>
+                    <p>{{ $t('settings.sessionEngineDefaultHint') }}</p>
+                  </div>
+                </div>
+                <select
+                  class="form-select channel-default-select"
+                  :value="defaultSessionChannels[engine] ?? OFFICIAL_CHANNEL_ID"
+                  :aria-label="engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel')"
+                  @change="onSessionDefaultChange(engine, ($event.target as HTMLSelectElement).value)"
                 >
-                  <div class="chain-content">
-                    <div class="chain-row-1">
-                      <span class="truncate font-medium text-xs">{{ builtinChannelName(ch) }}</span>
-                      <span v-if="isBuiltinChannel(ch.id)" class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t(ch.id === OFFICIAL_CHANNEL_ID ? 'channel.followCliHint' : 'channel.officialDirectHint')">
-                        <span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" />
-                      </span>
-                      <span
-                        v-for="engine in ch.engineSupport"
-                        :key="engine"
-                        class="engine-support-badge"
-                        :class="engine === 'codex' ? 'text-codex' : 'text-claude'"
-                      >{{ engine === 'codex' ? 'Codex' : 'Claude Code' }}</span>
-                      <div class="chain-actions">
-                        <button v-if="!isBuiltinChannel(ch.id)" :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
-                        <template v-if="!isBuiltinChannel(ch.id)">
-                          <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
-                          <button class="icon-btn icon-btn-sm icon-btn-ghost icon-btn-danger" v-tooltip="$t('common.delete')" @click.stop="onDelete(ch)"><span class="i-carbon-trash-can w-3 h-3" /></button>
-                        </template>
-                        <button v-else-if="ch.id === OFFICIAL_CHANNEL_ID" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.officialDefaults.edit')" @click.stop="editingOfficial = ch"><span class="i-carbon-edit w-3 h-3" /></button>
-                      </div>
-                    </div>
-                    <div class="chain-row-2">
-                      <template v-if="ch.id !== OFFICIAL_CHANNEL_ID">
-                        <span v-if="ch.baseUrl && supportsClaude(ch)" class="font-mono truncate">{{ ch.baseUrl }}</span>
-                        <span v-else-if="ch.codex && supportsCodex(ch)" class="font-mono truncate">{{ ch.codex.mode === 'managed' ? ch.codex.baseUrl : ch.codex.providerId }}</span>
+                  <option v-for="ch in sessionChannelsFor(engine)" :key="`${engine}-${ch.id}`" :value="ch.id" :disabled="!ch.enabled">
+                    {{ builtinChannelName(ch) }}
+                  </option>
+                </select>
+              </section>
+            </div>
+          </section>
+
+          <!-- 智能增强仍由 Claude Code 提供；默认配置复用会话三段式胶囊。 -->
+          <section class="channel-panel channel-agent-panel">
+            <header class="channel-panel-header">
+              <div>
+                <h3>{{ $t('settings.defaultAgentChannel') }}</h3>
+                <p>{{ $t('settings.defaultAgentChannelHint') }}</p>
+              </div>
+              <span class="channel-engine-badge text-claude"><span class="channel-engine-dot bg-claude" />{{ $t('settings.claudeCodeLabel') }}</span>
+            </header>
+            <div class="channel-agent-config">
+              <div class="channel-agent-engine">
+                <span class="i-carbon-ai-status channel-agent-icon text-claude" />
+                <div>
+                  <strong>{{ $t('settings.agentEngineLabel') }}</strong>
+                  <span>{{ $t('settings.agentEngineFixed') }}</span>
+                </div>
+              </div>
+              <RunConfigCapsule
+                :default-config="agentDefaultConfig"
+                class="channel-agent-capsule"
+                @channel-change="onAgentChannelChange"
+                @model-change="onAgentModelChange"
+                @effort-change="onAgentEffortChange"
+              />
+            </div>
+            <p class="channel-panel-hint">{{ $t('settings.agentEngineHint') }}</p>
+          </section>
+
+          <!-- 连接列表只负责管理连接本身；默认值在上方按用途设置。 -->
+          <section class="channel-panel channel-connections-panel">
+            <header class="channel-panel-header">
+              <div>
+                <h3>{{ $t('settings.connectionListTitle') }}</h3>
+                <p>{{ $t('settings.connectionListHint') }}</p>
+              </div>
+              <span class="i-carbon-list channel-panel-icon" />
+            </header>
+            <div class="chain-list channel-connection-list">
+              <div v-for="ch in channels" :key="ch.id" class="chain-item channel-connection-item" :class="{ 'opacity-50': !ch.enabled }">
+                <div class="channel-connection-mark" :class="ch.id === OFFICIAL_CHANNEL_ID ? 'bg-primary' : 'bg-muted-foreground/50'" />
+                <div class="chain-content">
+                  <div class="chain-row-1">
+                    <span class="truncate font-medium text-xs">{{ builtinChannelName(ch) }}</span>
+                    <span v-if="ch.id === APPLE_FM_CHANNEL_ID" class="engine-support-badge text-primary">{{ $t('settings.agent') }}</span>
+                    <span v-for="engine in ch.engineSupport" :key="engine" class="engine-support-badge" :class="engine === 'codex' ? 'text-codex' : 'text-claude'">{{ engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel') }}</span>
+                    <div class="chain-actions">
+                      <button v-if="!isBuiltinChannel(ch.id)" :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
+                      <template v-if="!isBuiltinChannel(ch.id)">
+                        <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
+                        <button class="icon-btn icon-btn-sm icon-btn-ghost icon-btn-danger" v-tooltip="$t('common.delete')" @click.stop="onDelete(ch)"><span class="i-carbon-trash-can w-3 h-3" /></button>
                       </template>
-                      <span v-else class="text-muted-foreground/60 italic">
-                        {{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}
-                      </span>
-                      <span v-if="ch.defaultModel && supportsClaude(ch)" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultModelLabel')">{{ ch.defaultModel }}</span>
-                      <span v-if="ch.defaultEffort && supportsClaude(ch)" class="chain-model-tag" v-tooltip="$t('settings.channelForm.defaultEffortLabel')">{{ ch.defaultEffort }}</span>
-                      <span v-if="supportsCodex(ch) && ch.codex?.defaultModel" class="chain-model-tag text-codex" v-tooltip="$t('settings.channelForm.defaultModelLabel')">{{ ch.codex.defaultModel }}</span>
-                      <span v-if="supportsCodex(ch) && ch.codex?.defaultEffort" class="chain-model-tag text-codex" v-tooltip="$t('settings.channelForm.defaultEffortLabel')">{{ ch.codex.defaultEffort }}</span>
-                      <span v-if="ch.agentModel" class="chain-model-tag">{{ ch.agentModel }}</span>
-                      <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                        <template v-if="probing[ch.id]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
-                        <template v-else-if="probeResults[ch.id]">
-                          <span class="inline-block w-1.5 h-1.5 rounded-full" :class="probeResults[ch.id].online ? 'bg-green-600' : 'bg-destructive'" />
-                          <span v-if="probeResults[ch.id].online && probeResults[ch.id].models.length" v-tooltip="probeResults[ch.id].models.join('\n')">{{ probeResults[ch.id].models.length }} models</span>
-                          <span v-else-if="!probeResults[ch.id].online">{{ probeResults[ch.id].status === 'auth_error' ? '401' : probeResults[ch.id].status }}</span>
-                          <span v-if="probeResults[ch.id].latencyMs" class="text-muted-foreground/50">{{ probeResults[ch.id].latencyMs }}ms</span>
-                        </template>
-                        <button v-if="!isBuiltinChannel(ch.id) && supportsClaude(ch)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
-                      </span>
+                      <button v-else-if="ch.id === OFFICIAL_CHANNEL_ID" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.officialDefaults.edit')" @click.stop="editingOfficial = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                     </div>
+                  </div>
+                  <div class="chain-row-2">
+                    <span v-if="ch.id === OFFICIAL_CHANNEL_ID" class="text-muted-foreground/60 italic">{{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}</span>
+                    <span v-else-if="ch.id === APPLE_FM_CHANNEL_ID" class="text-muted-foreground/60 italic">{{ $t('settings.appleFmLocal') }}</span>
+                    <span v-else-if="ch.baseUrl && supportsClaude(ch)" class="font-mono truncate">{{ ch.baseUrl }}</span>
+                    <span v-else-if="ch.codex && supportsCodex(ch)" class="font-mono truncate">{{ ch.codex.mode === 'managed' ? ch.codex.baseUrl : ch.codex.providerId }}</span>
+                    <span v-if="ch.defaultModel && supportsClaude(ch)" class="chain-model-tag">{{ ch.defaultModel }}</span>
+                    <span v-if="supportsCodex(ch) && ch.codex?.defaultModel" class="chain-model-tag text-codex">{{ ch.codex.defaultModel }}</span>
+                    <span class="ml-auto shrink-0 flex items-center gap-1.5">
+                      <template v-if="probing[ch.id]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
+                      <template v-else-if="probeResults[ch.id]"><span class="inline-block w-1.5 h-1.5 rounded-full" :class="probeResults[ch.id].online ? 'bg-green-600' : 'bg-destructive'" /><span v-if="probeResults[ch.id].latencyMs" class="text-muted-foreground/50">{{ probeResults[ch.id].latencyMs }}ms</span></template>
+                      <button v-if="!isBuiltinChannel(ch.id) && supportsClaude(ch)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
+                    </span>
                   </div>
                 </div>
               </div>
             </div>
-
-            <!-- 右列：Agent 渠道 -->
-            <div>
-              <div class="chain-title">{{ $t('settings.defaultAgentChannel') }}</div>
-              <div class="chain-list">
-                <!-- 跟随 CLI -->
-                <div
-                  class="chain-item"
-                  :class="{ 'chain-item-active': agentChannelId === OFFICIAL_CHANNEL_ID }"
-                  @click="onAgentChannelChange(OFFICIAL_CHANNEL_ID)"
-                >
-                  <div class="chain-content">
-                    <div class="chain-row-1">
-                      <span class="truncate font-medium text-xs">{{ $t('channel.official') }}</span>
-                      <span class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t('channel.followCliHint')"><span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" /></span>
-                    </div>
-                    <div class="chain-row-2">
-                      <span class="text-muted-foreground/60 italic">{{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}</span>
-                      <span class="chain-model-tag">haiku</span>
-                    </div>
-                  </div>
-                </div>
-                <!-- 官方(直连) -->
-                <div
-                  class="chain-item"
-                  :class="{ 'chain-item-active': agentChannelId === OFFICIAL_DIRECT_CHANNEL_ID }"
-                  @click="onAgentChannelChange(OFFICIAL_DIRECT_CHANNEL_ID)"
-                >
-                  <div class="chain-content">
-                    <div class="chain-row-1">
-                      <span class="truncate font-medium text-xs">{{ $t('channel.officialDirect') }}</span>
-                      <span class="text-[10px] text-muted-foreground/70 shrink-0" v-tooltip="$t('channel.officialDirectHint')"><span class="i-carbon-information w-3 h-3 inline-block align-text-bottom" /></span>
-                    </div>
-                    <div class="chain-row-2">
-                      <span class="text-muted-foreground/60 italic">OAuth</span>
-                      <span class="chain-model-tag">haiku</span>
-                    </div>
-                  </div>
-                </div>
-                <!-- 其他启用的渠道 -->
-                <div
-                  v-for="ch in agentChannelCards"
-                  :key="ch.id"
-                  class="chain-item"
-                  :class="{
-                    'chain-item-active': agentChannelId === ch.id,
-                    'opacity-50': !ch.enabled,
-                  }"
-                  @click="ch.enabled && onAgentChannelChange(ch.id)"
-                >
-                  <div class="chain-content">
-                    <div class="chain-row-1">
-                      <span class="truncate font-medium text-xs">{{ ch.name }}</span>
-                      <div class="chain-actions">
-                        <button v-if="ch.scope === 'agent-only'" :class="['form-toggle-sm', { on: ch.enabled }]" @click.stop="setChannelEnabled(ch.id, !ch.enabled)"><span class="form-toggle-knob" /></button>
-                        <button v-if="ch.scope === 'agent-only'" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
-                      </div>
-                    </div>
-                    <div class="chain-row-2">
-                      <span v-if="ch.baseUrl" class="font-mono truncate">{{ ch.baseUrl }}</span>
-                      <span class="chain-model-tag">{{ agentModelTag(ch) }}</span>
-                      <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                        <template v-if="probing[ch.id]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
-                        <template v-else-if="probeResults[ch.id]">
-                          <span class="inline-block w-1.5 h-1.5 rounded-full" :class="probeResults[ch.id].online ? 'bg-green-600' : 'bg-destructive'" />
-                          <span v-if="probeResults[ch.id].latencyMs" class="text-muted-foreground/50">{{ probeResults[ch.id].latencyMs }}ms</span>
-                        </template>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <!-- Apple FM 分隔区 -->
-              <template v-if="hasAppleFm">
-                <div class="border-t border-border my-2" />
-                <div class="chain-list">
-                  <div
-                    class="chain-item"
-                    :class="{ 'chain-item-active': isAppleFmAgent }"
-                    @click="toggleAppleFmAgent"
-                  >
-                    <div class="chain-content">
-                      <div class="chain-row-1">
-                        <span class="truncate font-medium text-xs">Apple FM</span>
-                      </div>
-                      <div class="chain-row-2">
-                        <span class="text-muted-foreground/60 italic">{{ $t('settings.appleFmLocal') }}</span>
-                        <span class="chain-model-tag">system</span>
-                        <span class="ml-auto shrink-0 flex items-center gap-1.5">
-                          <template v-if="probing[APPLE_FM_CHANNEL_ID]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
-                          <template v-else-if="probeResults[APPLE_FM_CHANNEL_ID]">
-                            <span class="inline-block w-1.5 h-1.5 rounded-full" :class="probeResults[APPLE_FM_CHANNEL_ID].online ? 'bg-green-600' : 'bg-destructive'" />
-                            <span v-if="probeResults[APPLE_FM_CHANNEL_ID].latencyMs" class="text-muted-foreground/50">{{ probeResults[APPLE_FM_CHANNEL_ID].latencyMs }}ms</span>
-                          </template>
-                          <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(APPLE_FM_CHANNEL_ID)"><span class="i-carbon-activity w-3 h-3" /></button>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </template>
-              <div class="text-[10.5px] text-muted-foreground mt-1.5">{{ $t('settings.defaultAgentChannelHint') }}</div>
-            </div>
-          </div>
+          </section>
 
           <ChannelForm
             v-if="editing"
@@ -1009,12 +1050,16 @@ function onSaved() {
         </section>
 
         <!-- ====== Agent ====== -->
-        <section v-show="activeTab === 'agent'">
-          <h2 class="section-title">{{ $t('settings.agent') }}</h2>
-          <p class="text-xs text-muted-foreground mb-3 leading-relaxed">
-            {{ $t('settings.agentDesc') }}
-          </p>
-          <div class="settings-grid">
+        <section v-show="activeTab === 'agent'" class="settings-page">
+          <header class="settings-page-hero">
+            <div class="settings-page-hero-copy">
+              <div class="settings-page-eyebrow">{{ $t('settings.settingsKicker') }}</div>
+              <h2 class="settings-page-title">{{ $t('settings.agent') }}</h2>
+              <p class="settings-page-intro">{{ $t('settings.agentDesc') }}</p>
+            </div>
+            <div class="settings-page-hero-icon"><span class="i-carbon-bot" /></div>
+          </header>
+          <div class="settings-grid agent-settings-grid">
             <div v-for="a in agentKeys" :key="a.key" class="agent-item">
               <div class="flex-1 min-w-0">
                 <div class="text-xs font-medium">{{ $t(a.label) }}</div>
@@ -1097,20 +1142,33 @@ function onSaved() {
         <EngineCenter v-if="activeTab === 'engines'" />
 
         <!-- ====== 权限体检 ====== -->
-        <section v-if="isMac" v-show="activeTab === 'permissions'">
-          <h2 class="section-title">{{ $t('settings.permCheck.title') }}</h2>
-          <PermissionsPanel />
+        <section v-if="isMac" v-show="activeTab === 'permissions'" class="settings-page">
+          <header class="settings-page-hero">
+            <div class="settings-page-hero-copy">
+              <div class="settings-page-eyebrow">{{ $t('settings.settingsKicker') }}</div>
+              <h2 class="settings-page-title">{{ $t('settings.permCheck.title') }}</h2>
+              <p class="settings-page-intro">{{ $t('settings.permCheck.desc') }}</p>
+            </div>
+            <div class="settings-page-hero-icon"><span class="i-carbon-security" /></div>
+          </header>
+          <div class="permissions-page-panel">
+            <PermissionsPanel />
+          </div>
         </section>
 
         <!-- ====== 扩展 ====== -->
-        <section v-show="activeTab === 'extensions'">
-          <h2 class="section-title">{{ $t('settings.extensions') }}</h2>
-          <p class="text-xs text-muted-foreground mb-3 leading-relaxed">
-            {{ $t('settings.extensionsDesc') }}
-          </p>
-          <div class="flex flex-col gap-3">
+        <section v-show="activeTab === 'extensions'" class="settings-page">
+          <header class="settings-page-hero">
+            <div class="settings-page-hero-copy">
+              <div class="settings-page-eyebrow">{{ $t('settings.settingsKicker') }}</div>
+              <h2 class="settings-page-title">{{ $t('settings.extensions') }}</h2>
+              <p class="settings-page-intro">{{ $t('settings.extensionsDesc') }}</p>
+            </div>
+            <div class="settings-page-hero-icon"><span class="i-carbon-plug" /></div>
+          </header>
+          <div class="settings-card-grid settings-card-grid-two">
             <!-- MCP Server 注册 -->
-            <div class="mcp-card">
+            <div class="mcp-card settings-card settings-extension-card">
               <div class="flex items-center gap-2">
                 <span class="i-carbon-plug w-3.5 h-3.5 text-muted-foreground" />
                 <span class="text-[11.5px] font-medium">{{ $t('settings.mcp.title') }}</span>
@@ -1142,9 +1200,11 @@ function onSaved() {
                 </div>
               </div>
             </div>
-            <TurnSignalCard />
+            <div class="settings-card settings-extension-card">
+              <TurnSignalCard />
+            </div>
             <!-- HTML 增强渲染 -->
-            <div class="mcp-card">
+            <div class="mcp-card settings-card settings-extension-card">
               <div class="flex items-center gap-2">
                 <span class="i-carbon-code w-3.5 h-3.5 text-muted-foreground" />
                 <span class="text-[11.5px] font-medium">{{ $t('settings.htmlVisual') }}</span>
@@ -1167,13 +1227,17 @@ function onSaved() {
         </section>
 
         <!-- ====== 实验室 ====== -->
-        <section v-show="activeTab === 'lab'">
-          <h2 class="section-title">{{ $t('settings.lab') }}</h2>
-          <p class="text-xs text-muted-foreground mb-3 leading-relaxed">
-            {{ $t('settings.labDesc') }}
-          </p>
+        <section v-show="activeTab === 'lab'" class="settings-page">
+          <header class="settings-page-hero">
+            <div class="settings-page-hero-copy">
+              <div class="settings-page-eyebrow">{{ $t('settings.settingsKicker') }}</div>
+              <h2 class="settings-page-title">{{ $t('settings.lab') }}</h2>
+              <p class="settings-page-intro">{{ $t('settings.labDesc') }}</p>
+            </div>
+            <div class="settings-page-hero-icon"><span class="i-carbon-activity" /></div>
+          </header>
           <!-- 消息虚拟化阈值 -->
-          <div class="mcp-card mb-3">
+          <div class="mcp-card settings-card settings-lab-card mb-3">
             <div class="flex items-center gap-2">
               <span class="i-carbon-layers w-3.5 h-3.5 text-muted-foreground" />
               <span class="text-[11.5px] font-medium">{{ $t('settings.virtualizationThreshold') }}</span>
@@ -1195,11 +1259,18 @@ function onSaved() {
         </section>
 
         <!-- ====== 系统 ====== -->
-        <section v-show="activeTab === 'system'">
-          <h2 class="section-title">{{ $t('settings.system') }}</h2>
+        <section v-show="activeTab === 'system'" class="settings-page">
+          <header class="settings-page-hero">
+            <div class="settings-page-hero-copy">
+              <div class="settings-page-eyebrow">{{ $t('settings.settingsKicker') }}</div>
+              <h2 class="settings-page-title">{{ $t('settings.system') }}</h2>
+              <p class="settings-page-intro">{{ $t('settings.systemDesc') }}</p>
+            </div>
+            <div class="settings-page-hero-icon"><span class="i-carbon-settings" /></div>
+          </header>
 
           <!-- 更新 -->
-          <div class="mcp-card mb-3">
+          <div class="mcp-card settings-card settings-update-card mb-3">
             <div class="flex items-center gap-2">
               <span class="i-carbon-upgrade w-3.5 h-3.5 text-muted-foreground" />
               <span class="text-[11.5px] font-medium">{{ $t('settings.updateCurrent') }}</span>
@@ -1252,7 +1323,7 @@ function onSaved() {
             </div>
           </div>
 
-          <div class="settings-grid">
+          <div class="settings-grid system-settings-grid settings-card-grid-two">
             <!-- 菜单栏（macOS 专属：系统后台项目 + Helper App） -->
             <div v-if="isMac" class="setting-group setting-group-tray">
               <div class="setting-group-header">
@@ -1890,5 +1961,754 @@ function onSaved() {
 .ext-tag.warn {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
   color: var(--destructive);
+}
+
+/* 外观页：将偏好按「主题 / 阅读 / 尺寸」组织，避免设置散落在空白网格中。 */
+.appearance-page {
+  padding: 2px 0 28px;
+}
+.appearance-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 2px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.appearance-hero-copy {
+  min-width: 0;
+}
+.appearance-eyebrow {
+  margin-bottom: 5px;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+.appearance-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.appearance-intro {
+  max-width: 620px;
+  margin: 7px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.appearance-current {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  min-width: 132px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--primary) 5%, var(--card));
+}
+.appearance-current-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  font-size: 15px;
+}
+.appearance-current-label {
+  display: block;
+}
+.appearance-current-label {
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+.appearance-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+.appearance-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.appearance-card-wide {
+  grid-column: 1 / -1;
+}
+.appearance-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.appearance-card-icon {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  font-size: 14px;
+}
+.appearance-card-header h3 {
+  margin: 1px 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.appearance-card-header p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.appearance-theme-grid,
+.appearance-reading-grid,
+.appearance-layout-grid {
+  display: grid;
+  gap: 16px;
+}
+.appearance-theme-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.appearance-field-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.appearance-field-note {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-align: right;
+}
+.theme-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  background: var(--background);
+}
+.theme-option-icon {
+  flex-shrink: 0;
+  color: var(--primary);
+  font-size: 15px;
+}
+.theme-option-copy {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.appearance-language-control {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.appearance-language-control .form-select {
+  width: 100%;
+  height: 36px;
+  background: var(--background);
+}
+.appearance-language-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.appearance-link-button,
+.appearance-delete-language,
+.appearance-cancel-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  color: var(--primary);
+  background: transparent;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.appearance-link-button:hover,
+.appearance-delete-language:hover,
+.appearance-cancel-button:hover {
+  color: var(--foreground);
+}
+.appearance-custom-language-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+}
+.appearance-custom-language-list > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.appearance-custom-language-code {
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+.appearance-delete-language {
+  margin-left: auto;
+  padding: 1px;
+  color: var(--muted-foreground);
+}
+.appearance-translate-form {
+  padding-top: 3px;
+}
+.appearance-translate-input-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.appearance-translate-input-row .form-input {
+  min-width: 0;
+  flex: 1;
+}
+.appearance-primary-button {
+  padding: 7px 9px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  color: var(--primary-foreground);
+  background: var(--primary);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.appearance-primary-button:disabled,
+.appearance-cancel-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.appearance-translate-status,
+.appearance-translate-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 5px 0 0;
+  font-size: 10px;
+}
+.appearance-translate-status { color: var(--muted-foreground); }
+.appearance-translate-error { color: var(--destructive); }
+.appearance-reading-grid {
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
+  align-items: stretch;
+}
+.appearance-reading-block {
+  min-width: 0;
+}
+.appearance-reading-block .tool-display-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.appearance-reading-block .tool-display-option {
+  min-height: 68px;
+  padding: 9px;
+}
+.appearance-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--foreground);
+  background: var(--background);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms, background 150ms, box-shadow 150ms;
+}
+.appearance-setting-row:hover {
+  border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
+  background: color-mix(in srgb, var(--primary) 5%, var(--background));
+  box-shadow: var(--shadow-paper);
+}
+.appearance-setting-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.appearance-setting-row-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.appearance-toggle-status {
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.appearance-setting-row .form-toggle {
+  width: 38px;
+  height: 22px;
+  border-color: var(--border);
+  background: var(--muted);
+}
+.appearance-setting-row .form-toggle.on {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.appearance-setting-row .form-toggle-knob {
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  background: var(--card);
+}
+.appearance-setting-row .form-toggle.on .form-toggle-knob {
+  transform: translateX(16px);
+}
+.appearance-layout-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.appearance-size-field {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+.appearance-value {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.appearance-slider-row {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+}
+.appearance-slider {
+  width: 100%;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.appearance-number-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+}
+.appearance-number-input {
+  width: 100px;
+  background: var(--card);
+}
+.appearance-number-unit {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+@media (max-width: 900px) {
+  .appearance-layout { grid-template-columns: 1fr; }
+  .appearance-card-wide { grid-column: auto; }
+}
+@media (max-width: 620px) {
+  .appearance-hero { align-items: flex-start; flex-direction: column; }
+  .appearance-theme-grid,
+  .appearance-reading-grid,
+  .appearance-layout-grid { grid-template-columns: 1fr; }
+  .appearance-reading-block .tool-display-options { grid-template-columns: 1fr; }
+  .appearance-field-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .appearance-field-note { text-align: left; }
+}
+
+/* 其他设置页共用外观页的页面骨架：引导区、分组卡片和明确的状态层级。 */
+.settings-page {
+  padding: 2px 0 28px;
+}
+.settings-page-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 2px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-page-hero-copy { min-width: 0; }
+.settings-page-eyebrow {
+  margin-bottom: 5px;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+.settings-page-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.settings-page-intro {
+  max-width: 620px;
+  margin: 7px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.settings-page-hero-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
+  font-size: 20px;
+}
+.permissions-page-panel {
+  margin-top: 16px;
+}
+.settings-card-grid {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+.settings-card-grid-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.settings-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.settings-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.settings-card-icon {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  font-size: 14px;
+}
+.settings-card-header h3 {
+  margin: 1px 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.settings-card-header p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.channel-panel {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.channel-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.channel-panel-header h3 {
+  margin: 0 0 3px;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.channel-panel-header p,
+.channel-panel-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.channel-panel-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.channel-default-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.channel-engine-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+.channel-engine-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.channel-engine-heading h4 {
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.channel-engine-heading p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.channel-engine-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 999px;
+}
+.channel-default-select {
+  width: 100%;
+  margin-top: 2px;
+}
+.channel-engine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.channel-engine-badge .channel-engine-dot {
+  width: 6px;
+  height: 6px;
+  margin: 0;
+}
+.channel-agent-config {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 1fr);
+  gap: 20px;
+  align-items: center;
+}
+.channel-agent-engine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.channel-agent-icon {
+  flex: none;
+  font-size: 22px;
+}
+.channel-agent-engine div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.channel-agent-engine strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+.channel-agent-engine span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+.channel-agent-capsule {
+  justify-self: end;
+}
+.channel-agent-panel .channel-panel-hint {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.channel-connections-panel {
+  margin-bottom: 4px;
+}
+.channel-connection-list {
+  gap: 5px;
+}
+.channel-connection-item {
+  min-height: 54px;
+  padding: 8px 10px;
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  background: var(--background);
+  cursor: default;
+}
+.channel-connection-item:hover {
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+  background: color-mix(in srgb, var(--primary) 3%, var(--card));
+}
+.channel-connection-mark {
+  flex: none;
+  width: 4px;
+  height: 32px;
+  margin-top: 2px;
+  border-radius: 999px;
+}
+.channel-settings-grid {
+  margin-top: 16px;
+}
+.channel-settings-grid > div {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.channel-settings-grid .chain-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.channel-settings-grid .chain-title::before {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  content: '↗';
+  font-size: 14px;
+}
+.channel-settings-grid > div:nth-child(2) .chain-title::before { content: '✦'; }
+.channel-settings-grid .chain-list {
+  gap: 5px;
+}
+.channel-settings-grid .chain-item {
+  min-height: 54px;
+  padding: 8px 10px;
+  border-color: color-mix(in srgb, var(--border) 75%, transparent);
+  background: var(--background);
+}
+.channel-settings-grid .chain-item:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 4%, var(--card));
+}
+.channel-settings-grid .chain-item-active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--card));
+  box-shadow: var(--shadow-paper);
+}
+.agent-settings-grid {
+  margin-top: 16px;
+}
+.agent-settings-grid .agent-item {
+  min-height: 76px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-paper);
+}
+.agent-settings-grid + .agent-item {
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-paper);
+}
+.settings-page .mcp-card.settings-card {
+  padding: 16px;
+}
+.settings-extension-card {
+  min-height: 154px;
+}
+.settings-extension-card > .ext-card {
+  margin: -16px;
+  padding: 16px;
+  border: 0;
+  background: transparent;
+}
+.settings-page .settings-card-grid-two > .settings-extension-card:last-child {
+  grid-column: 1 / -1;
+  min-height: auto;
+}
+.settings-lab-card {
+  margin-top: 16px;
+}
+.settings-page .iframe-zone {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.settings-page .iframe-badge {
+  border-radius: 0 0 0 var(--radius);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.settings-update-card {
+  margin-top: 16px;
+}
+.system-settings-grid {
+  margin-top: 14px;
+}
+.system-settings-grid .setting-group {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-paper);
+}
+.system-settings-grid .setting-group-header {
+  min-height: 48px;
+  padding: 12px 16px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 4%, var(--card));
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.system-settings-grid .setting-row {
+  padding: 13px 16px;
+}
+@media (max-width: 900px) {
+  .settings-card-grid-two { grid-template-columns: 1fr; }
+  .settings-page .settings-card-grid-two > .settings-extension-card:last-child { grid-column: auto; }
+}
+@media (max-width: 620px) {
+  .settings-page-hero { align-items: flex-start; flex-direction: column; }
+  .settings-page-hero-icon { display: none; }
+  .channel-default-grid,
+  .channel-agent-config,
+  .channel-settings-grid,
+  .system-settings-grid { grid-template-columns: 1fr; }
+  .settings-page .setting-row { align-items: flex-start; flex-direction: column; gap: 10px; }
 }
 </style>

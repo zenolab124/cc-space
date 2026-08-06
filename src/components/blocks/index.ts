@@ -2,6 +2,7 @@ import type { Component } from 'vue'
 import type { ContentBlock } from '@/types'
 import BlockText from './BlockText.vue'
 import BlockThinking from './BlockThinking.vue'
+import BlockRedactedThinking from './BlockRedactedThinking.vue'
 import BlockToolUse from './BlockToolUse.vue'
 import BlockToolResult from './BlockToolResult.vue'
 import BlockImage from './BlockImage.vue'
@@ -21,6 +22,7 @@ import BlockUnknown from './BlockUnknown.vue'
 export {
   BlockText,
   BlockThinking,
+  BlockRedactedThinking,
   BlockToolUse,
   BlockToolResult,
   BlockImage,
@@ -42,6 +44,7 @@ export {
 const BLOCK_MAP: Record<string, Component> = {
   text: BlockText,
   thinking: BlockThinking,
+  redacted_thinking: BlockRedactedThinking,
   tool_use: BlockToolUse,
   tool_result: BlockToolResult,
   image: BlockImage,

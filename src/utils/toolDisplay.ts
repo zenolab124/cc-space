@@ -11,6 +11,10 @@ export interface ToolProcessSummaryItem {
   detail: string
 }
 
+export function isThinkingBlock(block: ContentBlock): boolean {
+  return block.type === 'thinking' || block.type === 'redacted_thinking'
+}
+
 export type ToolBlockSegment =
   | { kind: 'block'; key: string; block: ContentBlock }
   | { kind: 'tools'; key: string; blocks: ContentBlock[]; tools: ToolUseBlock[] }
@@ -33,14 +37,6 @@ export function segmentToolBlocks(blocks: ContentBlock[]): ToolBlockSegment[] {
   const segments: ToolBlockSegment[] = []
   let pendingBlocks: ContentBlock[] = []
   let pendingTools: ToolUseBlock[] = []
-  let leadingThinking: Array<{ block: ContentBlock; index: number }> = []
-
-  function flushLeadingThinking() {
-    for (const item of leadingThinking) {
-      segments.push({ kind: 'block', key: blockKey(item.block, item.index), block: item.block })
-    }
-    leadingThinking = []
-  }
 
   function flushTools() {
     if (pendingTools.length === 0) return
@@ -56,25 +52,19 @@ export function segmentToolBlocks(blocks: ContentBlock[]): ToolBlockSegment[] {
 
   blocks.forEach((block, index) => {
     if (isToolUseBlock(block)) {
-      if (pendingTools.length === 0 && leadingThinking.length > 0) {
-        pendingBlocks.push(...leadingThinking.map(item => item.block))
-        leadingThinking = []
-      }
       pendingBlocks.push(block)
       pendingTools.push(block)
       return
     }
-    if (block.type === 'thinking') {
-      if (pendingTools.length > 0) pendingBlocks.push(block)
-      else leadingThinking.push({ block, index })
+    if (isThinkingBlock(block)) {
+      flushTools()
+      segments.push({ kind: 'block', key: blockKey(block, index), block })
       return
     }
     flushTools()
-    flushLeadingThinking()
     segments.push({ kind: 'block', key: blockKey(block, index), block })
   })
   flushTools()
-  flushLeadingThinking()
   return segments
 }
 
@@ -88,7 +78,10 @@ export function endsWithToolProcess(blocks: ContentBlock[]): boolean {
 }
 
 export function joinsToolRun(previous: ContentBlock[], next: ContentBlock[]): boolean {
-  return endsWithToolProcess(previous) && startsWithToolProcess(next)
+  return endsWithToolProcess(previous)
+    && startsWithToolProcess(next)
+    && !previous.some(isThinkingBlock)
+    && !next.some(isThinkingBlock)
 }
 
 export function toolSummary(tool: ToolUseBlock): string {

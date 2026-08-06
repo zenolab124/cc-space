@@ -71,7 +71,7 @@ const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
 const { confirm } = useConfirm()
-const { channels } = useChannels()
+const { channels, defaultSessionChannels } = useChannels()
 let unlistenSnapshot: UnlistenFn | null = null
 let unlistenEvent: UnlistenFn | null = null
 let recoveringSnapshot = false
@@ -118,6 +118,18 @@ const providerChannel = computed(() => channels.value.find(channel =>
   && channelSupportsEngine(channel, sessionEngineId.value)
   && engineChannelBinding(channel, sessionEngineId.value)?.providerId === timelineProvider.value,
 ) ?? null)
+
+function configuredDefaultChannelId(): string | null {
+  if (sessionEngineId.value !== 'claude-code' && sessionEngineId.value !== 'codex') return null
+  const id = defaultSessionChannels.value[sessionEngineId.value]
+  if (!id) return null
+  const channel = channels.value.find(item => item.id === id)
+  return channel?.enabled
+    && channel.scope !== 'agent-only'
+    && channelSupportsEngine(channel, sessionEngineId.value)
+    ? id
+    : null
+}
 const activeChannel = computed(() => selectedChannel.value
   ? channels.value.find(channel => channel.id === selectedChannel.value) ?? null
   : null)
@@ -332,7 +344,7 @@ async function ensureAttached() {
         models.value = await listModels(reference.value.engine)
         const stored = engineRunConfig(props.session.id)
         selectedChannel.value = stored?.channelId
-          ?? null
+          ?? configuredDefaultChannelId()
         const defaultModel = models.value.find(model => model.model === stored?.model)
           ?? models.value.find(model => model.model === activeChannelBinding.value?.defaultModel)
           ?? models.value.find(model => model.model === timelineModel.value)

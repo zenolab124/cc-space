@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import i18n from '../locales'
 
@@ -47,11 +47,16 @@ export interface EngineChannelBindingInfo {
 
 export const APPLE_FM_CHANNEL_ID = 'apple-fm'
 
+export type SessionEngineId = 'claude-code' | 'codex'
+
 interface ChannelListResult {
   channels: ChannelInfo[]
-  defaultSessionChannel: string | null
+  defaultSessionChannels?: Partial<Record<SessionEngineId, string | null>>
+  /** 兼容旧后端版本。 */
+  defaultSessionChannel?: string | null
   defaultAgentChannel: string | null
   defaultAgentModel: string | null
+  defaultAgentEffort: string | null
 }
 
 export const OFFICIAL_CHANNEL_ID = 'official'
@@ -89,17 +94,29 @@ export function engineProviderIdFromSource(
 }
 
 const channels = ref<ChannelInfo[]>([])
-const defaultSessionChannel = ref<string | null>(null)
+const defaultSessionChannels = ref<Record<SessionEngineId, string | null>>({
+  'claude-code': null,
+  codex: null,
+})
+/** Claude Code 的兼容别名，供现有会话配置解析继续使用。 */
+const defaultSessionChannel = computed(() => defaultSessionChannels.value['claude-code'])
 const defaultAgentChannel = ref<string | null>(null)
 const defaultAgentModel = ref<string | null>(null)
+const defaultAgentEffort = ref<string | null>(null)
 
 export async function refreshChannels(): Promise<void> {
   try {
     const r = await invoke<ChannelListResult>('list_channels')
     channels.value = r.channels
-    defaultSessionChannel.value = r.defaultSessionChannel
+    defaultSessionChannels.value = {
+      'claude-code': r.defaultSessionChannels?.['claude-code']
+        ?? r.defaultSessionChannel
+        ?? null,
+      codex: r.defaultSessionChannels?.codex ?? null,
+    }
     defaultAgentChannel.value = r.defaultAgentChannel
     defaultAgentModel.value = r.defaultAgentModel
+    defaultAgentEffort.value = r.defaultAgentEffort
   } catch {
     // 读取失败保留旧值
   }
@@ -223,15 +240,23 @@ async function loadAgentPreferences(): Promise<void> {
   }
 }
 
-async function setDefaultSessionChannel(id: string | null): Promise<void> {
-  await invoke('set_default_session_channel', { id })
-  defaultSessionChannel.value = id
+async function setDefaultSessionChannel(engine: SessionEngineId, id: string | null): Promise<void> {
+  await invoke('set_default_session_channel', { engine, id })
+  defaultSessionChannels.value = {
+    ...defaultSessionChannels.value,
+    [engine]: id,
+  }
 }
 
 async function setDefaultAgentModel(channel: string | null, model: string | null): Promise<void> {
   await invoke('set_default_agent_model', { channel, model })
   defaultAgentChannel.value = channel
   defaultAgentModel.value = model
+}
+
+async function setDefaultAgentEffort(effort: string | null): Promise<void> {
+  await invoke('set_default_agent_effort', { effort })
+  defaultAgentEffort.value = effort
 }
 
 async function setAgentFeatureModel(key: string, channel: string | null, model: string | null): Promise<void> {
@@ -343,9 +368,11 @@ async function importCcSwitch(ids: string[]): Promise<number> {
 export function useChannels() {
   return {
     channels,
+    defaultSessionChannels,
     defaultSessionChannel,
     defaultAgentChannel,
     defaultAgentModel,
+    defaultAgentEffort,
     probeResults,
     probing,
     agentPreferences,
@@ -356,6 +383,7 @@ export function useChannels() {
     setChannelEnabled,
     setDefaultSessionChannel,
     setDefaultAgentModel,
+    setDefaultAgentEffort,
     setAgentFeatureModel,
     revealChannelsDir,
     probeChannel,

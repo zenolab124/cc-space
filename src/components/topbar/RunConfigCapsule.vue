@@ -9,6 +9,7 @@ import {
   channelSupportsEngine,
   OFFICIAL_CHANNEL_ID,
   OFFICIAL_DIRECT_CHANNEL_ID,
+  APPLE_FM_CHANNEL_ID,
 } from '@/composables/useChannels'
 import { useModelOptions } from '@/composables/useModelOptions'
 import { useCliDefaults } from '@/composables/useCliDefaults'
@@ -32,6 +33,12 @@ const props = defineProps<{
   cwd?: string | null
   /** 标准引擎会话使用同一胶囊，仅由引擎 adapter 提供候选和值。 */
   engineConfig?: EngineCapsuleConfig
+  /** 设置页的默认智能增强配置；仍复用会话三段式交互，但不显示高级参数。 */
+  defaultConfig?: {
+    channelId: string | null
+    modelId: string | null
+    effort: EffortSetting
+  }
   /** 窄列:胶囊收起渠道段,点任意段开全景 */
   narrow?: boolean
 }>()
@@ -45,8 +52,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { channels, defaultSessionChannel } = useChannels()
+const { channels, defaultSessionChannel, defaultSessionChannels } = useChannels()
 const engineMode = computed(() => !!props.engineConfig)
+const standaloneMode = computed(() => !!props.defaultConfig)
 const capsuleCwd = computed(() => props.cwd ?? null)
 const { refreshCliDefaults } = useCliDefaults(capsuleCwd)
 
@@ -61,7 +69,7 @@ const containerRef = ref<HTMLElement>()
 /** 面板显示哪些列(自左向右);高级列只随全景出现 */
 const visibleCols = computed<Col[]>(() => {
   switch (openLayer.value) {
-    case 'channel': return engineMode.value ? ['channel', 'model', 'effort'] : ['channel', 'model', 'effort', 'advanced']
+    case 'channel': return engineMode.value || standaloneMode.value ? ['channel', 'model', 'effort'] : ['channel', 'model', 'effort', 'advanced']
     case 'model': return ['model', 'effort']
     case 'effort': return ['effort']
     default: return []
@@ -125,7 +133,7 @@ const channelOptions = computed(() => {
         channel.id !== OFFICIAL_CHANNEL_ID
         && channel.id !== OFFICIAL_DIRECT_CHANNEL_ID
         && channel.enabled
-        && channel.scope !== 'agent-only'
+        && (standaloneMode.value || channel.scope !== 'agent-only')
         && channelSupportsEngine(channel, props.engineConfig.engineId)
       ) {
         result.push({ id: channel.id, name: channel.name })
@@ -138,18 +146,30 @@ const channelOptions = computed(() => {
     { id: OFFICIAL_DIRECT_CHANNEL_ID, name: t('topbar.channelOfficialDirect') },
   ]
   for (const ch of channels.value) {
-    if (ch.id !== OFFICIAL_CHANNEL_ID && ch.id !== OFFICIAL_DIRECT_CHANNEL_ID && ch.enabled && ch.scope !== 'agent-only' && channelSupportsEngine(ch, 'claude-code')) {
+    if (ch.id !== OFFICIAL_CHANNEL_ID && ch.id !== OFFICIAL_DIRECT_CHANNEL_ID && ch.enabled && (standaloneMode.value || ch.scope !== 'agent-only') && channelSupportsEngine(ch, 'claude-code')) {
       result.push({ id: ch.id, name: ch.name })
     }
+  }
+  if (standaloneMode.value && channels.value.some(ch => ch.id === APPLE_FM_CHANNEL_ID)) {
+    result.push({ id: APPLE_FM_CHANNEL_ID, name: 'Apple FM' })
   }
   return result
 })
 
 /** 解析后的当前渠道(选中判定;null=官方) */
-const resolvedChannelKey = computed(() => props.engineConfig?.channelId ?? props.runConfig?.channelId ?? OFFICIAL_CHANNEL_ID)
+const resolvedChannelKey = computed(() => props.engineConfig?.channelId ?? props.defaultConfig?.channelId ?? props.runConfig?.channelId ?? OFFICIAL_CHANNEL_ID)
 /** 应用默认渠道(「默认」hint 所在项) */
 const defaultChannelKey = computed(() => {
-  if (props.engineConfig) return OFFICIAL_CHANNEL_ID
+  if (props.engineConfig) {
+    const engineId = props.engineConfig.engineId
+    if (engineId !== 'claude-code' && engineId !== 'codex') return OFFICIAL_CHANNEL_ID
+    const id = defaultSessionChannels.value[engineId]
+    const channel = id ? channels.value.find(item => item.id === id) : null
+    return channel?.enabled && channelSupportsEngine(channel, engineId)
+      ? id!
+      : OFFICIAL_CHANNEL_ID
+  }
+  if (standaloneMode.value) return props.defaultConfig?.channelId ?? OFFICIAL_CHANNEL_ID
   const id = defaultSessionChannel.value
   if (!id) return OFFICIAL_CHANNEL_ID
   const ch = channels.value.find(c => c.id === id)
@@ -157,6 +177,7 @@ const defaultChannelKey = computed(() => {
 })
 const channelOverridden = computed(() => props.engineConfig
   ? props.engineConfig.channelId !== null
+  : standaloneMode.value ? false
   : props.settings?.channelId !== null)
 
 function pickChannel(id: string) {
@@ -166,18 +187,31 @@ function pickChannel(id: string) {
 
 // ---- 模型列 ----
 
-const channelRef = computed<string | null>(() => props.runConfig?.channelId ?? null)
+const channelRef = computed<string | null>(() => props.defaultConfig?.channelId ?? props.runConfig?.channelId ?? null)
 const { items: claudeModelItems } = useModelOptions(channelRef)
+const standaloneModelItems = computed<ModelInfo[]>(() => {
+  const id = props.defaultConfig?.channelId
+  if (!id || id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID) return claudeModelItems.value
+  const channel = channels.value.find(item => item.id === id)
+  const values = [...new Set([
+    ...(channel?.availableModels ?? []),
+    ...(channel?.agentModel ? [channel.agentModel] : []),
+  ].map(value => value.trim()).filter(Boolean))]
+  return values.length
+    ? values.map(value => ({ id: value, label: value, contextWindow: 0 }))
+    : claudeModelItems.value
+})
 const modelItems = computed<ModelInfo[]>(() => props.engineConfig
   ? props.engineConfig.models
       .filter(model => !model.hidden)
       .map(model => ({ id: model.id, label: model.label, contextWindow: 0 }))
+  : standaloneMode.value ? standaloneModelItems.value
   : claudeModelItems.value)
 
 /** 当前渠道的 modelEnv(能力声明判定用) */
 const activeModelEnv = computed<Record<string, string> | undefined>(() => {
   if (props.engineConfig) return undefined
-  const id = props.runConfig?.channelId
+  const id = props.defaultConfig?.channelId ?? props.runConfig?.channelId
   if (!id) return undefined
   return channels.value.find(c => c.id === id)?.modelEnv
 })
@@ -193,13 +227,15 @@ function modelKeyOf(modelStr: string | null | undefined): string | null {
   return modelStr
 }
 
-const selectedModelKey = computed(() => modelKeyOf(props.engineConfig?.model ?? props.runConfig?.display.model))
+const selectedModelKey = computed(() => modelKeyOf(props.engineConfig?.model ?? props.defaultConfig?.modelId ?? props.runConfig?.display.model))
 const defaultModelKey = computed(() =>
   modelKeyOf(props.engineConfig
     ? props.engineConfig.defaultModel
+    : props.defaultConfig
+      ? channels.value.find(channel => channel.id === (props.defaultConfig?.channelId ?? OFFICIAL_CHANNEL_ID))?.defaultModel
     : props.runConfig?.channelDefaultModel ?? props.runConfig?.cliDefaultModel),
 )
-const modelOverridden = computed(() => props.engineConfig ? props.engineConfig.modelOverridden : props.runConfig?.display.modelSource === 'session')
+const modelOverridden = computed(() => props.engineConfig ? props.engineConfig.modelOverridden : standaloneMode.value ? false : props.runConfig?.display.modelSource === 'session')
 const advisorLocked = computed(() => !props.engineConfig && props.runConfig?.display.modelSource === 'advisor')
 
 /** 会话在用清单外模型时附加为候选(原名展示,与旧 ModelDropdown 行为一致) */
@@ -207,7 +243,7 @@ const modelListItems = computed<ModelInfo[]>(() => {
   const base = modelItems.value
   const sel = selectedModelKey.value
   if (sel && !base.some(m => m.id === sel)) {
-    return [...base, { id: sel, label: props.engineConfig?.model ?? props.runConfig?.display.model ?? sel, contextWindow: 0 }]
+    return [...base, { id: sel, label: props.engineConfig?.model ?? props.defaultConfig?.modelId ?? props.runConfig?.display.model ?? sel, contextWindow: 0 }]
   }
   return base
 })
@@ -227,6 +263,7 @@ const EFFORT_OPTIONS: { value: NonNullable<EffortSetting>; label: string }[] = [
   { value: 'ultracode' as const, label: 'Ultracode' },
 ]
 const effortOptionItems = computed(() => {
+  if (standaloneMode.value) return EFFORT_OPTIONS
   if (!props.engineConfig) return EFFORT_OPTIONS
   const descriptor = props.engineConfig.models.find(model => model.id === props.engineConfig?.model)
   const ids = descriptor?.efforts.map(effort => effort.id) ?? ['low', 'medium', 'high', 'xhigh']
@@ -234,21 +271,23 @@ const effortOptionItems = computed(() => {
 })
 
 const selectedEffort = computed<NonNullable<EffortSetting> | null>(
-  () => (props.engineConfig?.effort ?? props.runConfig?.display.effort ?? null) as NonNullable<EffortSetting> | null,
+  () => (props.engineConfig?.effort ?? props.defaultConfig?.effort ?? props.runConfig?.display.effort ?? null) as NonNullable<EffortSetting> | null,
 )
 const defaultEffort = computed<NonNullable<EffortSetting> | null>(
   () => (props.engineConfig
     ? props.engineConfig.defaultEffort
+    : props.defaultConfig
+      ? channels.value.find(channel => channel.id === (props.defaultConfig?.channelId ?? OFFICIAL_CHANNEL_ID))?.defaultEffort ?? null
     : props.runConfig?.channelDefaultEffort ?? props.runConfig?.cliDefaultEffort) as NonNullable<EffortSetting> | null,
 )
-const effortOverridden = computed(() => props.engineConfig ? props.engineConfig.effortOverridden : props.runConfig?.display.effortSource === 'session')
+const effortOverridden = computed(() => props.engineConfig ? props.engineConfig.effortOverridden : standaloneMode.value ? false : props.runConfig?.display.effortSource === 'session')
 
 /** 强度能力标注:基于当前解析模型 + 渠道声明(软提示,不拦截) */
 const effortCaps = computed(() =>
   effortCapabilities(props.runConfig?.display.model ?? null, activeModelEnv.value),
 )
 function effortUnsupported(value: NonNullable<EffortSetting>): boolean {
-  if (props.engineConfig) return false
+  if (props.engineConfig || standaloneMode.value) return false
   if (value === 'xhigh') return effortCaps.value.xhigh === false
   if (value === 'max') return effortCaps.value.max === false
   if (value === 'ultracode') return effortCaps.value.ultracode === false
@@ -262,7 +301,7 @@ function pickEffort(value: NonNullable<EffortSetting>) {
 // ---- 胶囊段显示 ----
 
 const channelSegLabel = computed(() => {
-  const id = props.engineConfig?.channelId ?? props.runConfig?.channelId
+  const id = props.engineConfig?.channelId ?? props.defaultConfig?.channelId ?? props.runConfig?.channelId
   if (!id) {
     return props.engineConfig?.inheritedChannelLabel
       || t(props.engineConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
@@ -273,7 +312,7 @@ const channelSegLabel = computed(() => {
 })
 
 const modelSegLabel = computed(() => {
-  const resolved = props.engineConfig?.model ?? props.runConfig?.display.model
+  const resolved = props.engineConfig?.model ?? props.defaultConfig?.modelId ?? props.runConfig?.display.model
   if (resolved) {
     const key = modelKeyOf(resolved)
     const hit = key ? modelListItems.value.find(m => m.id === key) : null
@@ -318,14 +357,18 @@ const channelSrcLabel = computed(() =>
   channelOverridden.value ? t('topbar.srcSession') : t(props.engineConfig ? 'topbar.srcEngine' : 'topbar.srcApp'),
 )
 const engineModelSrcLabel = computed(() => t(
-  modelOverridden.value
+  standaloneMode.value
+    ? 'topbar.srcApp'
+    : modelOverridden.value
     ? 'topbar.srcSession'
     : props.engineConfig?.defaultModel
       ? 'topbar.srcChannel'
       : 'topbar.srcEngine',
 ))
 const engineEffortSrcLabel = computed(() => t(
-  effortOverridden.value
+  standaloneMode.value
+    ? 'topbar.srcApp'
+    : effortOverridden.value
     ? 'topbar.srcSession'
     : props.engineConfig?.defaultEffort
       ? 'topbar.srcChannel'
@@ -438,7 +481,7 @@ function openSettings() {
       <div v-if="visibleCols.includes('model')" class="rc-col">
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.modelLabel') }}</span>
-          <span class="rc-src">{{ engineConfig ? engineModelSrcLabel : advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig?.display.modelSource) }}</span>
+          <span class="rc-src">{{ engineConfig ? engineModelSrcLabel : standaloneMode ? $t('topbar.srcApp') : advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig?.display.modelSource) }}</span>
           <button v-if="modelOverridden" class="rc-reset" @click="emit('modelChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
         <div class="rc-list" :class="{ 'opacity-45 pointer-events-none': advisorLocked }" :title="advisorLocked ? $t('topbar.modelAdvisorLocked') : ''">
@@ -461,7 +504,7 @@ function openSettings() {
       <div v-if="visibleCols.includes('effort')" class="rc-col">
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.effortLabel') }}</span>
-          <span class="rc-src">{{ engineConfig ? engineEffortSrcLabel : srcLabel(runConfig?.display.effortSource) }}</span>
+          <span class="rc-src">{{ engineConfig ? engineEffortSrcLabel : standaloneMode ? $t('topbar.srcApp') : srcLabel(runConfig?.display.effortSource) }}</span>
           <button v-if="effortOverridden" class="rc-reset" @click="emit('effortChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
         <div class="rc-list">

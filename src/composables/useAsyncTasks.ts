@@ -376,6 +376,14 @@ export function buildAsyncLedger(
     for (const b of turn.content) {
       if (isToolUse(b)) ingestToolUse(b, null)
     }
+    for (const result of turn.toolResults ?? []) {
+      if (!result.is_error) continue
+      const entry = byToolUse.get(result.tool_use_id)
+      if (entry && !entry.settled) {
+        entry.state = 'failed'
+        entry.settled = true
+      }
+    }
   }
 
   // ---- 状态收尾 ----

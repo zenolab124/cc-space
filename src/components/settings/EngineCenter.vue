@@ -97,27 +97,28 @@ async function openConfiguration(engine: EngineDescriptor) {
 </script>
 
 <template>
-  <section>
-    <div class="mb-3 flex items-start justify-between gap-4">
-      <div>
-        <h2 class="text-[13px] font-semibold">{{ t('engineSettings.title') }}</h2>
-        <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ t('engineSettings.description') }}</p>
+  <section class="settings-page settings-page-engine">
+    <header class="settings-page-hero">
+      <div class="settings-page-hero-copy">
+        <div class="settings-page-eyebrow">{{ t('settings.settingsKicker') }}</div>
+        <h2 class="settings-page-title">{{ t('engineSettings.title') }}</h2>
+        <p class="settings-page-intro">{{ t('engineSettings.description') }}</p>
       </div>
-      <div class="flex shrink-0 items-center gap-1.5">
-        <button type="button" class="rounded border border-border px-2.5 py-1.5 text-xs hover:bg-muted disabled:opacity-50" :disabled="exporting" @click="exportDiagnostics">
+      <div class="settings-page-hero-actions">
+        <button type="button" class="settings-page-button" :disabled="exporting" @click="exportDiagnostics">
           <span class="i-carbon-download mr-1 inline-block h-3 w-3 align-text-bottom" />{{ t('engineSettings.exportDiagnostics') }}
         </button>
-        <button type="button" class="rounded border border-border px-2.5 py-1.5 text-xs hover:bg-muted disabled:opacity-50" :disabled="loading" @click="refreshEngines">
+        <button type="button" class="settings-page-button" :disabled="loading" @click="refreshEngines">
           <span class="mr-1 inline-block h-3 w-3 align-text-bottom" :class="loading ? 'i-carbon-renew animate-spin' : 'i-carbon-renew'" />
           {{ t('common.refresh') }}
         </button>
       </div>
-    </div>
+    </header>
     <p v-if="exportStatus" role="status" class="mb-2 text-[10px] text-muted-foreground">{{ exportStatus }}</p>
 
-    <div class="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] items-start gap-3">
-      <article v-for="engine in engines" :key="instanceKey(engine.instance)" class="overflow-hidden rounded border border-border bg-card shadow-paper">
-        <button type="button" class="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-muted/60" :aria-expanded="expanded.has(instanceKey(engine.instance))" @click="toggle(instanceKey(engine.instance))">
+    <div class="settings-engine-grid">
+      <article v-for="engine in engines" :key="instanceKey(engine.instance)" class="settings-engine-card">
+        <button type="button" class="settings-engine-card-toggle" :aria-expanded="expanded.has(instanceKey(engine.instance))" @click="toggle(instanceKey(engine.instance))">
           <span class="h-2 w-2 shrink-0 rounded-full" :class="statusClass(health[instanceKey(engine.instance)]?.status)" />
           <span class="min-w-0 flex-1">
             <span class="block truncate text-xs font-semibold">{{ engine.displayName }}</span>
@@ -185,3 +186,91 @@ async function openConfiguration(engine: EngineDescriptor) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.settings-page {
+  padding: 2px 0 28px;
+}
+.settings-page-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 2px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-page-hero-copy { min-width: 0; }
+.settings-page-eyebrow {
+  margin-bottom: 5px;
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+.settings-page-title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.settings-page-intro {
+  max-width: 620px;
+  margin: 7px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.settings-page-hero-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+.settings-page-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  background: var(--card);
+  font-size: 11px;
+  cursor: pointer;
+}
+.settings-page-button:hover:not(:disabled) { color: var(--foreground); background: var(--muted); }
+.settings-page-button:disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-engine-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  align-items: start;
+  gap: 14px;
+  margin-top: 16px;
+}
+.settings-engine-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.settings-engine-card-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 9px;
+  padding: 13px 16px;
+  color: var(--foreground);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-engine-card-toggle:hover { background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.settings-engine-card > div {
+  padding: 14px 16px;
+}
+@media (max-width: 680px) {
+  .settings-page-hero { align-items: flex-start; flex-direction: column; }
+  .settings-page-hero-actions { width: 100%; }
+  .settings-page-button { flex: 1; justify-content: center; }
+  .settings-engine-grid { grid-template-columns: minmax(0, 1fr); }
+}
+</style>

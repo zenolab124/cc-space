@@ -212,6 +212,14 @@ pub enum StreamEvent {
         message_id: String,
         index: usize,
     },
+    /// 工具执行完成后的结果。CLI 将它作为 user message 发回，不能走
+    /// Anthropic content_block_delta，因此单独作为语义事件转发。
+    ToolResults {
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        content: Vec<ContentBlock>,
+    },
     /// 流式完成（携带 modelUsage 真值：上下文容量 + token 用量）
     Result {
         session_id: String,
@@ -345,6 +353,7 @@ impl StreamEvent {
             | Self::BlockStart { session_id, .. }
             | Self::BlockDelta { session_id, .. }
             | Self::BlockStop { session_id, .. }
+            | Self::ToolResults { session_id, .. }
             | Self::Result { session_id, .. }
             | Self::Error { session_id, .. } => session_id,
         }
@@ -1913,6 +1922,29 @@ fn decode_stream_event(
                 stop_reason,
             })
         }
+        "user" => {
+            // 工具执行完成后,CLI 会发一条 user message 把 tool_result 回灌给
+            // agent loop。它不是 Anthropic 的 partial message,但在最终 result
+            // 之前已经可用,应及时送到前端显示。
+            let content = value
+                .get("message")
+                .and_then(|message| message.get("content"))
+                .and_then(|content| {
+                    serde_json::from_value::<Vec<ContentBlock>>(content.clone()).ok()
+                })?;
+            let tool_results: Vec<ContentBlock> = content
+                .into_iter()
+                .filter(|block| matches!(block, ContentBlock::ToolResult { .. }))
+                .collect();
+            if tool_results.is_empty() {
+                return None;
+            }
+            Some(StreamEvent::ToolResults {
+                session_id: sid,
+                message_id: current_message_id.as_ref().map(|(id, _)| id.clone()),
+                content: tool_results,
+            })
+        }
         // "progress"（老版 CLI 的子任务进度转发容器）不再混入主流：
         // 子 agent 内容归异步面板，主对话只渲染自己的消息
         "result" => {
@@ -1956,5 +1988,93 @@ fn decode_stream_event(
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod decode_stream_event_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_tool_results_from_user_message() {
+        let value = json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_bash",
+                        "content": "hello\\nworld",
+                        "is_error": false
+                    },
+                    {
+                        "type": "text",
+                        "text": "ignored"
+                    }
+                ]
+            }
+        });
+        let mut current_message_id = Some(("message-1".to_string(), None));
+
+        let event = decode_stream_event(&value, "session-1", &mut current_message_id)
+            .expect("tool result should produce a stream event");
+        match event {
+            StreamEvent::ToolResults {
+                session_id,
+                message_id,
+                content,
+            } => {
+                assert_eq!(session_id, "session-1");
+                assert_eq!(message_id.as_deref(), Some("message-1"));
+                assert_eq!(content.len(), 1);
+                assert!(matches!(
+                    content.first(),
+                    Some(ContentBlock::ToolResult { tool_use_id, .. }) if tool_use_id == "toolu_bash"
+                ));
+            }
+            other => panic!("expected tool results, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ignores_non_tool_user_message() {
+        let value = json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}
+        });
+        let mut current_message_id = None;
+
+        assert!(decode_stream_event(&value, "session-1", &mut current_message_id).is_none());
+    }
+
+    #[test]
+    fn keeps_tool_block_start_when_input_arrives_later() {
+        let value = json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_read",
+                    "name": "Read"
+                }
+            }
+        });
+        let mut current_message_id = Some(("message-1".to_string(), None));
+
+        let event = decode_stream_event(&value, "session-1", &mut current_message_id)
+            .expect("tool block start must be visible before input deltas arrive");
+        match event {
+            StreamEvent::BlockStart { content_block, .. } => {
+                assert!(matches!(
+                    content_block,
+                    ContentBlock::ToolUse { input, .. }
+                        if input == json!({})
+                ));
+            }
+            other => panic!("expected block start, got {other:?}"),
+        }
     }
 }

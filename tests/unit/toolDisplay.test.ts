@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ContentBlock } from '@/types'
 import {
   findPendingPermissionToolUseId,
+  isThinkingBlock,
   joinsToolRun,
   segmentToolBlocks,
   summarizeToolProcess,
@@ -32,7 +33,7 @@ describe('tool display projection', () => {
     }
   })
 
-  it('keeps thinking inside a tool process without reordering blocks', () => {
+  it('keeps thinking between tool processes as a separate foldable block', () => {
     const thinking: ContentBlock = { type: 'thinking', thinking: 'inspect the result' }
     const blocks: ContentBlock[] = [
       tool('a'),
@@ -43,26 +44,42 @@ describe('tool display projection', () => {
     ]
 
     const segments = segmentToolBlocks(blocks)
-    expect(segments.map(segment => segment.kind)).toEqual(['tools', 'block', 'tools'])
+    expect(segments.map(segment => segment.kind)).toEqual(['tools', 'block', 'tools', 'block', 'tools'])
     if (segments[0].kind === 'tools') {
-      expect(segments[0].blocks).toEqual([blocks[0], thinking, blocks[2]])
-      expect(segments[0].tools.map(item => item.id)).toEqual(['a', 'b'])
+      expect(segments[0].blocks).toEqual([blocks[0]])
+      expect(segments[0].tools.map(item => item.id)).toEqual(['a'])
     }
-    expect(segments[1]).toMatchObject({ kind: 'block', block: { type: 'text', text: 'done' } })
+    expect(segments[1]).toMatchObject({ kind: 'block', block: thinking })
+    expect(segments[2]).toMatchObject({ kind: 'tools', tools: [expect.objectContaining({ id: 'b' })] })
+    expect(segments[3]).toMatchObject({ kind: 'block', block: { type: 'text', text: 'done' } })
+    expect(segments[4]).toMatchObject({ kind: 'tools', tools: [blocks[4]] })
 
     const leading = segmentToolBlocks([thinking, tool('d')])
-    expect(leading).toHaveLength(1)
-    if (leading[0].kind === 'tools') expect(leading[0].blocks).toEqual([thinking, expect.objectContaining({ id: 'd' })])
+    expect(leading.map(segment => segment.kind)).toEqual(['block', 'tools'])
+    expect(leading[0]).toMatchObject({ kind: 'block', block: thinking })
+    if (leading[1].kind === 'tools') expect(leading[1].blocks).toEqual([expect.objectContaining({ id: 'd' })])
+    const thinkingOnly = segmentToolBlocks([thinking])[0]
+    expect(leading[0].key).toBe(thinkingOnly.key)
 
     const standalone = segmentToolBlocks([thinking, { type: 'text', text: 'answer' }])
     expect(standalone.map(segment => segment.kind)).toEqual(['block', 'block'])
   })
 
-  it('joins adjacent assistant tool runs across trailing and leading thinking', () => {
+  it('does not join assistant tool runs across thinking', () => {
     const thinking: ContentBlock = { type: 'thinking', thinking: 'continue' }
-    expect(joinsToolRun([tool('a'), thinking], [thinking, tool('b')])).toBe(true)
+    expect(joinsToolRun([tool('a'), thinking], [thinking, tool('b')])).toBe(false)
+    expect(joinsToolRun([tool('a')], [thinking, tool('b')])).toBe(false)
     expect(joinsToolRun([tool('a')], [{ type: 'text', text: 'answer' }, tool('b')])).toBe(false)
     expect(joinsToolRun([{ type: 'text', text: 'answer' }], [tool('b')])).toBe(false)
+  })
+
+  it('treats redacted thinking as an independent block boundary', () => {
+    const redacted: ContentBlock = { type: 'redacted_thinking' }
+    const segments = segmentToolBlocks([tool('a'), redacted, tool('b')])
+
+    expect(isThinkingBlock(redacted)).toBe(true)
+    expect(segments.map(segment => segment.kind)).toEqual(['tools', 'block', 'tools'])
+    expect(joinsToolRun([tool('a')], [redacted, tool('b')])).toBe(false)
   })
 
   it('binds permission to the newest matching unresolved tool only', () => {

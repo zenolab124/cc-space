@@ -14,30 +14,28 @@ interface ThemeConfig {
   version: 2
   lightTheme: string
   darkTheme: string
+  mode: 'system' | 'light' | 'dark'
 }
 
 /** 解析主题值:兼容 'system'/'light'/'dark' 简写与 v2 对象(含 glass 降级、非法 id 兜底) */
 function parseThemeValue(v: unknown): ThemeConfig | null {
-  if (v === 'system') return { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
-  if (v === 'light') return { version: 2, lightTheme: 'paper', darkTheme: 'paper' }
-  if (v === 'dark') return { version: 2, lightTheme: 'ink', darkTheme: 'ink' }
+  if (v === 'system') return { version: 2, lightTheme: 'paper', darkTheme: 'ink', mode: 'system' }
+  if (v === 'light') return { version: 2, lightTheme: 'paper', darkTheme: 'ink', mode: 'light' }
+  if (v === 'dark') return { version: 2, lightTheme: 'paper', darkTheme: 'ink', mode: 'dark' }
   if (typeof v === 'object' && v !== null && (v as { version?: unknown }).version === 2) {
-    const o = v as { lightTheme?: unknown; darkTheme?: unknown }
-    const norm = (id: unknown, fallback: string) => {
-      if (id === 'glass') return fallback
-      return typeof id === 'string' ? getTheme(id).id : fallback
-    }
-    return { version: 2, lightTheme: norm(o.lightTheme, 'paper'), darkTheme: norm(o.darkTheme, 'ink') }
+    const o = v as { mode?: unknown }
+    const mode = o.mode === 'light' || o.mode === 'dark' ? o.mode : 'system'
+    return { version: 2, lightTheme: 'paper', darkTheme: 'ink', mode }
   }
   return null
 }
 
 function loadConfig(): ThemeConfig {
   const raw = readMigratedStorage(STORAGE_KEY, LEGACY_STORAGE_KEY)
-  if (!raw) return { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
+  if (!raw) return { version: 2, lightTheme: 'paper', darkTheme: 'ink', mode: 'system' }
   let value: unknown = raw
   try { value = JSON.parse(raw) } catch {}
-  return parseThemeValue(value) ?? { version: 2, lightTheme: 'paper', darkTheme: 'ink' }
+  return parseThemeValue(value) ?? { version: 2, lightTheme: 'paper', darkTheme: 'ink', mode: 'system' }
 }
 
 const config = ref<ThemeConfig>(loadConfig())
@@ -58,8 +56,9 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e)
 })
 
 const activeTheme = computed<ThemeMeta>(() => {
-  const id = prefersDark.value ? config.value.darkTheme : config.value.lightTheme
-  return getTheme(id)
+  const isDark = config.value.mode === 'dark'
+    || (config.value.mode === 'system' && prefersDark.value)
+  return getTheme(isDark ? 'ink' : 'paper')
 })
 
 let transitionTimer: ReturnType<typeof setTimeout> | null = null
@@ -107,22 +106,12 @@ watch([config, prefersDark], () => {
 // 双写权威源(单独 watch:prefersDark 变化不触发文件写)
 watch(config, v => writeSetting(SETTING_KEY, v), { deep: true })
 
-function setLightTheme(themeId: string) {
-  config.value = { ...config.value, lightTheme: themeId }
-}
-
-function setDarkTheme(themeId: string) {
-  config.value = { ...config.value, darkTheme: themeId }
-}
-
 function cycleActiveTheme() {
-  const currentId = prefersDark.value ? config.value.darkTheme : config.value.lightTheme
-  const idx = THEMES.findIndex(t => t.id === currentId)
-  const nextId = THEMES[(idx + 1) % THEMES.length].id
-  if (prefersDark.value) {
-    config.value = { ...config.value, darkTheme: nextId }
-  } else {
-    config.value = { ...config.value, lightTheme: nextId }
+  config.value = {
+    ...config.value,
+    lightTheme: 'paper',
+    darkTheme: 'ink',
+    mode: activeTheme.value.isDark ? 'light' : 'dark',
   }
 }
 
@@ -135,8 +124,6 @@ export function useTheme() {
     activeThemeLabel,
     prefersDark,
     themes: THEMES,
-    setLightTheme,
-    setDarkTheme,
     cycleActiveTheme,
   }
 }

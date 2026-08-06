@@ -45,6 +45,8 @@ export interface SendOptions {
 export interface StreamingTurn {
   messageId: string
   content: ContentBlock[]
+  /** 工具结果属于 user message，单独存放，不能混入 assistant content 的块序列。 */
+  toolResults?: Array<Extract<ContentBlock, { type: 'tool_result' }>>
   /** 本轮实际运行的模型真值(流式期实时标注,与落账后的 message.model 同源) */
   model?: string
   /**
@@ -126,7 +128,7 @@ interface BlockDeltaPayload {
 }
 
 interface StreamEventPayload {
-  kind: 'assistant_message' | 'block_start' | 'block_delta' | 'block_stop' | 'result' | 'error'
+  kind: 'assistant_message' | 'block_start' | 'block_delta' | 'block_stop' | 'tool_results' | 'result' | 'error'
   session_id: string
   message_id?: string
   content?: ContentBlock[]
@@ -936,6 +938,32 @@ export async function initStreamListeners(): Promise<void> {
             }
           }
           bump()
+        }
+        break
+      case 'tool_results':
+        // tool_result 在 CLI 侧已经执行完成,但整轮 result 还未到达。
+        // 追加到独立结果槽，让现有 toolResultMap 立即可见；不能写进 assistant
+        // content，否则会改变块序列、把结果渲染成额外 block 并扰乱流式分段。
+        if (payload.content?.length) {
+          let changed = false
+          for (const block of payload.content) {
+            if (block.type !== 'tool_result') continue
+            const result = block as Extract<ContentBlock, { type: 'tool_result' }>
+            const toolUseId = result.tool_use_id
+            const turn = state.streamingTurns.find(t =>
+              t.content.some(b => b.type === 'tool_use' && b.id === toolUseId),
+            )
+            if (!turn) continue
+            const results = turn.toolResults ?? (turn.toolResults = [])
+            const existingIndex = results.findIndex(result => result.tool_use_id === toolUseId)
+            if (existingIndex >= 0) results[existingIndex] = result
+            else results.push(result)
+            changed = true
+          }
+          if (changed) {
+            markTailDirty(sid)
+            bump()
+          }
         }
         break
       case 'result':

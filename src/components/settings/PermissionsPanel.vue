@@ -155,13 +155,17 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="space-y-4">
-    <p class="text-xs text-muted-foreground leading-relaxed">{{ t('settings.permCheck.desc') }}</p>
+  <div class="settings-permissions-panel">
 
     <!-- 主应用账本 -->
-    <div class="border border-border rounded-md overflow-hidden">
-      <div class="flex items-center justify-between px-3 py-2 bg-muted/40 border-b border-border">
-        <div class="text-xs font-medium">{{ t('settings.permCheck.appGroup') }}</div>
+    <section class="permissions-card">
+      <div class="permissions-card-header">
+        <div class="permissions-card-title">
+          <span class="permissions-card-icon"><span class="i-carbon-settings" /></span>
+          <div>
+            <div class="text-xs font-semibold">{{ t('settings.permCheck.appGroup') }}</div>
+          </div>
+        </div>
         <button class="perm-btn" :disabled="checking" @click="refresh">
           <span :class="checking ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-renew'" class="w-3 h-3" />
           {{ t('settings.permCheck.refresh') }}
@@ -170,7 +174,7 @@ onUnmounted(() => {
       <div
         v-for="row in appRows"
         :key="row.key"
-        class="flex items-center gap-2.5 px-3 py-2 border-b border-border last:border-b-0"
+        class="permission-row"
       >
         <span :class="row.icon" class="w-4 h-4 shrink-0 opacity-70" />
         <div class="flex-1 min-w-0">
@@ -194,17 +198,20 @@ onUnmounted(() => {
           {{ t('settings.permCheck.openSettings') }}
         </button>
       </div>
-    </div>
+    </section>
 
     <!-- runner 账本 -->
-    <div class="border border-border rounded-md overflow-hidden">
-      <div class="flex items-center justify-between px-3 py-2 bg-muted/40 border-b border-border">
-        <div class="min-w-0">
-          <div class="text-xs font-medium">{{ t('settings.permCheck.runnerGroup') }}</div>
-          <div class="text-[11px] text-muted-foreground">
+    <section class="permissions-card">
+      <div class="permissions-card-header">
+        <div class="permissions-card-title">
+          <span class="permissions-card-icon"><span class="i-carbon-time" /></span>
+          <div class="min-w-0">
+            <div class="text-xs font-semibold">{{ t('settings.permCheck.runnerGroup') }}</div>
+            <div class="permissions-card-hint">
             {{ runnerResult
               ? t('settings.permCheck.lastChecked', { time: formatTime(runnerResult.checkedAt) })
               : t('settings.permCheck.neverChecked') }}
+            </div>
           </div>
         </div>
         <button class="perm-btn shrink-0" :disabled="runnerChecking" @click="runRunnerCheck">
@@ -212,13 +219,13 @@ onUnmounted(() => {
           {{ runnerChecking ? t('settings.permCheck.checking') : t('settings.permCheck.runCheck') }}
         </button>
       </div>
-      <p class="px-3 py-2 text-[11px] text-muted-foreground border-b border-border leading-relaxed">
+      <p class="permissions-card-description">
         {{ t('settings.permCheck.runnerGroupDesc') }}
       </p>
       <div
         v-for="row in runnerRows"
         :key="row.key"
-        class="flex items-center gap-2.5 px-3 py-2 border-b border-border last:border-b-0"
+        class="permission-row"
       >
         <span :class="row.icon" class="w-4 h-4 shrink-0 opacity-70" />
         <div class="flex-1 min-w-0">
@@ -244,7 +251,7 @@ onUnmounted(() => {
           {{ t('settings.permCheck.openSettings') }}
         </button>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -266,5 +273,73 @@ onUnmounted(() => {
 }
 .perm-btn:disabled {
   opacity: 0.5;
+}
+
+.settings-permissions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.permissions-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+}
+.permissions-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--primary) 4%, var(--card));
+}
+.permissions-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.permissions-card-icon {
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  font-size: 14px;
+}
+.permissions-card-hint,
+.permissions-card-description {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.permissions-card-hint { margin-top: 3px; }
+.permissions-card-description {
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.permission-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.permission-row:last-child { border-bottom: 0; }
+.permission-row:hover { background: color-mix(in srgb, var(--primary) 3%, transparent); }
+@media (max-width: 680px) {
+  .permissions-card-header { flex-direction: column; }
+  .permission-row { align-items: flex-start; flex-wrap: wrap; }
+  .permission-row > :nth-child(2) { min-width: calc(100% - 38px); }
+  .permission-row > :nth-child(3) { margin-left: 26px; }
 }
 </style>

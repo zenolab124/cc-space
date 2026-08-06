@@ -246,6 +246,28 @@ impl ClaudeRuntime {
                     status: ItemStatus::Completed,
                 },
             ),
+            StreamEvent::ToolResults { content, .. } => {
+                if let Ok(session) = SessionRef::new(self.instance.clone(), &session_id) {
+                    for block in content {
+                        let item_id = match &block {
+                            crate::models::ContentBlock::ToolResult { tool_use_id, .. } => {
+                                format!("tool-result:{tool_use_id}")
+                            }
+                            _ => continue,
+                        };
+                        if let Ok(segment) = map_block(&session, "stream", block) {
+                            self.emit(
+                                &session_id,
+                                NormalizedRuntimeEvent::ItemDelta {
+                                    turn_id: turn_id.clone(),
+                                    item_id,
+                                    segment,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
             StreamEvent::AssistantMessage {
                 message_id,
                 content,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { isWindows } from '@/composables/usePlatform'
 
@@ -16,11 +17,20 @@ interface InstallResult {
   newVersion: string | null
   command: string
   outputTail: string
+  binaryPath?: string | null
+}
+
+type InstallPhase = 'installing' | 'verifying'
+
+interface InstallProgress {
+  engine: 'claude' | 'codex'
+  phase: InstallPhase | 'completed' | 'failed'
 }
 
 const info = ref<CodexEnvInfo | null>(null)
 const checking = ref(false)
 const installing = ref(false)
+const installPhase = ref<InstallPhase | null>(null)
 const installMsg = ref<{ kind: 'ok' | 'err'; text: string } | null>(null)
 const installTail = ref('')
 const copiedCmd = ref('')
@@ -47,13 +57,20 @@ async function check() {
 async function runInstall() {
   if (installing.value) return
   installing.value = true
+  installPhase.value = 'installing'
   installMsg.value = null
   installTail.value = ''
   try {
     const result = await invoke<InstallResult>('codex_env_install')
     if (result.success) {
+      installPhase.value = 'verifying'
+      if (result.newVersion && result.binaryPath) {
+        info.value = {
+          installedVersion: result.newVersion,
+          binaryPath: result.binaryPath,
+        }
+      }
       installMsg.value = { kind: 'ok', text: t('settings.codexInstall.installOk', { version: result.newVersion ?? '?' }) }
-      await check()
     } else {
       installMsg.value = { kind: 'err', text: t('settings.codexInstall.installFail') }
       installTail.value = result.outputTail
@@ -62,6 +79,7 @@ async function runInstall() {
     installMsg.value = { kind: 'err', text: String(error) }
   } finally {
     installing.value = false
+    installPhase.value = null
   }
 }
 
@@ -76,7 +94,21 @@ function openInstallDocs() {
   invoke('open_in_default_app', { path: 'https://developers.openai.com/codex/cli/' }).catch(() => {})
 }
 
-onMounted(check)
+let unlistenInstallProgress: (() => void) | null = null
+
+onMounted(async () => {
+  check()
+  unlistenInstallProgress = await listen<InstallProgress>('cli-install-progress', (event) => {
+    if (event.payload.engine !== 'codex') return
+    if (event.payload.phase === 'installing' || event.payload.phase === 'verifying') {
+      installPhase.value = event.payload.phase
+    }
+  })
+})
+
+onUnmounted(() => {
+  unlistenInstallProgress?.()
+})
 </script>
 
 <template>
@@ -112,10 +144,15 @@ onMounted(check)
       <div class="mt-1.5 flex items-center gap-2">
         <button class="env-btn primary" :disabled="installing" @click="runInstall">
           <span v-if="installing" class="i-carbon-circle-dash w-3 h-3 animate-spin" />
-          {{ installing ? t('settings.codexInstall.installing') : t('settings.codexInstall.installNow') }}
+          {{ installing
+            ? t(installPhase === 'verifying' ? 'settings.codexInstall.verifying' : 'settings.codexInstall.installing')
+            : t('settings.codexInstall.installNow') }}
         </button>
         <code class="env-path flex-1 !mt-0 truncate text-muted-foreground" :title="installOptions[0].cmd">{{ installOptions[0].cmd }}</code>
       </div>
+      <p v-if="installing" class="text-[10px] text-muted-foreground mt-1">
+        {{ t(installPhase === 'verifying' ? 'settings.codexInstall.verifyingHint' : 'settings.codexInstall.installingHint') }}
+      </p>
       <p v-if="installMsg" :class="['text-[10.5px] mt-1', installMsg.kind === 'ok' ? 'text-primary' : 'text-destructive']">
         {{ installMsg.text }}
       </p>

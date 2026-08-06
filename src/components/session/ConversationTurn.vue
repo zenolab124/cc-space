@@ -2,11 +2,14 @@
 import type { ConversationTurnView } from '@/engines/presentation'
 import AssistantResponseFrame from '@/components/AssistantResponseFrame.vue'
 import DividerMark from '@/components/DividerMark.vue'
+import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import ConversationUserMessage from './ConversationUserMessage.vue'
 
 defineProps<{
   turn: ConversationTurnView
 }>()
+
+const { stickyUserPromptEnabled } = useStickyUserPrompt()
 </script>
 
 <template>
@@ -17,7 +20,7 @@ defineProps<{
     <div
       v-if="turn.user.visible"
       :class="[
-        turn.user.sticky ? 'conversation-user-sticky' : '',
+        turn.user.sticky && stickyUserPromptEnabled ? 'conversation-user-sticky' : '',
         turn.user.hidden ? 'conversation-user-ghost' : '',
       ]"
     >

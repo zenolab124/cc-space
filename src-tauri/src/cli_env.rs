@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 
 use crate::claude_locator;
 use crate::proc_ext::HideConsole;
@@ -36,6 +37,13 @@ pub struct ClaudeEnvInfo {
     pub binary_path: Option<String>,
     /// official（官方安装器/native）| npm | homebrew | unknown
     pub install_method: String,
+}
+
+fn emit_install_progress(app: &AppHandle, phase: &str) {
+    let _ = app.emit(
+        "cli-install-progress",
+        serde_json::json!({ "engine": "claude", "phase": phase }),
+    );
 }
 
 /// 从命令输出提取首个 semver（"2.1.199 (Claude Code)" → "2.1.199"）
@@ -115,8 +123,7 @@ fn fetch_latest_version() -> Option<String> {
     Some(version)
 }
 
-#[tauri::command]
-pub fn claude_env_check() -> ClaudeEnvInfo {
+fn claude_env_check_sync() -> ClaudeEnvInfo {
     let located = claude_locator::locate().ok();
     let binary_path = located.as_ref().map(|l| l.path.to_string_lossy().to_string());
     let installed_version = located.as_ref().and_then(|l| run_version(&l.path));
@@ -135,6 +142,13 @@ pub fn claude_env_check() -> ClaudeEnvInfo {
     }
 }
 
+#[tauri::command]
+pub async fn claude_env_check() -> Result<ClaudeEnvInfo, String> {
+    tauri::async_runtime::spawn_blocking(claude_env_check_sync)
+        .await
+        .map_err(|error| format!("Claude 环境检查线程异常退出: {error}"))
+}
+
 // ---------------------------------------------------------------------------
 // 升级
 // ---------------------------------------------------------------------------
@@ -149,6 +163,7 @@ pub struct UpgradeResult {
     pub command: String,
     /// 输出末尾（错误信息几乎总在末尾）
     pub output_tail: String,
+    pub binary_path: Option<String>,
 }
 
 fn tail(s: &str) -> String {
@@ -169,8 +184,7 @@ fn sibling_npm(claude_path: &Path) -> Option<PathBuf> {
     npm.is_file().then_some(npm)
 }
 
-#[tauri::command]
-pub fn claude_env_upgrade() -> Result<UpgradeResult, String> {
+fn claude_env_upgrade_sync() -> Result<UpgradeResult, String> {
     let located = claude_locator::locate().map_err(|e| format!("未定位到 claude: {e}"))?;
     let method = detect_method(&located.path.to_string_lossy());
 
@@ -223,7 +237,15 @@ pub fn claude_env_upgrade() -> Result<UpgradeResult, String> {
         new_version,
         command: desc,
         output_tail: tail(&combined),
+        binary_path: Some(located.path.to_string_lossy().into_owned()),
     })
+}
+
+#[tauri::command]
+pub async fn claude_env_upgrade() -> Result<UpgradeResult, String> {
+    tauri::async_runtime::spawn_blocking(claude_env_upgrade_sync)
+        .await
+        .map_err(|error| format!("Claude Code 升级线程异常退出: {error}"))?
 }
 
 // ---------------------------------------------------------------------------
@@ -233,8 +255,8 @@ pub fn claude_env_upgrade() -> Result<UpgradeResult, String> {
 /// 一键安装 Claude Code（官方安装脚本）。安装器双平台落点均为 ~/.local/bin，
 /// locator 候选已覆盖；完成后清缓存重探测，"探测到 + 版本可测"才算成功
 /// （脚本 exit 0 但没装上的情况按失败报）。
-#[tauri::command]
-pub fn claude_env_install() -> Result<UpgradeResult, String> {
+fn claude_env_install_sync(app: AppHandle) -> Result<UpgradeResult, String> {
+    emit_install_progress(&app, "installing");
     #[cfg(windows)]
     let (mut cmd, desc): (Command, String) = {
         let mut c = Command::new("powershell");
@@ -256,23 +278,41 @@ pub fn claude_env_install() -> Result<UpgradeResult, String> {
         (c, "curl -fsSL https://claude.ai/install.sh | bash".to_string())
     };
 
-    let output = cmd.output().map_err(|e| format!("安装命令启动失败: {e}"))?;
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(error) => {
+            emit_install_progress(&app, "failed");
+            return Err(format!("安装命令启动失败: {error}"));
+        }
+    };
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
+    emit_install_progress(&app, "verifying");
+
     // 清缓存重探测（安装前的失败负缓存必须失效），再现测版本
     let info = claude_locator::redetect_info();
     let new_version = info.path.as_deref().and_then(|p| run_version(Path::new(p)));
+    let success = output.status.success() && new_version.is_some();
+    emit_install_progress(&app, if success { "completed" } else { "failed" });
 
     Ok(UpgradeResult {
-        success: output.status.success() && new_version.is_some(),
+        success,
         new_version,
         command: desc,
         output_tail: tail(&combined),
+        binary_path: info.path,
     })
+}
+
+#[tauri::command]
+pub async fn claude_env_install(app: AppHandle) -> Result<UpgradeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || claude_env_install_sync(app))
+        .await
+        .map_err(|error| format!("Claude Code 安装线程异常退出: {error}"))?
 }
 
 // ---------------------------------------------------------------------------

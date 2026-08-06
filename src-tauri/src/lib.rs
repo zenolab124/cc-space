@@ -294,6 +294,7 @@ pub fn run() {
             channels::set_channel_enabled,
             channels::set_default_session_channel,
             channels::set_default_agent_model,
+            channels::set_default_agent_effort,
             channels::get_channel_token,
             channels::get_agent_toggles,
             channels::set_agent_toggle,

@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+fn empty_tool_input() -> Value {
+    Value::Object(Default::default())
+}
+
 /// 消息内容块，对应 JSONL 中 message.content 数组元素
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -18,6 +22,9 @@ pub enum ContentBlock {
     ToolUse {
         id: String,
         name: String,
+        /// Anthropic 的流式 `content_block_start` 有时先只发 id/name，
+        /// 参数在后续 input_json_delta 才到；首帧必须先能进入前端流。
+        #[serde(default = "empty_tool_input")]
         input: Value,
     },
     ToolResult {

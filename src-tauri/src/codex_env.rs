@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 
 use crate::codex_locator;
 use crate::proc_ext::HideConsole;
@@ -19,6 +20,13 @@ pub struct CodexEnvInfo {
     pub binary_path: Option<String>,
 }
 
+fn emit_install_progress(app: &AppHandle, phase: &str) {
+    let _ = app.emit(
+        "cli-install-progress",
+        serde_json::json!({ "engine": "codex", "phase": phase }),
+    );
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexInstallResult {
@@ -26,6 +34,7 @@ pub struct CodexInstallResult {
     pub new_version: Option<String>,
     pub command: String,
     pub output_tail: String,
+    pub binary_path: Option<String>,
 }
 
 fn parse_semver(text: &str) -> Option<String> {
@@ -65,8 +74,7 @@ fn tail(text: &str) -> String {
     format!("…{}", &trimmed[boundary..])
 }
 
-#[tauri::command]
-pub fn codex_env_check() -> CodexEnvInfo {
+fn codex_env_check_sync() -> CodexEnvInfo {
     let located = codex_locator::locate().ok();
     let binary_path = located
         .as_ref()
@@ -79,7 +87,14 @@ pub fn codex_env_check() -> CodexEnvInfo {
 }
 
 #[tauri::command]
-pub fn codex_env_install() -> Result<CodexInstallResult, String> {
+pub async fn codex_env_check() -> Result<CodexEnvInfo, String> {
+    tauri::async_runtime::spawn_blocking(codex_env_check_sync)
+        .await
+        .map_err(|error| format!("Codex 环境检查线程异常退出: {error}"))
+}
+
+fn codex_env_install_sync(app: AppHandle) -> Result<CodexInstallResult, String> {
+    emit_install_progress(&app, "installing");
     #[cfg(windows)]
     let (mut command, description): (Command, String) = {
         let mut command = Command::new("npm");
@@ -96,24 +111,40 @@ pub fn codex_env_install() -> Result<CodexInstallResult, String> {
         (command, format!("curl -fsSL {INSTALL_SCRIPT_URL} | sh"))
     };
 
-    let output = command
-        .output()
-        .map_err(|error| format!("安装命令启动失败: {error}"))?;
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            emit_install_progress(&app, "failed");
+            return Err(format!("安装命令启动失败: {error}"));
+        }
+    };
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let new_version = codex_locator::redetect()
-        .ok()
-        .and_then(|path| run_version(&path));
+    emit_install_progress(&app, "verifying");
+    let binary_path = codex_locator::redetect().ok();
+    let new_version = binary_path
+        .as_deref()
+        .and_then(|path| run_version(path));
+    let success = output.status.success() && new_version.is_some();
+    emit_install_progress(&app, if success { "completed" } else { "failed" });
 
     Ok(CodexInstallResult {
-        success: output.status.success() && new_version.is_some(),
+        success,
         new_version,
         command: description,
         output_tail: tail(&combined),
+        binary_path: binary_path.map(|path| path.to_string_lossy().into_owned()),
     })
+}
+
+#[tauri::command]
+pub async fn codex_env_install(app: AppHandle) -> Result<CodexInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || codex_env_install_sync(app))
+        .await
+        .map_err(|error| format!("Codex 安装线程异常退出: {error}"))?
 }
 
 #[cfg(test)]

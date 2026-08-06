@@ -21,6 +21,7 @@ import {
   sessionRenderCadence,
 } from '@/composables/useStreaming'
 import { useSessionSettings, type ChannelMark } from '@/composables/useSessionSettings'
+import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { useRunConfig } from '@/composables/useRunConfig'
 import {
   useChannels,
@@ -229,14 +230,10 @@ const toolResultMap = computed(() => {
     }
   }
   for (const turn of stream.value.streamingTurns) {
-    for (const b of turn.content) {
-      if (b.type === 'tool_result') {
-        const tr = b as Extract<ContentBlock, { type: 'tool_result' }>
-        // 流式 turns 经 typed 反序列化,图片 data 已剥离;但 assistant 消息不含
-        // tool_result,此分支对图片实际不可达——流式期 tool_result 图片由 records
-        // 重载走协议 URL。recordUuid 置 null 仅为类型完整
-        map.set(tr.tool_use_id, { content: tr.content, is_error: tr.is_error, recordUuid: null })
-      }
+    for (const tr of turn.toolResults ?? []) {
+      // 流式结果经 typed 反序列化,图片 data 已剥离;流式期图片由 records
+      // 重载走协议 URL。recordUuid 置 null 仅为类型完整。
+      map.set(tr.tool_use_id, { content: tr.content, is_error: tr.is_error, recordUuid: null })
     }
   }
   return map
@@ -245,6 +242,7 @@ provide('toolResultMap', toolResultMap)
 
 const toolFoldState = provideToolFoldState()
 const { toolDisplayMode } = useToolDisplayMode()
+const { stickyUserPromptEnabled } = useStickyUserPrompt()
 
 // --- 异步任务面板（后台 Bash / Agent / Workflow / Monitor / Wakeup）---
 const {
@@ -2002,6 +2000,7 @@ const pendingStickyRef = ref<HTMLElement>()
 const stickyGroupIndex = ref(-1)
 
 function updateStickyGroup() {
+  if (!stickyUserPromptEnabled.value) { stickyGroupIndex.value = -1; return }
   if (!shouldVirtualize.value) { stickyGroupIndex.value = -1; return }
   const sc = scrollContainer.value
   const vbox = virtualBoxRef.value
@@ -2034,6 +2033,10 @@ function updateStickyGroup() {
   stickyGroupIndex.value = idx
 }
 
+watch(stickyUserPromptEnabled, () => {
+  void nextTick(updateStickyGroup)
+})
+
 /** 吸顶合格判定:有 AI 回复的正常用户消息(与原生 sticky 同条件) */
 function groupQualifies(g: { user: any; responses: any[] } | null | undefined): boolean {
   if (!g?.user || g.user.type !== 'user') return false
@@ -2046,6 +2049,7 @@ function groupQualifies(g: { user: any; responses: any[] } | null | undefined): 
 // 视口顶部组不合格(后台任务/自发轮无用户消息)时向前回溯最近的合格组:
 // 吸顶语义 = 当前内容隶属于哪条用户指令
 const stickyDisplay = computed(() => {
+  if (!stickyUserPromptEnabled.value) return null
   // 索引空间 = messageGroups(含末组):自绘层接管全滚动范围
   for (let i = stickyGroupIndex.value; i >= 0; i--) {
     const g = messageGroups.value[i]
@@ -2878,7 +2882,7 @@ async function onReload() {
     </Transition>
       </template>
     <!-- 虚拟化下的自绘吸顶:原生 sticky 被虚拟项 transform 劫持,此层吸在滚动视口顶,内容为视口顶部所在组的用户消息克隆;点击回跳该组 -->
-    <div v-if="stickyGroup?.user" class="sticky-user-overlay" :title="$t('session.stickyJumpHint')" @click="jumpToStickyGroup">
+    <div v-if="stickyUserPromptEnabled && stickyGroup?.user" class="sticky-user-overlay" :title="$t('session.stickyJumpHint')" @click="jumpToStickyGroup">
       <ConversationUserMessage :time-label="stickyTimeLabel">
         <UserMsgContent :blocks="contentBlocks(stickyGroup.user as any)" :record-uuid="stickyGroup.user.uuid ?? undefined" />
         <template #actions>
@@ -3007,7 +3011,11 @@ async function onReload() {
       <!-- 流式区:pendingUserMessage + streamingTurns(横幅已移出文档流,悬浮层见上方) -->
       <div v-if="stream.pendingUserMessage || stream.pendingImages?.length || stream.streamingTurns.length || (stream.streaming && stream.streamingTurns.length === 0)" class="space-y-4">
         <!-- 落账接管即让位:pendingLandedUuid 非 null 时历史条与气泡同帧原子切换,无双显无空窗 -->
-        <div v-if="(stream.pendingUserMessage || stream.pendingImages?.length) && !pendingLandedUuid" ref="pendingStickyRef" class="user-msg-sticky">
+        <div
+          v-if="(stream.pendingUserMessage || stream.pendingImages?.length) && !pendingLandedUuid"
+          ref="pendingStickyRef"
+          :class="{ 'user-msg-sticky': stickyUserPromptEnabled }"
+        >
           <ConversationUserMessage :time-label="pendingTimeLabel">
             <UserMsgContent :blocks="pendingUserBlocks" />
           </ConversationUserMessage>

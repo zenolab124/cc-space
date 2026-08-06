@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 
@@ -43,6 +44,8 @@ struct AgentProcess {
     stdout: BufReader<std::process::ChildStdout>,
     /// 落盘会话 ID（agent_cwd 目录下的 <id>.jsonl）。落盘设置关闭时为 None
     session_id: Option<String>,
+    /// Ultracode 或官方直连使用的临时 settings 文件，进程退出后清理。
+    runtime_path: Option<PathBuf>,
 }
 
 /// oneshot Agent 无论成功、协议错误还是调用方提前返回，都必须同步回收子进程。
@@ -55,6 +58,9 @@ fn terminate_and_reap(child: &mut Child) {
 impl Drop for AgentProcess {
     fn drop(&mut self) {
         terminate_and_reap(&mut self.child);
+        if let Some(path) = self.runtime_path.take() {
+            crate::channels::cleanup_runtime_file(&path);
+        }
     }
 }
 
@@ -80,8 +86,6 @@ fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<
         "stream-json".to_string(),
         "--model".to_string(),
         model.to_string(),
-        "--effort".to_string(),
-        effort.to_string(),
         "--tools".to_string(),
         "".to_string(),
         "--append-system-prompt".to_string(),
@@ -93,8 +97,28 @@ fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<
          5. Output in the language specified by 输出语言 in the prompt.".to_string(),
         "--verbose".to_string(),
     ]);
+    let ultracode = effort == "ultracode";
+    if !ultracode {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
     // 官方直连:注入压制 settings,挤掉 CLI 用户配置里的第三方认证/路由键
-    if official_direct {
+    let mut runtime_path = None;
+    if ultracode {
+        let injection_id = session_id
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let injection = crate::channels::prepare_injection(
+            official_direct.then_some(crate::channels::OFFICIAL_DIRECT_ID),
+            &injection_id,
+            true,
+            false,
+        )?;
+        if let Some(injection) = injection {
+            args.extend(["--settings".to_string(), injection.settings_arg]);
+            runtime_path = Some(injection.runtime_path);
+        }
+    } else if official_direct {
         let path = crate::channels::official_direct_settings_path()?;
         args.extend(["--settings".to_string(), path.to_string_lossy().into_owned()]);
     }
@@ -110,7 +134,12 @@ fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("AgentService spawn 失败: {}", e))?;
+        .map_err(|e| {
+            if let Some(path) = runtime_path.take() {
+                crate::channels::cleanup_runtime_file(&path);
+            }
+            format!("AgentService spawn 失败: {}", e)
+        })?;
 
     let stdin = child.stdin.take().ok_or("无法获取 agent stdin")?;
     let stdout = child.stdout.take().ok_or("无法获取 agent stdout")?;
@@ -135,6 +164,7 @@ fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<
         stdin,
         stdout: reader,
         session_id,
+        runtime_path,
     })
 }
 
@@ -177,14 +207,25 @@ pub(crate) fn request_blocking_pub(prompt: &str) -> Result<String, String> {
         .map_err(|e| e.message)
 }
 
-fn call_channel(cred: &crate::channels::AgentChannelCredentials, prompt: &str, model: &str, max_tokens: u32) -> Result<AgentCallResult, CliCallError> {
+fn call_channel(
+    cred: &crate::channels::AgentChannelCredentials,
+    prompt: &str,
+    model: &str,
+    effort: &str,
+    max_tokens: u32,
+) -> Result<AgentCallResult, CliCallError> {
     let channel_id = cred.id.clone();
     if cred.is_official {
-        let r = request_blocking(prompt, cred.id == crate::channels::OFFICIAL_DIRECT_ID)?;
+        let r = request_blocking_with(
+            prompt,
+            model,
+            effort,
+            cred.id == crate::channels::OFFICIAL_DIRECT_ID,
+        )?;
         Ok(AgentCallResult {
             text: r.text,
             channel_id,
-            model: OFFICIAL_AGENT_MODEL.to_string(),
+            model: model.to_string(),
             usage: r.usage,
             session_id: r.session_id,
         })
@@ -217,9 +258,15 @@ const HTTP_FALLBACK_AGENT_MODEL: &str = "claude-haiku-4-5-20251001";
 fn request_with_fallback(prompt: &str, model: &str, max_tokens: u32) -> Result<AgentCallResult, CliCallError> {
     if let Some(cred) = crate::channels::resolve_agent_credentials() {
         let effective_model = cred.agent_model.as_deref().unwrap_or(model);
-        return call_channel(&cred, prompt, effective_model, max_tokens);
+        let effective_effort = cred.agent_effort.as_deref().unwrap_or("low");
+        return call_channel(&cred, prompt, effective_model, effective_effort, max_tokens);
     }
-    let r = request_blocking(prompt, false)?;
+    let settings = crate::channels::load_app_settings();
+    let effort = settings
+        .default_agent_effort
+        .as_deref()
+        .unwrap_or("low");
+    let r = request_blocking_with(prompt, OFFICIAL_AGENT_MODEL, effort, false)?;
     Ok(AgentCallResult {
         text: r.text,
         channel_id: "official".to_string(),
@@ -257,8 +304,8 @@ fn request_for_agent_result(
             return request_logged_cli(
                 agent_key,
                 prompt,
-                OFFICIAL_AGENT_MODEL,
-                "low",
+                cred.agent_model.as_deref().unwrap_or(OFFICIAL_AGENT_MODEL),
+                cred.agent_effort.as_deref().unwrap_or("low"),
                 "official",
                 false,
             );
@@ -266,15 +313,19 @@ fn request_for_agent_result(
         Ok(Some(cred)) => {
             let channel_id = cred.id.clone();
             let effective_model = if cred.is_official {
-                OFFICIAL_AGENT_MODEL.to_string()
+                cred.agent_model
+                    .as_deref()
+                    .unwrap_or(OFFICIAL_AGENT_MODEL)
+                    .to_string()
             } else {
                 cred.agent_model
                     .as_deref()
                     .unwrap_or(HTTP_FALLBACK_AGENT_MODEL)
                     .to_string()
             };
+            let effective_effort = cred.agent_effort.as_deref().unwrap_or("low");
             let start = std::time::Instant::now();
-            match call_channel(&cred, prompt, &effective_model, max_tokens) {
+            match call_channel(&cred, prompt, &effective_model, effective_effort, max_tokens) {
                 Ok(result) => {
                     let duration_ms = start.elapsed().as_millis() as u64;
                     record_log(
@@ -320,14 +371,13 @@ fn request_for_agent_result(
         agent_key,
         prompt,
         OFFICIAL_AGENT_MODEL,
-        "low",
+        crate::channels::load_app_settings()
+            .default_agent_effort
+            .as_deref()
+            .unwrap_or("low"),
         channel_id,
         false,
     )
-}
-
-fn request_blocking(prompt: &str, official_direct: bool) -> Result<CliCallResult, CliCallError> {
-    request_blocking_with(prompt, "haiku", "low", official_direct)
 }
 
 fn request_blocking_with(prompt: &str, model: &str, effort: &str, official_direct: bool) -> Result<CliCallResult, CliCallError> {
@@ -667,7 +717,7 @@ fn request_logged(feature: &str, prompt: &str, model: &str, effort: &str) -> Res
             let channel_id = cred.id.clone();
             let effective_model = cred.agent_model.as_deref().unwrap_or(model).to_string();
             let start = std::time::Instant::now();
-            match call_channel(&cred, prompt, &effective_model, 2048) {
+            match call_channel(&cred, prompt, &effective_model, effort, 2048) {
                 Ok(result) => {
                     let duration_ms = start.elapsed().as_millis() as u64;
                     record_log(
