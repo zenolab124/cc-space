@@ -34,34 +34,34 @@ struct ThreadReadResponse {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CodexThread {
-    id: String,
+pub(super) struct CodexThread {
+    pub(super) id: String,
     #[serde(default)]
-    name: Option<String>,
+    pub(super) name: Option<String>,
     #[serde(default)]
-    preview: String,
+    pub(super) preview: String,
     #[serde(default)]
-    cwd: String,
+    pub(super) cwd: String,
     #[serde(default)]
-    model_provider: String,
+    pub(super) model_provider: String,
     #[serde(default)]
-    path: Option<String>,
-    created_at: i64,
-    updated_at: i64,
+    pub(super) path: Option<String>,
+    pub(super) created_at: i64,
+    pub(super) updated_at: i64,
     #[serde(default)]
-    turns: Vec<CodexTurn>,
+    pub(super) turns: Vec<CodexTurn>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CodexTurn {
-    id: String,
+pub(super) struct CodexTurn {
+    pub(super) id: String,
     #[serde(default)]
-    items: Vec<Value>,
+    pub(super) items: Vec<Value>,
     #[serde(default)]
-    started_at: Option<i64>,
+    pub(super) started_at: Option<i64>,
     #[serde(default)]
-    completed_at: Option<i64>,
+    pub(super) completed_at: Option<i64>,
 }
 
 type ThreadCache = Arc<Mutex<Option<(Instant, Vec<CodexThread>)>>>;
@@ -131,6 +131,10 @@ impl CodexSource {
         &self.supervisor
     }
 
+    pub fn probe_history(&self) -> EngineResult<()> {
+        self.list_all_threads().map(|_| ())
+    }
+
     fn owns_project(&self, project: &ProjectRef) -> EngineResult<()> {
         if project.engine() == &self.instance {
             Ok(())
@@ -164,6 +168,33 @@ impl CodexSource {
                 return Ok(threads.clone());
             }
         }
+        let app_server_result = self.list_app_server_threads();
+        let file_threads = super::file_source::list_threads()?;
+        let mut merged = BTreeMap::new();
+        for thread in file_threads {
+            merged.insert(thread.id.clone(), thread);
+        }
+        if let Ok(app_threads) = &app_server_result {
+            for thread in app_threads {
+                // App Server has richer metadata and live state. Local-only rows
+                // are still retained for archived sessions and CLI-less installs.
+                merged.insert(thread.id.clone(), thread.clone());
+            }
+        } else if merged.is_empty() {
+            return Err(
+                app_server_result.expect_err("Codex App Server result was unexpectedly missing")
+            );
+        }
+        let mut threads: Vec<_> = merged.into_values().collect();
+        threads.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        *self
+            .thread_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some((Instant::now(), threads.clone()));
+        Ok(threads)
+    }
+
+    fn list_app_server_threads(&self) -> EngineResult<Vec<CodexThread>> {
         let mut threads = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_PAGES {
@@ -185,11 +216,6 @@ impl CodexSource {
             threads.extend(response.data);
             cursor = response.next_cursor;
             if cursor.is_none() {
-                *self
-                    .thread_cache
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner()) =
-                    Some((Instant::now(), threads.clone()));
                 return Ok(threads);
             }
         }
@@ -201,18 +227,28 @@ impl CodexSource {
 
     fn read_thread(&self, session: &SessionRef) -> EngineResult<CodexThread> {
         self.owns_session(session)?;
-        let value = self.supervisor.request(
-            "thread/read",
-            json!({ "threadId": session.native_id(), "includeTurns": true }),
-        )?;
-        serde_json::from_value::<ThreadReadResponse>(value)
-            .map(|response| response.thread)
-            .map_err(|error| {
-                EngineError::new(
-                    EngineErrorKind::Protocol,
-                    format!("Codex returned an invalid thread: {error}"),
-                )
-            })
+        let app_server_result = self
+            .supervisor
+            .request(
+                "thread/read",
+                json!({ "threadId": session.native_id(), "includeTurns": true }),
+            )
+            .and_then(|value| {
+                serde_json::from_value::<ThreadReadResponse>(value)
+                    .map(|response| response.thread)
+                    .map_err(|error| {
+                        EngineError::new(
+                            EngineErrorKind::Protocol,
+                            format!("Codex returned an invalid thread: {error}"),
+                        )
+                    })
+            });
+        match app_server_result {
+            Ok(thread) => Ok(thread),
+            Err(app_server_error) => {
+                super::file_source::read_thread(session.native_id()).or(Err(app_server_error))
+            }
+        }
     }
 
     fn project_native_id(thread: &CodexThread) -> String {
@@ -478,17 +514,18 @@ impl SessionSource for CodexSource {
         Box::pin(async move {
             let thread = self.read_thread(&session)?;
             let cwd_available = !thread.cwd.is_empty() && Path::new(&thread.cwd).is_dir();
-            let resume = if !cwd_available {
+            let runtime = self.runtime_availability();
+            let cwd_runtime = if !cwd_available {
                 ActionAvailability::unavailable("engine.session.cwdUnavailable")
             } else {
-                self.runtime_availability()
+                runtime.clone()
             };
             Ok(SessionActions {
-                resume: resume.clone(),
-                fork: self.runtime_availability(),
-                send: resume,
-                steer: ActionAvailability::available(),
-                interrupt: ActionAvailability::available(),
+                resume: cwd_runtime.clone(),
+                fork: runtime.clone(),
+                send: cwd_runtime,
+                steer: runtime.clone(),
+                interrupt: runtime,
                 open_cwd: if thread.cwd.is_empty() {
                     ActionAvailability::unavailable("engine.session.noCwd")
                 } else {
@@ -520,7 +557,8 @@ fn map_item(
         | "fileChange"
         | "mcpToolCall"
         | "dynamicToolCall"
-        | "collabAgentToolCall" => ConversationRole::Tool,
+        | "collabAgentToolCall"
+        | "toolResult" => ConversationRole::Tool,
         _ => ConversationRole::Unknown,
     };
     let timestamp = if type_name == "userMessage" {
@@ -656,6 +694,20 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .unwrap_or(type_name)
                 .to_string(),
             input: bounded_segment_value(item.get("arguments").cloned().unwrap_or(Value::Null)),
+        }],
+        "toolResult" => vec![Segment::ToolResult {
+            call_id: item
+                .get("callId")
+                .or_else(|| item.get("call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .to_string(),
+            content: bounded_segment_value(item.get("content").cloned().unwrap_or(Value::Null)),
+            is_error: item
+                .get("isError")
+                .or_else(|| item.get("is_error"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }],
         "collabAgentToolCall" => vec![Segment::ToolCall {
             id,

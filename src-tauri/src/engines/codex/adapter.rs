@@ -85,108 +85,104 @@ impl EngineAdapter for CodexEngine {
 
     fn health(&self) -> EngineFuture<'_, EngineHealth> {
         Box::pin(async move {
+            let history_probe = self.source.probe_history();
+            let source = if history_probe.is_ok() {
+                CapabilityHealth::available()
+            } else {
+                CapabilityHealth::unavailable("engine.codex.historyUnavailable")
+            };
+            let mut diagnostics = history_probe
+                .as_ref()
+                .err()
+                .map(|error| HealthDiagnostic {
+                    code: "historyProbeFailed".into(),
+                    message: error.message.clone(),
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
             let path = match crate::codex_locator::locate() {
                 Ok(path) => path,
                 Err(error) => {
+                    diagnostics.push(HealthDiagnostic {
+                        code: "cliNotFound".into(),
+                        message: error.clone(),
+                    });
                     return Ok(EngineHealth {
                         instance: self.descriptor.instance.clone(),
-                        status: EngineHealthStatus::Unavailable,
+                        status: status_for(
+                            &source,
+                            &CapabilityHealth::unavailable("engine.codex.cliUnavailable"),
+                        ),
                         installed: false,
                         authenticated: None,
                         version: None,
                         version_supported: None,
                         executable_path: None,
-                        source: CapabilityHealth::unavailable("engine.codex.cliUnavailable"),
                         runtime: CapabilityHealth::unavailable("engine.codex.cliUnavailable"),
-                        diagnostics: vec![HealthDiagnostic {
-                            code: "cliNotFound".into(),
-                            message: error,
-                        }],
+                        source,
+                        diagnostics,
                     });
                 }
             };
             let version = cli_version(&path);
             let version_supported = supported_version(version.as_deref());
             if version_supported == Some(false) {
+                diagnostics.push(HealthDiagnostic {
+                    code: "versionUnsupported".into(),
+                    message: "Codex CLI is older than the supported App Server baseline".into(),
+                });
+                let runtime = CapabilityHealth::unavailable("engine.codex.versionUnsupported");
                 return Ok(EngineHealth {
                     instance: self.descriptor.instance.clone(),
-                    status: EngineHealthStatus::Degraded,
+                    status: status_for(&source, &runtime),
                     installed: true,
                     authenticated: None,
                     version,
                     version_supported,
                     executable_path: Some(path.to_string_lossy().to_string()),
-                    source: CapabilityHealth::unavailable("engine.codex.versionUnsupported"),
-                    runtime: CapabilityHealth::unavailable("engine.codex.versionUnsupported"),
-                    diagnostics: vec![HealthDiagnostic {
-                        code: "versionUnsupported".into(),
-                        message: "Codex CLI is older than the supported App Server baseline".into(),
-                    }],
+                    source,
+                    runtime,
+                    diagnostics,
                 });
             }
-            if let Err(error) = self
-                .supervisor
-                .request("thread/list", json!({ "limit": 1 }))
-            {
-                return Ok(EngineHealth {
-                    instance: self.descriptor.instance.clone(),
-                    status: EngineHealthStatus::Degraded,
-                    installed: true,
-                    authenticated: None,
-                    version,
-                    version_supported,
-                    executable_path: Some(path.to_string_lossy().to_string()),
-                    source: CapabilityHealth::unavailable("engine.codex.handshakeFailed"),
-                    runtime: CapabilityHealth::unavailable("engine.codex.handshakeFailed"),
-                    diagnostics: vec![HealthDiagnostic {
-                        code: "appServerHandshakeFailed".into(),
-                        message: error.message,
-                    }],
-                });
-            }
-            match self
+            let (authenticated, runtime) = match self
                 .supervisor
                 .request("account/read", json!({ "refreshToken": false }))
             {
                 Ok(account) => {
                     let authenticated = account_is_authenticated(&account);
-                    Ok(EngineHealth {
-                        instance: self.descriptor.instance.clone(),
-                        status: if authenticated {
-                            EngineHealthStatus::Available
-                        } else {
-                            EngineHealthStatus::Degraded
-                        },
-                        installed: true,
-                        authenticated: Some(authenticated),
-                        version,
-                        version_supported,
-                        executable_path: Some(path.to_string_lossy().to_string()),
-                        source: CapabilityHealth::available(),
-                        runtime: if authenticated {
+                    (
+                        Some(authenticated),
+                        if authenticated {
                             CapabilityHealth::available()
                         } else {
                             CapabilityHealth::unavailable("engine.codex.authenticationRequired")
                         },
-                        diagnostics: Vec::new(),
-                    })
+                    )
                 }
-                Err(error) => Ok(EngineHealth {
-                    instance: self.descriptor.instance.clone(),
-                    status: EngineHealthStatus::Degraded,
-                    installed: true,
-                    authenticated: None,
-                    version,
-                    version_supported,
-                    executable_path: Some(path.to_string_lossy().to_string()),
-                    source: CapabilityHealth::available(),
-                    runtime: CapabilityHealth::unavailable("engine.codex.accountProbeFailed"),
-                    diagnostics: vec![HealthDiagnostic {
+                Err(error) => {
+                    diagnostics.push(HealthDiagnostic {
                         code: "accountProbeFailed".into(),
                         message: error.message,
-                    }],
-                }),
-            }
+                    });
+                    (
+                        None,
+                        CapabilityHealth::unavailable("engine.codex.accountProbeFailed"),
+                    )
+                }
+            };
+            Ok(EngineHealth {
+                instance: self.descriptor.instance.clone(),
+                status: status_for(&source, &runtime),
+                installed: true,
+                authenticated,
+                version,
+                version_supported,
+                executable_path: Some(path.to_string_lossy().to_string()),
+                source,
+                runtime,
+                diagnostics,
+            })
         })
     }
 
@@ -204,6 +200,14 @@ impl EngineAdapter for CodexEngine {
 
     fn quota(&self) -> Option<&dyn QuotaProvider> {
         Some(self)
+    }
+}
+
+fn status_for(source: &CapabilityHealth, runtime: &CapabilityHealth) -> EngineHealthStatus {
+    match (source.available, runtime.available) {
+        (true, true) => EngineHealthStatus::Available,
+        (true, false) | (false, true) => EngineHealthStatus::Degraded,
+        (false, false) => EngineHealthStatus::Unavailable,
     }
 }
 

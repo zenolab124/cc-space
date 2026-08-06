@@ -1367,7 +1367,8 @@
       "versionUnsupported": "The Codex CLI version is too old",
       "handshakeFailed": "Could not connect to the Codex App Server",
       "authenticationRequired": "Sign in with the Codex CLI first",
-      "accountProbeFailed": "Could not verify the Codex sign-in state"
+      "accountProbeFailed": "Could not verify the Codex sign-in state",
+      "historyUnavailable": "No Codex session data was found"
     },
     "session": {
       "cwdUnavailable": "The session working directory is unavailable",

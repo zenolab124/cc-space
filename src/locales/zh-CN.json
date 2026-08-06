@@ -1367,7 +1367,8 @@
       "versionUnsupported": "Codex CLI 版本过旧",
       "handshakeFailed": "无法连接 Codex App Server",
       "authenticationRequired": "需要先在 Codex CLI 完成登录",
-      "accountProbeFailed": "无法确认 Codex 登录状态"
+      "accountProbeFailed": "无法确认 Codex 登录状态",
+      "historyUnavailable": "未找到 Codex 会话数据"
     },
     "session": {
       "cwdUnavailable": "会话工作目录不可用",

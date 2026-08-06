@@ -1,5 +1,6 @@
 mod adapter;
 pub mod app_server;
+mod file_source;
 mod runtime;
 mod source;
 mod supervisor;
