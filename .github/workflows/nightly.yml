@@ -9,6 +9,7 @@ name: Nightly
 #   · 与正式版共用全局递增版本序列，渠道不预占固定的奇偶号或相邻号
 #   · 发 prerelease，产 nightly.json
 #   · 仅 macOS：nightly 主要服务开发者自测，Windows 用户走稳定版
+#   · 手动触发可通过 version 输入指定一次性版本（例如 2.0.0），仍只改 CI 工作区
 #
 # 需要的 secrets 与 release.yml 相同：SIGNING_CERT_P12 / SIGNING_CERT_PASSWORD /
 # TAURI_SIGNING_PRIVATE_KEY
@@ -17,6 +18,11 @@ on:
   schedule:
     - cron: '0 18 * * *' # UTC 18:00 = 北京时间 02:00
   workflow_dispatch:
+    inputs:
+      version:
+        description: '可选：手动指定 Nightly 版本，例如 2.0.0'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -77,21 +83,31 @@ jobs:
         id: ver
         env:
           GH_TOKEN: ${{ github.token }}
+          MANUAL_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          CANDIDATES=("$(node -p "require('./package.json').version")")
-          while IFS= read -r tag; do
-            CANDIDATES+=("${tag#v}")
-          done < <(git tag --list 'v[0-9]*')
+          if [ -n "$MANUAL_VERSION" ]; then
+            if [[ ! "$MANUAL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "手动 Nightly 版本必须是纯三段数字版本，例如 2.0.0" >&2
+              exit 1
+            fi
+            VERSION="$MANUAL_VERSION"
+            echo "手动指定 nightly 版本: $VERSION"
+          else
+            CANDIDATES=("$(node -p "require('./package.json').version")")
+            while IFS= read -r tag; do
+              CANDIDATES+=("${tag#v}")
+            done < <(git tag --list 'v[0-9]*')
 
-          ASSET_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
-            --jq '.assets[] | select(.name == "nightly.json") | .id')
-          test -n "$ASSET_ID"
-          NIGHTLY_VERSION=$(gh api -H 'Accept: application/octet-stream' \
-            "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" --jq '.version')
-          CANDIDATES+=("$NIGHTLY_VERSION")
+            ASSET_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" \
+              --jq '.assets[] | select(.name == "nightly.json") | .id')
+            test -n "$ASSET_ID"
+            NIGHTLY_VERSION=$(gh api -H 'Accept: application/octet-stream' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${ASSET_ID}" --jq '.version')
+            CANDIDATES+=("$NIGHTLY_VERSION")
 
-          VERSION=$(node scripts/next-build-version.mjs patch "${CANDIDATES[@]}")
+            VERSION=$(node scripts/next-build-version.mjs patch "${CANDIDATES[@]}")
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "nightly 版本: $VERSION"
 
