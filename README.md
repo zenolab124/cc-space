@@ -56,7 +56,7 @@ Monet gathers Claude Code, Codex, and future engines onto one wall: every sessio
 
 **A home for multi-channel players.** Official subscription, third-party APIs, self-hosted proxies, local models — each session on its own channel, hot-switchable mid-conversation: a strong model for the hard turn, a cheap channel for the chores. "Follow CLI" and "Official Direct" stand side by side, and the settings page shows exactly where your CLI config points.
 
-**Your data stays yours.** Engine transcripts are read-only by architecture: Claude Code JSONL is never written, while Codex history and runtime operations go through the local official App Server protocol without rewriting rollouts. Zero telemetry and no Monet account system; titles, tags, stars, and soft-delete markers live separately in `~/.monet/`, so uninstalling leaves original sessions untouched.
+**Your data stays yours.** Engine transcripts are read-only by architecture: Claude Code JSONL and Codex session files are never written. Codex runtime operations use the local official App Server when its CLI is installed, without rewriting rollouts. Zero telemetry and no Monet account system; titles, tags, stars, and soft-delete markers live separately in `~/.monet/`, so uninstalling leaves original sessions untouched.
 
 **It works while you sleep.** Scheduled tasks run through the OS scheduler even with Monet closed; your Mac can wake itself on time, run the task, and go back to sleep. System notifications call you back whenever needed — you can walk away, the work doesn't stop.
 
@@ -65,7 +65,7 @@ Monet gathers Claude Code, Codex, and future engines onto one wall: every sessio
 ### Multi-engine system — Claude Code and Codex together
 
 - Archive, search, Workbench, and notifications can hold Claude Code and Codex sessions at the same time, with engine badges and filters throughout
-- Codex uses the local `codex app-server` for history, create/resume, streaming, steering, interruption, command/file/permission approvals, and dynamic model/effort discovery
+- Codex reads existing history directly from its local session files; when the CLI is installed, the local `codex app-server` adds create/resume, streaming, steering, interruption, command/file/permission approvals, and dynamic model/effort discovery
 - Engine Center reports installation, authentication, version, capabilities, and diagnostics independently; one broken engine does not block another
 - The internal Engine Adapter contract unifies identity, history sources, timelines, runtimes, capabilities, and optional facets, so another engine needs no new top-level IPC or shared storage schema
 - Claude Code keeps its mature native Workbench, channels, Workshop, and automation features; every other surface is capability-driven and hides actions that cannot succeed
@@ -142,17 +142,18 @@ Monet gathers Claude Code, Codex, and future engines onto one wall: every sessio
 **Homebrew** (macOS):
 
 ```bash
-brew tap zenolab124/tap
-brew install --cask monet
+brew install --cask zenolab124/tap/monet
 ```
+
+The fully qualified name makes Homebrew 6 trust only the Monet cask, so no separate `brew trust` command is needed.
 
 Or download from [Releases](../../releases): macOS `.dmg` / Windows installer.
 
 > macOS 11+ (Apple Silicon) gets the full experience; Windows covers the core features, with system-level integrations (widgets, menu bar, wake-from-sleep) being macOS-only.
 
-**First launch (macOS 15+)**: Monet is signed but not yet notarized by Apple. If Gatekeeper blocks it, try opening once, then go to System Settings → Privacy & Security, click **Open Anyway** in the Security section, confirm, and enter an administrator password. In-app updates work normally afterwards.
+**First launch (macOS 15+)**: Monet is signed but not yet notarized by Apple. Open Monet once from Applications and dismiss the warning, then immediately go to System Settings → Privacy & Security, click **Open Anyway** in the Security section, confirm, and enter your login password. The button appears only after a launch attempt and remains available for about an hour. Do not run `xattr` to remove macOS security attributes. In-app updates work normally afterwards.
 
-**Works out of the box, zero import**: installed Claude Code and Codex engines are detected automatically, and their history appears in one Archive. Claude Code follows the CLI's own configuration by default; inspect each engine under Settings → Engines.
+**Works out of the box, zero import**: local Claude Code and Codex history is detected automatically and appears in one Archive, even when the corresponding CLI is not installed. Installing the Codex CLI adds interactive runtime features; inspect each engine under Settings → Engines.
 
 ## Build from Source
 
@@ -193,7 +194,7 @@ Without it, the build falls back to ad-hoc signing — functional, but TCC permi
 | What | Where | Access |
 |------|-------|--------|
 | Claude Code sessions | `~/.claude/projects/` | **Read-only** |
-| Codex sessions | Provided by local `codex app-server` | **Protocol read-only; runtime actions use the official protocol** |
+| Codex sessions | `$CODEX_HOME/sessions/` and `$CODEX_HOME/archived_sessions/` (default `~/.codex/`) | **Read-only; runtime actions use the official CLI App Server when available** |
 | Monet metadata (titles, tags, routines) | `~/.monet/` | Read-write |
 | MCP registration | `~/.claude/settings.json` | Adds `monet` entry under `mcpServers` |
 
@@ -215,7 +216,7 @@ Read-only by architecture, verifiable in the open source. Delete Monet and your 
 No. If the CLI runs, Monet runs; multi-channel and AI value-add are optional upgrades.
 
 **Why does Gatekeeper warn on first launch?**
-Signed but not yet notarized. Right-click → Open once, and updates are silent afterwards.
+Signed but not yet notarized. Try opening once, then grant the one-time exception under System Settings → Privacy & Security → **Open Anyway**; do not run `xattr`. Updates are silent afterwards.
 
 **Windows / Linux?**
 Windows is supported (core features complete, minus macOS system integrations); Linux has no near-term plans.

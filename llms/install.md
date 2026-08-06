@@ -16,7 +16,7 @@ Key facts you can relay:
 ## Prerequisites (check before installing)
 
 1. macOS 11+ on Apple Silicon, or Windows. Verify on macOS: `uname -m` prints `arm64`. Intel Macs and Linux are not supported yet — stop and tell the user if so.
-2. Claude Code and Codex CLIs are both optional. Check them with `claude --version` and `codex --version`; Monet enables whichever engines are installed. Settings can also install Claude Code later.
+2. Claude Code and Codex CLIs are both optional. Check whichever are installed with `claude --version` and `codex --version`; Monet can show local history without either CLI, while installing a CLI adds that engine's interactive runtime. Settings can also install Claude Code later.
 3. Homebrew is optional but preferred (`brew --version`).
 
 ## Install
@@ -24,13 +24,14 @@ Key facts you can relay:
 **Preferred — Homebrew:**
 
 ```bash
-brew tap zenolab124/tap
-brew install --cask monet
+brew install --cask zenolab124/tap/monet
 ```
+
+The fully qualified name makes Homebrew 6 trust only the Monet cask, so no separate `brew trust` command is needed.
 
 **Fallback — direct download:** fetch the latest installer from `https://github.com/zenolab124/monet/releases/latest` (`.dmg` for macOS, NSIS `.exe` for Windows); on macOS mount it and copy `Monet.app` into `/Applications`.
 
-**Gatekeeper:** Monet is not yet notarized by Apple. If the first launch is blocked, try opening it once, then go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. Homebrew installs usually do not require this step.
+**Gatekeeper:** Monet is not yet notarized by Apple. After installation, open Monet once from Applications and dismiss the warning, then immediately go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. The button appears only after a launch attempt and remains available for about an hour. Do not run `xattr` to remove quarantine or other macOS security attributes; Homebrew cask installs require the same one-time approval. Menu bar and widget background refresh use macOS system background-item management; they do not require Developer ID or a $99 certificate. If macOS asks for background-item approval on first launch, allow Monet.
 
 ## Pre-configure (optional, before first launch)
 
@@ -65,7 +66,7 @@ Match `locale` to the language the user converses with you in.
 1. Launch with `open -a Monet` (or tell the user to click the app).
 2. macOS permission dialogs (Terminal automation, notifications, etc.) **cannot be answered by you** — tell the user to click Allow when prompted. Each permission maps to one feature and is explained in Settings → permission health check; nothing breaks fatally if denied.
 3. Monet auto-discovers existing Claude Code and Codex sessions — no import step. Settings → Engine Center shows discovery and health for each engine.
-4. **No separate account setup is required**: Monet reuses each CLI's official login state and local configuration. Codex interaction uses the official App Server protocol; Claude Code keeps its existing CLI workflow.
+4. **No separate account setup is required for history**: Monet reads local Claude Code and Codex session data without importing or rewriting it. Codex interaction uses the official App Server protocol when the Codex CLI is installed and authenticated; Claude Code keeps its existing CLI workflow.
 
 ## Verify
 
@@ -79,7 +80,7 @@ Match `locale` to the language the user converses with you in.
 | What | Where | Access |
 |------|-------|--------|
 | Claude Code sessions | `~/.claude/projects/` | read-only, never modified |
-| Codex sessions | Provided by the local `codex app-server` | Rollouts are never read or written directly; reads and runtime actions use the official protocol |
+| Codex sessions | `$CODEX_HOME/sessions/` and `$CODEX_HOME/archived_sessions/` (default `~/.codex/`) | Read-only; runtime actions use the official CLI App Server when available |
 | Monet settings & metadata | `~/.monet/` | read-write, app-owned |
 | MCP registration | `~/.claude/settings.json` | adds a `monet` entry under `mcpServers` |
 

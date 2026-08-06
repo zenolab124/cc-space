@@ -16,7 +16,7 @@ Monet 是免费开源的桌面应用，把 Claude Code、Codex 等编码 Agent �
 ## 前置检查（安装前确认）
 
 1. macOS 11+（Apple Silicon）或 Windows。macOS 验证：`uname -m` 输出 `arm64`。Intel Mac 与 Linux 暂不支持——如果是，停下来告知用户。
-2. Claude Code 与 Codex CLI 均为可选。分别用 `claude --version`、`codex --version` 检查；安装哪个，Monet 就启用哪个引擎。设置页也可补装 Claude Code。
+2. Claude Code 与 Codex CLI 均为可选。按已安装项检查 `claude --version`、`codex --version`；即使没有 CLI，Monet 也能显示本地历史，安装 CLI 后才增加对应引擎的交互运行能力。设置页也可补装 Claude Code。
 3. Homebrew 可选但推荐（`brew --version`）。
 
 ## 安装
@@ -24,13 +24,14 @@ Monet 是免费开源的桌面应用，把 Claude Code、Codex 等编码 Agent �
 **首选——Homebrew（macOS）：**
 
 ```bash
-brew tap zenolab124/tap
-brew install --cask monet
+brew install --cask zenolab124/tap/monet
 ```
+
+完整名称会让 Homebrew 6 只信任 Monet 这一项，无需另外执行 `brew trust`。
 
 **备选——直接下载：** 从 `https://github.com/zenolab124/monet/releases/latest` 获取最新安装包（macOS 用 `.dmg`，Windows 用 NSIS `.exe`），macOS 挂载后把 `Monet.app` 拖入 `/Applications`。
 
-**Gatekeeper（macOS）：** Monet 尚未经过 Apple 公证。若首次启动被拦，请先尝试打开一次，再进入「系统设置 → 隐私与安全性」，找到 Monet 的提示并点「仍要打开」，按系统要求确认。Homebrew 安装通常不会触发这一步。
+**Gatekeeper（macOS）：** Monet 尚未经过 Apple 公证。安装后先从「应用程序」打开 Monet 一次并关闭拦截提示，再立即进入「系统设置 → 隐私与安全性」，找到 Monet 的提示并点「仍要打开」，按系统要求确认。该按钮只有在尝试打开后才出现，并会在约一小时后消失。不要运行 `xattr` 移除 quarantine 等系统安全属性；Homebrew cask 安装同样需要这次一次性授权。菜单栏和小组件后台刷新使用 macOS 系统后台项目机制，不需要 Developer ID 或 $99 证书；首次启动若系统询问，允许 Monet 的后台项目。
 
 ## 预配置（可选，首次启动前）
 
@@ -65,7 +66,7 @@ Monet 从 `~/.monet/settings.json` 读取设置。你可以**在 app 首次运�
 1. `open -a Monet` 启动（或让用户点击图标）。
 2. macOS 权限弹窗（终端自动化、通知等）**你无法代点**——告诉用户在弹窗出现时点「允许」。每项权限对应一个功能，设置页的权限体检面板有逐项说明；拒绝也不会致命损坏。
 3. Monet 自动发现 Claude Code 与 Codex 的现有会话——没有导入步骤。设置 → 引擎中心会分别显示发现状态与健康信息。
-4. **无需另配账号即可继续工作**：Monet 沿用对应 CLI 的官方登录态与本机配置。Codex 交互通过官方 App Server 协议完成；Claude Code 保持原有 CLI 工作流。
+4. **读取历史无需另配账号**：Monet 直接读取本地 Claude Code 与 Codex 会话数据，不导入也不改写原始文件。安装并登录 Codex CLI 后，Codex 交互通过官方 App Server 协议完成；Claude Code 保持原有 CLI 工作流。
 
 ## 验证
 
@@ -79,7 +80,7 @@ Monet 从 `~/.monet/settings.json` 读取设置。你可以**在 app 首次运�
 | 内容 | 位置 | 访问方式 |
 |------|------|----------|
 | Claude Code 会话 | `~/.claude/projects/` | 只读，绝不修改 |
-| Codex 会话 | 由本机 `codex app-server` 提供 | 不直接读取或写入 rollout；读取与运行均走官方协议 |
+| Codex 会话 | `$CODEX_HOME/sessions/` 与 `$CODEX_HOME/archived_sessions/`（默认 `~/.codex/`） | 只读；安装 CLI 后运行操作走官方 App Server |
 | Monet 设置与元数据 | `~/.monet/` | 读写，app 所有 |
 | MCP 注册 | `~/.claude/settings.json` | 在 `mcpServers` 下添加 `monet` 条目 |
 

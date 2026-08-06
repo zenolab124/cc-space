@@ -56,7 +56,7 @@ Monet 把 Claude Code、Codex 等引擎收进一面墙：所有会话可浏览�
 
 **多渠道玩家的家。** 官方订阅、第三方 API、自建代理、本地模型——不同会话各用各的，聊到一半随时热切：这一轮用强模型攻坚，下一轮换便宜渠道跑杂活。「跟随 CLI」与「官方直连」并立，CLI 配置指向哪里，设置页看得清清楚楚。
 
-**数据主权在你手里。** 对各引擎的原始会话架构级只读：Claude Code 只读 JSONL，Codex 只通过本机官方 App Server 协议读取和运行，从不改写 rollout。零遥测、无 Monet 账号体系；本地会话能力离线运行，只有订阅额度和你主动使用的智能增强会访问相应供应商的官方服务。Monet 的标题、标签、收藏、软删除等数据独立住在 `~/.monet/`，卸载后原始会话毫发无损。
+**数据主权在你手里。** 对各引擎的原始会话架构级只读：Claude Code JSONL 与 Codex 会话文件都不会被写入。Codex 的运行操作在安装 CLI 时通过本机官方 App Server 完成，从不改写 rollout。零遥测、无 Monet 账号体系；本地会话能力离线运行，只有订阅额度和你主动使用的智能增强会访问相应供应商的官方服务。Monet 的标题、标签、收藏、软删除等数据独立住在 `~/.monet/`，卸载后原始会话毫发无损。
 
 **睡觉时也在干活。** 定时任务由系统调度器执行，Monet 没开也照跑；Mac 能按点自己醒来，跑完任务再睡回去。系统通知随时把你叫回来——人可以走开，事情不会停。
 
@@ -65,7 +65,7 @@ Monet 把 Claude Code、Codex 等引擎收进一面墙：所有会话可浏览�
 ### 多引擎系统——Claude Code 与 Codex 同席
 
 - 档案馆、搜索、工作台和通知可同时承载 Claude Code 与 Codex，会话始终带引擎徽标并可按引擎筛选
-- Codex 通过本机 `codex app-server` 完成历史读取、新建/恢复、流式输出、追加指令、中断、三类审批以及动态模型/思考强度选择
+- Codex 直接读取本机会话文件中的已有历史；安装 CLI 后，再通过本机 `codex app-server` 提供新建/恢复、流式输出、追加指令、中断、三类审批以及动态模型/思考强度选择
 - 设置中的「引擎中心」分别展示安装、认证、版本、能力和诊断；一个引擎故障不会拖垮另一个
 - 内部 Engine Adapter 契约统一了身份、历史源、时间线、运行时、能力和可选 facet；新增引擎无需增加顶层 IPC 或改动共享存储 schema
 - Claude Code 保留成熟的专属工作台、渠道、工坊和自动化能力；其他引擎按自身 capability 显示可用操作，不出现注定失败的空按钮
@@ -142,17 +142,18 @@ Monet 把 Claude Code、Codex 等引擎收进一面墙：所有会话可浏览�
 **Homebrew**（macOS）：
 
 ```bash
-brew tap zenolab124/tap
-brew install --cask monet
+brew install --cask zenolab124/tap/monet
 ```
+
+完整名称会让 Homebrew 6 只信任 Monet 这一项，无需另外执行 `brew trust`。
 
 或从 [Releases](../../releases) 下载：macOS `.dmg` / Windows 安装包。
 
 > macOS 11+（Apple Silicon）享受全部功能；Windows 覆盖核心功能，系统级集成（小组件、菜单栏、睡眠唤醒）为 macOS 专属。
 
-**首次打开（macOS 15+）**：Monet 已签名但尚未经 Apple 公证。若 Gatekeeper 拦截，请先尝试打开一次，再进入「系统设置 → 隐私与安全性」，在安全性区域点击「仍要打开」，确认并输入管理员密码。之后的更新由应用内完成。
+**首次打开（macOS 15+）**：Monet 已签名但尚未经 Apple 公证。请先在「应用程序」中打开 Monet 一次并关闭拦截提示，再立即进入「系统设置 → 隐私与安全性」，在安全性区域点击「仍要打开」，确认并输入登录密码。该按钮仅在尝试打开后出现，并会在约一小时后消失；不要运行 `xattr` 移除系统安全属性。之后的更新由应用内完成。
 
-**装完即用，零导入**：本机可用的 Claude Code / Codex 会被自动发现，历史会话直接进入同一个档案馆。Claude Code 默认沿用 CLI 自己的配置；各引擎的具体状态可在「设置 → 引擎」查看。
+**装完即用，零导入**：本机 Claude Code 与 Codex 的历史数据会被自动发现，即使没有安装对应 CLI，也会直接进入同一个档案馆。安装 Codex CLI 后可增加交互运行能力；各引擎的具体状态可在「设置 → 引擎」查看。
 
 ## 从源码构建
 
@@ -193,7 +194,7 @@ scripts/setup-signing.sh
 | 内容 | 位置 | 访问方式 |
 |------|------|---------|
 | Claude Code 会话 | `~/.claude/projects/` | **只读** |
-| Codex 会话 | 由本机 `codex app-server` 提供 | **协议只读；运行操作走官方协议** |
+| Codex 会话 | `$CODEX_HOME/sessions/` 与 `$CODEX_HOME/archived_sessions/`（默认 `~/.codex/`） | **只读；安装 CLI 后运行操作走官方 App Server** |
 | Monet 增值数据（标题、标签、定时任务） | `~/.monet/` | 读写 |
 | MCP 注册 | `~/.claude/settings.json` | 在 `mcpServers` 下添加 `monet` 条目 |
 
@@ -215,7 +216,7 @@ scripts/setup-signing.sh
 不用。CLI 能跑 Monet 就能跑；多渠道、AI 增值全是可选进阶。
 
 **首次打开为什么有 Gatekeeper 警告？**
-已签名但暂未公证。右键打开一次即可，之后更新全程静默。
+已签名但暂未公证。先尝试打开一次，再到「系统设置 → 隐私与安全性」点击「仍要打开」完成一次性授权；不要运行 `xattr`。之后更新全程静默。
 
 **Windows / Linux？**
 Windows 已支持（核心功能完整，macOS 系统集成除外）；Linux 暂无近期计划。

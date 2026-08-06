@@ -13,7 +13,7 @@
 | Agent CLIs | `claude --version` and `codex --version` (collect whichever are installed) |
 | Install method | `brew list --cask --versions monet` succeeds → Homebrew, else direct `.dmg` |
 | App running? | `pgrep -x Monet` |
-| Background services | `launchctl list \| grep io.github.zenolab124.monet` |
+| Background services | macOS 13+: `sfltool dumpbtm \| grep -A 12 -B 2 io.github.zenolab124.monet`; macOS 11–12: `launchctl list \| grep io.github.zenolab124.monet` |
 
 Log locations (all under `~/.monet/`):
 
@@ -23,13 +23,15 @@ Log locations (all under `~/.monet/`):
 
 ## Common issues
 
-**App blocked at launch (unidentified developer).** Try opening it once, then go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. Do not bypass the system prompt by removing quarantine attributes.
+**App blocked at launch (unidentified developer).** Open Monet once from Applications and dismiss the warning, then immediately go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. The button appears only after a launch attempt and remains available for about an hour. Do not run `xattr` to remove quarantine or other macOS security attributes.
 
-**No sessions / projects visible.** Start in Settings → Engine Center; it distinguishes a missing CLI, an unavailable data source, and a runtime-protocol connection failure. Claude Code reads `~/.claude/projects/` by default; if its data was relocated with `CLAUDE_CONFIG_DIR`, set `claudeRoot` in `~/.monet/settings.json` and restart. Codex history and interactive work are both provided by the official Codex CLI App Server, so the CLI must be authenticated and its App Server must start; Monet does not scan rollouts directly. An unused engine being empty is normal.
+**No sessions / projects visible.** Start in Settings → Engine Center; it distinguishes a missing CLI, an unavailable data source, and a runtime-protocol connection failure. Claude Code reads `~/.claude/projects/` by default; if its data was relocated with `CLAUDE_CONFIG_DIR`, set `claudeRoot` in `~/.monet/settings.json` and restart. Codex history is read directly from `$CODEX_HOME/sessions/` and `$CODEX_HOME/archived_sessions/` (default `~/.codex/`), so existing sessions remain visible even without the Codex CLI. The CLI must be installed and authenticated only for interactive runtime features; an unused engine being empty is normal.
 
 **One engine fails while another works.** That is expected failure isolation. Inspect the affected engine in Settings → Engine Center. For a report, export diagnostics from the same page; the export contains engine identity, version, health state, and redacted errors, never transcript content, prompts, or credentials.
 
-**Menu bar icon missing.** Check `launchctl list | grep io.github.zenolab124.monet.tray`. Restart the app (the tray is re-registered on launch). Inspect `~/.monet/tray.log` for errors.
+**Menu bar icon missing or not opening.** On macOS 13+, the menu bar Helper is registered through `SMAppService`; do not create or edit a plist under `~/Library/LaunchAgents`. Restart Monet and check the background-item status under Settings → Menu Bar. If it says approval is required, click **Open Background Items settings** and allow Monet in System Settings. If the issue persists, inspect `sfltool dumpbtm | grep -A 12 -B 2 io.github.zenolab124.monet.tray` and `~/.monet/tray.log`. macOS 11–12 use `launchctl list` for the compatibility path.
+
+**Desktop widget only shows “Open Monet”.** This means WidgetKit loaded the extension but could not read its data. Update to a build containing the `SMAppService` registration, restart Monet, and check that **Background data refresh** is registered under Settings → Desktop Widget. If approval is required, allow Monet in Background Items and wait for one refresh. For diagnosis, check whether `~/Library/Containers/io.github.zenolab124.monet.widget/Data/widget-data.json` exists; do not write that file manually.
 
 **Scheduled routines don't run.** Routines run via launchd (`io.github.zenolab124.monet.routine.<id>`) with a permission ledger **separate from the main app** — the executable is `monet-routine-runner`. First-time grants happen via system prompts during an actual run; if a prompt was denied, macOS won't re-ask — the user must remove the old `monet-routine-runner` entry in System Settings → Privacy & Security, then re-trigger. Settings has a permission health-check panel that tests the real launchd path.
 
