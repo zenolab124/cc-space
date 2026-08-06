@@ -118,6 +118,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "toml 0.8.2",
  "urlencoding",
  "uuid",
  "windows-sys 0.61.2",

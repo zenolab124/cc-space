@@ -287,6 +287,7 @@ pub fn run() {
             codex_env::codex_env_check,
             codex_env::codex_env_install,
             channels::list_channels,
+            channels::list_codex_providers,
             channels::get_cli_env_target,
             channels::save_channel,
             channels::set_official_defaults,

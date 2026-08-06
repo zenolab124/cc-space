@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChannels, type ChannelInfo, APPLE_FM_CHANNEL_ID } from '@/composables/useChannels'
+import { useChannels, type ChannelInfo, type CodexProviderInfo, APPLE_FM_CHANNEL_ID } from '@/composables/useChannels'
 import ChannelModelMap from './ChannelModelMap.vue'
 
 const props = defineProps<{
@@ -14,7 +14,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { saveChannel, revealToken, probeResults, probing, probeChannel } = useChannels()
+const { saveChannel, revealToken, probeResults, probing, probeChannel, listCodexProviders } = useChannels()
 
 const isNew = computed(() => props.channel === null)
 
@@ -31,7 +31,8 @@ const scope = ref(props.channel?.scope ?? 'full')
 const agentModel = ref(props.channel?.agentModel ?? '')
 const tokenVisible = ref(false)
 const codexMode = ref<'external' | 'managed'>(props.channel?.codex?.mode ?? 'external')
-const codexProviderId = ref(props.channel?.codex?.providerId ?? '')
+const codexProviderId = ref(props.channel?.codex?.providerId ?? (codexMode.value === 'managed' ? `monet-${id.value || 'proxy'}` : ''))
+const codexManagedProviderIdAuto = ref(!props.channel?.codex?.providerId)
 const codexBaseUrl = ref(props.channel?.codex?.baseUrl ?? '')
 const codexAuthMode = ref<'bearer' | 'openai' | 'none'>(props.channel?.codex?.authMode ?? 'bearer')
 const codexAuthToken = ref('')
@@ -39,6 +40,10 @@ const codexTokenVisible = ref(false)
 const codexDefaultModel = ref(props.channel?.codex?.defaultModel ?? '')
 const codexDefaultEffort = ref(props.channel?.codex?.defaultEffort ?? '')
 const codexModelsText = ref((props.channel?.codex?.availableModels ?? []).join(', '))
+const codexProviders = ref<CodexProviderInfo[]>([])
+const codexProvidersLoading = ref(false)
+const codexProvidersError = ref<string | null>(null)
+const codexExternalManual = ref(false)
 /** 渠道默认模型(env.ANTHROPIC_MODEL,保存时合并进 modelEnv)与默认思考强度(顶层 effortLevel/ultracode) */
 const defaultModel = ref(props.channel?.defaultModel ?? '')
 const defaultEffort = ref(props.channel?.defaultEffort ?? '')
@@ -54,6 +59,43 @@ function onModelEnvUpdate(env: Record<string, string>) {
 const isVirtual = computed(() => props.channel?.id === APPLE_FM_CHANNEL_ID)
 const supportsClaude = computed(() => engineSupport.value.includes('claude-code'))
 const supportsCodex = computed(() => engineSupport.value.includes('codex'))
+const codexProviderIds = computed(() => new Set(codexProviders.value.map(provider => provider.id)))
+const codexCurrentProviderMissing = computed(() => {
+  const providerId = codexProviderId.value.trim()
+  return Boolean(providerId) && !codexProviderIds.value.has(providerId)
+})
+
+const managedProviderIdPlaceholder = computed(() => `monet-${id.value.trim() || 'proxy'}`)
+
+function codexProviderLabel(provider: CodexProviderInfo): string {
+  const label = provider.name && provider.name !== provider.id
+    ? `${provider.name} · ${provider.id}`
+    : provider.id
+  return provider.source === 'builtin'
+    ? `${label} (${t('settings.channelForm.codexProviderBuiltin')})`
+    : label
+}
+
+async function loadCodexProviders() {
+  if (codexProvidersLoading.value) return
+  codexProvidersLoading.value = true
+  codexProvidersError.value = null
+  try {
+    codexProviders.value = await listCodexProviders()
+  } catch (error) {
+    codexProvidersError.value = String(error)
+  } finally {
+    codexProvidersLoading.value = false
+  }
+}
+
+function toggleCodexManualProvider() {
+  codexExternalManual.value = !codexExternalManual.value
+}
+
+function onCodexManagedProviderIdInput() {
+  codexManagedProviderIdAuto.value = false
+}
 
 function toggleEngine(engineId: string) {
   if (engineSupport.value.includes(engineId)) {
@@ -98,6 +140,18 @@ const formError = ref<string | null>(null)
 
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/
 
+watch([codexMode, id], ([mode]) => {
+  if (mode === 'managed' && codexManagedProviderIdAuto.value) {
+    codexProviderId.value = managedProviderIdPlaceholder.value
+  }
+})
+
+watch([supportsCodex, codexMode], ([supports, mode]) => {
+  if (supports && mode === 'external') {
+    void loadCodexProviders()
+  }
+})
+
 onMounted(async () => {
   if (!isNew.value && props.channel) {
     const [claudeToken, codexToken] = await Promise.all([
@@ -106,6 +160,9 @@ onMounted(async () => {
     ])
     if (claudeToken) authToken.value = claudeToken
     if (codexToken) codexAuthToken.value = codexToken
+  }
+  if (supportsCodex.value && codexMode.value === 'external') {
+    await loadCodexProviders()
   }
 })
 
@@ -359,9 +416,63 @@ async function onSave() {
         </span>
       </label>
 
-      <label class="form-field">
-        <span class="form-label">Provider ID</span>
-        <input v-model="codexProviderId" type="text" :placeholder="codexMode === 'managed' ? `monet-${id || 'proxy'}` : 'openai / proxy / ollama'" class="form-input font-mono" spellcheck="false" />
+      <div v-if="codexMode === 'external'" class="form-field">
+        <div class="flex items-center justify-between gap-2">
+          <span class="form-label">{{ $t('settings.channelForm.codexProviderLabel') }}</span>
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              :disabled="codexProvidersLoading"
+              :aria-label="$t('settings.channelForm.codexProviderRefresh')"
+              @click="loadCodexProviders"
+            >
+              <span class="i-carbon-renew inline-block h-3 w-3" :class="{ 'animate-spin': codexProvidersLoading }" />
+            </button>
+            <button
+              type="button"
+              class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              @click="toggleCodexManualProvider"
+            >
+              {{ $t(codexExternalManual ? 'settings.channelForm.codexProviderPickExisting' : 'settings.channelForm.codexProviderManual') }}
+            </button>
+          </div>
+        </div>
+        <select v-if="!codexExternalManual" v-model="codexProviderId" class="form-input font-mono">
+          <option disabled value="">
+            {{ codexProvidersLoading ? $t('settings.channelForm.codexProviderLoading') : $t('settings.channelForm.codexProviderSelectPlaceholder') }}
+          </option>
+          <option v-for="provider in codexProviders" :key="provider.id" :value="provider.id">
+            {{ codexProviderLabel(provider) }}
+          </option>
+          <option v-if="codexCurrentProviderMissing" :value="codexProviderId">
+            {{ codexProviderId }}（{{ $t('settings.channelForm.codexProviderCurrent') }}）
+          </option>
+        </select>
+        <input
+          v-else
+          v-model="codexProviderId"
+          type="text"
+          :placeholder="$t('settings.channelForm.codexProviderManualPlaceholder')"
+          class="form-input font-mono"
+          spellcheck="false"
+        />
+        <span class="text-[10px] leading-snug text-muted-foreground/70">
+          {{ codexProvidersError ? $t('settings.channelForm.codexProviderLoadError') : $t('settings.channelForm.codexProviderHint') }}
+        </span>
+      </div>
+
+      <label v-else class="form-field">
+        <span class="form-label">{{ $t('settings.channelForm.codexProviderLabel') }}</span>
+        <input
+          v-model="codexProviderId"
+          type="text"
+          :placeholder="managedProviderIdPlaceholder"
+          class="form-input font-mono"
+          spellcheck="false"
+          @input="onCodexManagedProviderIdInput"
+        />
+        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.codexProviderManagedHint') }}</span>
       </label>
 
       <template v-if="codexMode === 'managed'">

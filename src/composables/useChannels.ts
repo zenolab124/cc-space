@@ -37,6 +37,13 @@ export interface CodexChannelInfo {
   availableModels: string[]
 }
 
+export interface CodexProviderInfo {
+  id: string
+  name: string
+  baseUrl: string | null
+  source: 'builtin' | 'config'
+}
+
 /** 通用会话外壳只消费这组字段；引擎原生渠道结构在此处适配。 */
 export interface EngineChannelBindingInfo {
   providerId: string | null
@@ -191,6 +198,10 @@ async function saveChannel(payload: SaveChannelPayload): Promise<void> {
     codex: payload.codex ?? null,
   })
   await refreshChannels()
+}
+
+async function listCodexProviders(): Promise<CodexProviderInfo[]> {
+  return invoke<CodexProviderInfo[]>('list_codex_providers')
 }
 
 /** official 渠道的默认模型/思考强度(全量替换语义,空/null = 清除) */
@@ -378,6 +389,7 @@ export function useChannels() {
     agentPreferences,
     refreshChannels,
     saveChannel,
+    listCodexProviders,
     setOfficialDefaults,
     deleteChannel,
     setChannelEnabled,

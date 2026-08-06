@@ -722,6 +722,22 @@ pub struct CodexChannelView {
     pub available_models: Vec<String>,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexProviderView {
+    pub id: String,
+    pub name: String,
+    pub base_url: Option<String>,
+    /// builtin:Codex 内置 Provider;config:用户 config.toml 中的 Provider。
+    pub source: String,
+}
+
+const CODEX_BUILTIN_PROVIDERS: &[(&str, &str)] = &[
+    ("openai", "OpenAI"),
+    ("ollama", "Ollama"),
+    ("lmstudio", "LM Studio"),
+];
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelListResult {
@@ -941,6 +957,99 @@ pub fn list_channels() -> ChannelListResult {
         default_agent_channel: settings.default_agent_channel,
         default_agent_model: settings.default_agent_model,
         default_agent_effort: settings.default_agent_effort,
+    }
+}
+
+fn codex_home_dir() -> Option<PathBuf> {
+    let configured = std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| {
+            if path == Path::new("~") || path.starts_with("~/") {
+                dirs::home_dir()
+                    .map(|home| home.join(path.strip_prefix("~/").unwrap_or(Path::new(""))))
+                    .unwrap_or(path)
+            } else {
+                path
+            }
+        });
+    configured.or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+}
+
+fn sanitized_provider_base_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    // Base URL 可能带查询参数；列表只用于选择 Provider，不应把潜在的查询凭据回传前端。
+    Some(
+        value
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(value)
+            .trim_end_matches('/')
+            .to_string(),
+    )
+}
+
+fn parse_codex_providers(content: &str) -> Result<Vec<CodexProviderView>, String> {
+    let root: toml::Value =
+        toml::from_str(content).map_err(|error| format!("Codex config.toml 解析失败: {error}"))?;
+    let mut providers = BTreeMap::new();
+
+    for (id, name) in CODEX_BUILTIN_PROVIDERS {
+        providers.insert(
+            (*id).to_string(),
+            CodexProviderView {
+                id: (*id).to_string(),
+                name: (*name).to_string(),
+                base_url: None,
+                source: "builtin".to_string(),
+            },
+        );
+    }
+
+    if let Some(table) = root.get("model_providers").and_then(toml::Value::as_table) {
+        for (id, value) in table {
+            let provider = value.as_table();
+            let name = provider
+                .and_then(|table| table.get("name"))
+                .and_then(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(id)
+                .to_string();
+            let base_url = provider
+                .and_then(|table| table.get("base_url"))
+                .and_then(toml::Value::as_str)
+                .and_then(sanitized_provider_base_url);
+            providers.insert(
+                id.clone(),
+                CodexProviderView {
+                    id: id.clone(),
+                    name,
+                    base_url,
+                    source: "config".to_string(),
+                },
+            );
+        }
+    }
+
+    Ok(providers.into_values().collect())
+}
+
+/// 列出 Codex 可用于 modelProvider 的内置及用户配置 Provider。
+/// 只回传路由元数据，不读取认证 Token。
+#[tauri::command]
+pub fn list_codex_providers() -> Result<Vec<CodexProviderView>, String> {
+    let Some(home) = codex_home_dir() else {
+        return parse_codex_providers("");
+    };
+    let path = home.join("config.toml");
+    match fs::read_to_string(&path) {
+        Ok(content) => parse_codex_providers(&content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => parse_codex_providers(""),
+        Err(error) => Err(format!("读取 Codex 配置失败: {}", error)),
     }
 }
 
@@ -2013,5 +2122,29 @@ mod tests {
         assert_eq!(channel.base_url.as_deref(), Some("https://example.com/v1"));
         assert_eq!(channel.default_model.as_deref(), Some("model-a"));
         assert_eq!(channel.available_models, vec!["model-a", "model-b"]);
+    }
+
+    #[test]
+    fn codex_provider_parser_lists_configured_and_builtin_providers() {
+        let providers = parse_codex_providers(
+            r#"
+            [model_providers.work-proxy]
+            name = "Work Proxy"
+            base_url = "https://example.com/v1?query=redacted"
+            "#,
+        )
+        .unwrap();
+
+        let work_proxy = providers
+            .iter()
+            .find(|provider| provider.id == "work-proxy")
+            .unwrap();
+        assert_eq!(work_proxy.name, "Work Proxy");
+        assert_eq!(
+            work_proxy.base_url.as_deref(),
+            Some("https://example.com/v1")
+        );
+        assert_eq!(work_proxy.source, "config");
+        assert!(providers.iter().any(|provider| provider.id == "openai"));
     }
 }
