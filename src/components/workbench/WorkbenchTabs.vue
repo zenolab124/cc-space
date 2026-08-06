@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Menu } from '@tauri-apps/api/menu'
 import { useWorkbench, type WorkbenchTab } from '@/composables/useWorkbench'
@@ -21,14 +21,17 @@ const editingName = ref('')
 function startRename(tab: WorkbenchTab) {
   editingTabId.value = tab.id
   editingName.value = tab.name
+  void nextTick(() => {
+    if (editingTabId.value !== tab.id) return
+    editInputElement.value?.focus()
+    editInputElement.value?.select()
+  })
 }
 
-/** v-for 内的 template ref 会被收集为数组,改用函数 ref 在挂载时聚焦全选 */
-function focusEditInput(el: unknown) {
-  if (el instanceof HTMLInputElement) {
-    el.focus()
-    el.select()
-  }
+/** v-for 内的 template ref 会被收集为数组,函数 ref 只负责捕获当前输入框 */
+const editInputElement = ref<HTMLInputElement | null>(null)
+function captureEditInput(el: unknown) {
+  editInputElement.value = el instanceof HTMLInputElement ? el : null
 }
 
 function commitRename() {
@@ -91,7 +94,7 @@ async function onContextMenu(e: MouseEvent, tab: WorkbenchTab) {
     >
       <input
         v-if="editingTabId === tab.id"
-        :ref="focusEditInput"
+        :ref="captureEditInput"
         v-model="editingName"
         class="w-24 bg-transparent border-none outline-none text-xs text-foreground"
         maxlength="20"
