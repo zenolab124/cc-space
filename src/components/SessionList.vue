@@ -14,6 +14,7 @@ import {
 } from '@/types'
 import type { SessionSummary } from '@/types'
 import { useRunners } from '@/composables/useRunners'
+import { resolveEnginePresentation } from '@/engines/presentation'
 
 const { t } = useI18n()
 const { getMeta } = useSessionMeta()
@@ -46,6 +47,26 @@ const timeLabels = computed<Record<TimeRange, string>>(() => ({
 
 // 筛选下拉
 const showModelDropdown = ref(false)
+
+function engineBadgeClass(session: SessionSummary): string {
+  const accent = resolveEnginePresentation(session.engine?.engineId, session.engine_name).accent
+  if (accent === 'claude') return 'bg-claude/15 text-claude border-claude/30'
+  if (accent === 'codex') return 'bg-codex/15 text-codex border-codex/30'
+  return 'bg-primary/12 text-primary border-primary/25'
+}
+
+function engineFilterClass(engineId: string, active: boolean): string {
+  const accent = resolveEnginePresentation(engineId.split('/')[0], null).accent
+  if (accent === 'claude') return active
+    ? 'bg-claude/15 text-claude border-claude/25'
+    : 'text-claude/70 hover:text-claude hover:bg-claude/10'
+  if (accent === 'codex') return active
+    ? 'bg-codex/15 text-codex border-codex/25'
+    : 'text-codex/70 hover:text-codex hover:bg-codex/10'
+  return active
+    ? 'bg-primary/15 text-primary border-primary/25'
+    : 'text-muted-foreground hover:text-foreground'
+}
 
 function pickModel(model: string) {
   selectedModel.value = model
@@ -252,8 +273,8 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
       <button
         v-for="engine in engineOptions"
         :key="engine.id"
-        class="px-2 py-0.5 text-xs rounded transition-colors"
-        :class="selectedEngineIds.has(engine.id) ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground'"
+        class="px-2 py-0.5 text-xs rounded border border-transparent transition-colors"
+        :class="engineFilterClass(engine.id, selectedEngineIds.has(engine.id))"
         @click="toggleEngine(engine.id)"
       >
         {{ engine.name }}
@@ -335,7 +356,14 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               {{ displayTitle(session, getMeta(session.id)?.title) }}
             </div>
             <div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
-              <span class="px-1 rounded bg-secondary/70 text-[9px]">{{ session.engine_name }}</span>
+              <span
+                v-if="session.engine_name"
+                class="inline-flex items-center gap-1 px-1.5 rounded border text-[9px] font-medium"
+                :class="engineBadgeClass(session)"
+              >
+                <span class="w-1 h-1 rounded-full bg-current" />
+                {{ session.engine_name }}
+              </span>
               <span v-if="session.git_branch">{{ session.git_branch }}</span>
               <span v-if="session.git_branch">·</span>
               <span>{{ relativeTime(session.last_modified) }}</span>

@@ -20,6 +20,15 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 let watcherSetup = false
 
+/** 档案馆按真实项目路径合并后的展示项；底层引擎项目仍保留在 projects 中。 */
+interface ArchiveProject {
+  id: string
+  display_path: string
+  sessions: SessionSummary[]
+  session_count: number
+  last_active: number | null
+}
+
 /** watcher 增量变更 payload（src-tauri/src/watcher.rs emit_pending_changes） */
 interface SessionChange {
   projectId: string
@@ -135,6 +144,39 @@ function mapSession(descriptor: EngineDescriptor, session: EngineSessionSummary)
   }
 }
 
+function archiveProjectKey(project: Project): string {
+  const sourcePath = project.source_path?.trim()
+  if (sourcePath) return `path:${sourcePath.replace(/[\\/]+$/, '')}`
+  // 没有可靠真实路径的引擎项目不能按展示名合并，避免多个未分类项目撞桶。
+  return `source:${project.id}`
+}
+
+const archiveProjects = computed<ArchiveProject[]>(() => {
+  const groups = new Map<string, ArchiveProject>()
+
+  for (const project of projects.value) {
+    const key = archiveProjectKey(project)
+    const current = groups.get(key)
+    if (current) {
+      current.sessions.push(...project.sessions)
+      current.session_count += project.session_count
+      current.last_active = Math.max(current.last_active ?? 0, project.last_active ?? 0) || null
+      continue
+    }
+
+    groups.set(key, {
+      // 该 ID 只用于档案馆选择态，不参与任何引擎 IPC。
+      id: `archive.${key}`,
+      display_path: project.source_path ?? project.display_path,
+      sessions: [...project.sessions],
+      session_count: project.session_count,
+      last_active: project.last_active,
+    })
+  }
+
+  return [...groups.values()].sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
+})
+
 function numericMeta(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
 }
@@ -249,7 +291,7 @@ function toggleProject(id: string) {
 /** 全选/全不选 */
 function selectAllProjects(select: boolean) {
   if (select) {
-    selectedProjectIds.value = new Set(projects.value.map(p => p.id))
+    selectedProjectIds.value = new Set(archiveProjects.value.map(p => p.id))
   } else {
     selectedProjectIds.value = new Set()
   }
@@ -278,18 +320,22 @@ const engineOptions = computed(() => {
 const filteredSessions = computed<SessionSummary[]>(() => {
   const ids = selectedProjectIds.value
   const projectSource = ids.size > 0
-    ? projects.value.filter(p => ids.has(p.id))
-    : projects.value
+    ? archiveProjects.value.filter(p => ids.has(p.id))
+    : archiveProjects.value
   const engineIds = selectedEngineIds.value
-  const source = engineIds.size > 0
-    ? projectSource.filter(project => engineIds.has(engineFilterId(project)))
-    : projectSource
-  return source.flatMap(p => p.sessions)
+  const sessions = projectSource.flatMap(p => p.sessions)
+  if (engineIds.size === 0) return sessions
+  return sessions.filter(session => {
+    const engineId = session.engine
+      ? `${session.engine.engineId}/${session.engine.instanceId}`
+      : 'legacy/default'
+    return engineIds.has(engineId)
+  })
 })
 
 /** 侧边栏统计 */
 const sidebarStats = computed(() => {
-  const ps = projects.value
+  const ps = archiveProjects.value
   const totalSessions = ps.reduce((sum, p) => sum + p.session_count, 0)
   const totalSize = ps.reduce(
     (sum, p) => sum + p.sessions.reduce((s, sess) => s + sess.file_size, 0),
@@ -327,6 +373,7 @@ const sessionStats = computed(() => {
 export function useProjects() {
   return {
     projects,
+    archiveProjects,
     projectsRevision,
     selectedProjectIds,
     selectedEngineIds,

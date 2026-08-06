@@ -57,6 +57,10 @@ const PRESENTATIONS: Record<string, Omit<EnginePresentation, 'displayName'>> = {
     accent: 'claude',
     showReasoningSummaries: true,
   },
+  'claude-code': {
+    accent: 'claude',
+    showReasoningSummaries: true,
+  },
   codex: {
     accent: 'codex',
     showReasoningSummaries: false,

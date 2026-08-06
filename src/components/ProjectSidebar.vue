@@ -6,7 +6,7 @@ import { fileName, parentPath, abbreviateHome } from '@/utils/path'
 
 const { t } = useI18n()
 const {
-  projects,
+  archiveProjects,
   selectedProjectIds,
   loading,
   error,
@@ -31,13 +31,10 @@ function projectPath(displayPath: string) {
   return raw
 }
 
-function projectTokens(project: typeof projects.value[number]) {
+function projectTokens(project: typeof archiveProjects.value[number]) {
   return project.sessions.reduce((sum, s) => sum + tokenTotal(s.total_tokens), 0)
 }
 
-function engineLabel(project: typeof projects.value[number]) {
-  return project.engine_name ?? project.engine?.engineId ?? ''
-}
 </script>
 
 <template>
@@ -58,7 +55,7 @@ function engineLabel(project: typeof projects.value[number]) {
     </div>
 
     <!-- 空态 -->
-    <div v-else-if="projects.length === 0" class="px-3 py-8 text-center">
+    <div v-else-if="archiveProjects.length === 0" class="px-3 py-8 text-center">
       <p class="text-muted-foreground text-xs">{{ $t('archive.noProjects') }}</p>
       <p class="text-muted-foreground text-xs mt-1">{{ $t('archive.checkProjectsDir') }}</p>
     </div>
@@ -66,7 +63,7 @@ function engineLabel(project: typeof projects.value[number]) {
     <!-- 项目列表 -->
     <div v-else class="flex-1 overflow-y-auto min-h-0 overscroll-y-contain flex flex-col p-1">
       <template
-        v-for="(project, i) in projects"
+        v-for="(project, i) in archiveProjects"
         :key="project.id"
       >
       <div v-if="i > 0" class="ml-6 mr-2.5 border-t border-border/30" />
@@ -85,9 +82,6 @@ function engineLabel(project: typeof projects.value[number]) {
             <div class="min-w-0 flex items-center gap-1.5">
               <span class="text-sm text-foreground truncate font-medium" :title="project.display_path">
                 {{ projectName(project.display_path) }}
-              </span>
-              <span class="shrink-0 px-1 py-px rounded bg-secondary text-[9px] text-muted-foreground">
-                {{ engineLabel(project) }}
               </span>
             </div>
             <span v-if="project.last_active" class="text-xs text-muted-foreground shrink-0">
