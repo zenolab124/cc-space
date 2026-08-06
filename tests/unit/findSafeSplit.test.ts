@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createStreamSplitter } from '../../src/lib/stream-markdown/findSafeSplit'
+import { containsBlockHtml, createStreamSplitter } from '../../src/lib/stream-markdown/findSafeSplit'
 
 /** 一次性全文扫描(基准口径) */
 function fullScan(text: string): number[] {
@@ -131,6 +131,12 @@ describe('围栏与数学块', () => {
 })
 
 describe('守卫④:HTML 块', () => {
+  it('识别嵌套卡片 HTML,供流式渲染切换到单根容器', () => {
+    const text = '<div style="display:flex">\n<div style="background:var(--hv-cool)">\n\n### Card\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n</div>\n</div>\n'
+    expect(containsBlockHtml(text)).toBe(true)
+    expect(fullScan(text)).toEqual([])
+  })
+
   it('未闭合块级标签期间不分割,闭合后恢复', () => {
     const text = '<div>\n\ncontent inside\n\n</div>\n\nafter\n'
     expect(fullScan(text)).toEqual([text.indexOf('after')])

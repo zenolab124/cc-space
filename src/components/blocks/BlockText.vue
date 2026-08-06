@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import type { ContentBlock } from '@/types'
 import { renderMarkdownPlain, renderMarkdownCached, renderMarkdownDeferred } from '@/composables/useMarkdown'
+import { createStreamSplitter } from '@/lib/stream-markdown/findSafeSplit'
 import { useStreamSegments } from '@/composables/useStreamSegments'
 import MdSegment from './MdSegment.vue'
 import { TEXT_TRUNCATE_LEN, persistKeyOf } from '@/lib/stream-markdown/constants'
@@ -41,6 +42,8 @@ const segApi = bornStreaming
 const segments = segApi?.segments ?? []
 const tailSource = segApi?.tailSource ?? ref('')
 const tailColored = segApi?.tailColored ?? ref<string | undefined>(undefined)
+const atomicSource = segApi?.atomicSource ?? ref<string | undefined>(undefined)
+const atomicColored = segApi?.atomicColored ?? ref<string | undefined>(undefined)
 
 // 展开/折叠切换文本非前缀变化,段状态全量重建(FR-002 边界③,低频允许整块重渲)
 watch(expanded, () => segApi?.rebuild())
@@ -50,22 +53,10 @@ const staticHtml = computed(() =>
   bornStreaming || RENDERER === 'legacy' ? '' : renderMarkdownCached(displayText.value),
 )
 
-// —— legacy 路径(FR-008 回退分支,整体照搬 v2.4.x 实现,勿改进) ——
+// —— legacy 路径(FR-008 回退分支):沿用单容器输出,但分割仍复用 HTML 安全守卫 ——
 function legacyFindSafeSplit(text: string): number {
-  let inFence = false
-  let last = -1
-  for (let i = 0; i < text.length; i++) {
-    if ((i === 0 || text[i - 1] === '\n') && text[i] === '`' && text[i + 1] === '`' && text[i + 2] === '`') {
-      inFence = !inFence
-      i += 2
-      continue
-    }
-    if (!inFence && text[i] === '\n' && text[i + 1] === '\n') {
-      last = i + 2
-      i++
-    }
-  }
-  return last
+  const points = createStreamSplitter().update(text)
+  return points[points.length - 1] ?? -1
 }
 const MIN_STABLE_LEN = 200
 const legacyStableHtml = ref('')
@@ -122,10 +113,17 @@ function onProseClick(e: MouseEvent) {
 <template>
   <div class="prose-msg message-prose" @click="onProseClick">
     <!-- 段数组路径:冻结段索引 key(内容 hash 会致 remount 闪烁),tail 固定 key 独立渲染位 -->
-    <template v-if="bornStreaming">
+    <template v-if="bornStreaming && atomicSource === undefined">
       <MdSegment v-for="(s, i) in segments" :key="i" :source="s.source" :colored="s.colored" />
       <MdSegment key="tail" :source="tailSource" :colored="tailColored" />
     </template>
+    <!-- 块级 HTML 必须保持单根,不能把标签拆到多个 v-html 子树中。 -->
+    <MdSegment
+      v-else-if="bornStreaming"
+      key="atomic"
+      :source="atomicSource ?? ''"
+      :colored="atomicColored"
+    />
     <div v-else-if="RENDERER === 'legacy'" v-html="legacyHtml" />
     <div v-else v-html="staticHtml" />
     <button

@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "Ход мыслей ({length} символов)",
     "thinkingLoading": "Думает...",
-    "thinkingRedacted": "Думал (содержимое зашифровано, Anthropic не раскрывает открытый текст)",
+    "thinkingRedacted": "Думал",
     "toolResult": "→ Результат",
     "toolResultError": "(Ошибка)",
     "unknownType": "Неизвестный тип блока: {type}",

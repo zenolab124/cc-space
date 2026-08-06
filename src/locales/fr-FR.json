@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "Processus de réflexion ({length} caractères)",
     "thinkingLoading": "Réflexion en cours...",
-    "thinkingRedacted": "A réfléchi (contenu chiffré, Anthropic ne fournit pas le texte en clair)",
+    "thinkingRedacted": "A réfléchi",
     "toolResult": "→ Résultat",
     "toolResultError": "(Erreur)",
     "unknownType": "Type de bloc inconnu : {type}",

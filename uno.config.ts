@@ -4,6 +4,7 @@ import { defineConfig, transformerDirectives, transformerVariantGroup } from 'un
 import presetWind4 from '@unocss/preset-wind4'
 import presetIcons from '@unocss/preset-icons'
 import { icons as carbonIcons } from '@iconify-json/carbon'
+import { icons as simpleIcons } from '@iconify-json/simple-icons'
 
 // 自定义图标（i-app-*）：SVG 源放 src/assets/icons/，须 fill="currentColor" 才能跟随文字色
 const appIconDir = fileURLToPath(new URL('./src/assets/icons', import.meta.url))
@@ -20,6 +21,7 @@ export default defineConfig({
       },
       collections: {
         carbon: () => carbonIcons,
+        simple: () => simpleIcons,
         app: {
           horse: appIcon('horse'),
           chrome: appIcon('chrome'),
@@ -32,7 +34,13 @@ export default defineConfig({
     transformerDirectives(),
     transformerVariantGroup(),
   ],
-  safelist: ['i-carbon-sun', 'i-carbon-moon', 'i-carbon-renew'],
+  safelist: [
+    'i-carbon-sun',
+    'i-carbon-moon',
+    'i-carbon-renew',
+    'i-simple-anthropic',
+    'i-simple-openai',
+  ],
   shortcuts: [
     ['center', 'flex justify-center items-center'],
     ['flex-center', 'flex items-center justify-center'],

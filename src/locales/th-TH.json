@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "กระบวนการคิด ({length} ตัวอักษร)",
     "thinkingLoading": "กำลังคิด...",
-    "thinkingRedacted": "คิดแล้ว (เนื้อหาเข้ารหัส Anthropic ไม่เปิดเผยข้อความ)",
+    "thinkingRedacted": "คิดแล้ว",
     "toolResult": "→ ผลลัพธ์",
     "toolResultError": "(ข้อผิดพลาด)",
     "unknownType": "ประเภทบล็อกที่ไม่รู้จัก: {type}",

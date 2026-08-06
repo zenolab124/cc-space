@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "사고 과정({length}자)",
     "thinkingLoading": "생각 중...",
-    "thinkingRedacted": "사고 완료(내용 암호화됨, Anthropic 미공개)",
+    "thinkingRedacted": "사고 완료",
     "toolResult": "→ 결과",
     "toolResultError": "(오류)",
     "unknownType": "알 수 없는 블록 유형: {type}",

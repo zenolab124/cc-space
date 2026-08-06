@@ -97,6 +97,7 @@ const workbenchActions = computed(() => resolveWorkbenchEngineActions(
 const canCreate = computed(() => workbenchActions.value.create)
 const canFork = computed(() => workbenchActions.value.fork)
 const canRace = computed(() => workbenchActions.value.race)
+const engineId = computed(() => sessionSummary.value?.engine?.engineId ?? (useNativeDetail.value ? 'claude-code' : ''))
 const enginePresentation = computed(() => resolveEnginePresentation(
   useNativeDetail.value ? 'claude' : sessionSummary.value?.engine?.engineId,
   sessionSummary.value?.engine_name ?? (useNativeDetail.value ? 'Claude Code' : null),
@@ -284,47 +285,56 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
     <!-- 列头 -->
     <div
       :ref="handleRef"
-      class="shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border cursor-grab active:cursor-grabbing touch-none"
+      class="workbench-column-header shrink-0 flex items-center gap-2 px-3 py-2 border-b border-border cursor-grab active:cursor-grabbing touch-none"
     >
       <span
         class="w-1.5 h-1.5 rounded-full shrink-0"
         :class="[status.dotClass, { 'col-dot-pulse': status.pulse }]"
       />
+      <span
+        v-if="engineName"
+        class="workbench-column-engine-badge"
+        :style="engineIdentityStyle"
+        v-tooltip="engineName"
+        :title="engineName"
+        :aria-label="engineName"
+      >
+        <span v-if="engineId === 'codex'" class="i-simple-openai h-3.5 w-3.5" />
+        <span v-else-if="engineId === 'claude' || engineId === 'claude-code'" class="i-simple-anthropic h-3.5 w-3.5" />
+        <span v-else class="text-[9px]">{{ engineName.slice(0, 2) }}</span>
+      </span>
       <template v-if="isRace">
-        <span class="flex-1 min-w-0 truncate text-xs font-semibold">{{ lane!.label }}</span>
+        <span class="workbench-column-title">{{ lane!.label }}</span>
       </template>
       <template v-else>
-        <span
-          v-if="engineName"
-          class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-tight"
-          :style="engineIdentityStyle"
-        >{{ engineName }}</span>
-        <span v-if="projectName" class="shrink-0 text-[10px] px-1.5 py-0.5 rounded leading-tight" style="color: var(--tag-foreground); background: var(--tag)">{{ projectName }}</span>
-        <span class="flex-1 min-w-0 truncate text-xs font-semibold">{{ title }}</span>
+        <span v-if="projectName" class="workbench-column-project shrink-0 text-[10px] px-1.5 py-0.5 rounded leading-tight" style="color: var(--tag-foreground); background: var(--tag)">{{ projectName }}</span>
+        <span class="workbench-column-title">{{ title }}</span>
       </template>
-      <button
-        v-if="useNativeDetail"
-        :disabled="rcLoading"
-        class="icon-btn icon-btn-sm disabled:opacity-40"
-        :class="stream.rcActive ? 'border-primary! text-primary!' : ''"
-        v-tooltip="stream.rcActive ? $t('workbench.column.rcEnabled') : $t('workbench.column.rcEnable')"
-        @pointerdown.stop
-        @click.stop="onToggleRC"
-      >
-        <span class="i-carbon-remote-connection w-3 h-3" />
-      </button>
-      <button
-        v-if="useNativeDetail"
-        class="icon-btn icon-btn-sm"
-        :class="settings.chrome ? 'border-primary! text-primary!' : ''"
-        v-tooltip="settings.chrome ? $t('workbench.column.chromeEnabled') : $t('workbench.column.chromeEnable')"
-        @pointerdown.stop
-        @click.stop="onToggleChrome"
-      >
-        <span class="i-app-chrome w-3 h-3" />
-      </button>
-      <!-- 普通模式:引擎通用动作按 capability 出现；RC/Chrome 仍是 Claude 专属。 -->
-      <template v-if="!isRace">
+      <div class="workbench-column-actions">
+        <div v-if="!isRace" class="workbench-column-optional-actions">
+          <button
+            v-if="useNativeDetail"
+            :disabled="rcLoading"
+            class="icon-btn icon-btn-sm disabled:opacity-40"
+            :class="stream.rcActive ? 'border-primary! text-primary!' : ''"
+            v-tooltip="stream.rcActive ? $t('workbench.column.rcEnabled') : $t('workbench.column.rcEnable')"
+            @pointerdown.stop
+            @click.stop="onToggleRC"
+          >
+            <span class="i-carbon-remote-connection w-3 h-3" />
+          </button>
+          <button
+            v-if="useNativeDetail"
+            class="icon-btn icon-btn-sm"
+            :class="settings.chrome ? 'border-primary! text-primary!' : ''"
+            v-tooltip="settings.chrome ? $t('workbench.column.chromeEnabled') : $t('workbench.column.chromeEnable')"
+            @pointerdown.stop
+            @click.stop="onToggleChrome"
+          >
+            <span class="i-app-chrome w-3 h-3" />
+          </button>
+          <!-- 普通模式:引擎通用动作按 capability 出现；RC/Chrome 仍是 Claude 专属。 -->
+          <template v-if="!isRace">
         <button
           v-if="canRace"
           :disabled="engineActionLoading"
@@ -363,25 +373,29 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         >
           <span class="i-carbon-chevron-left w-3 h-3" />
         </button>
+          </template>
+        </div>
+        <!-- 关闭按钮独立于可收缩操作区,始终保留完整点击区域。 -->
         <button
-          class="icon-btn icon-btn-sm icon-btn-danger"
+          v-if="!isRace"
+          class="workbench-column-close icon-btn icon-btn-sm icon-btn-danger"
           v-tooltip="$t('workbench.column.closeExit')"
           @pointerdown.stop
           @click="onClose"
         >
           <span class="i-carbon-close w-3 h-3" />
         </button>
-      </template>
-      <!-- 赛马模式:关闭赛道 -->
-      <button
-        v-else
-        class="icon-btn icon-btn-sm icon-btn-danger"
-        v-tooltip="$t('workbench.race.closeLane')"
-        @pointerdown.stop
-        @click="onCloseLane"
-      >
-        <span class="i-carbon-close w-3 h-3" />
-      </button>
+        <!-- 赛马模式:关闭赛道 -->
+        <button
+          v-else
+          class="workbench-column-close icon-btn icon-btn-sm icon-btn-danger"
+          v-tooltip="$t('workbench.race.closeLane')"
+          @pointerdown.stop
+          @click="onCloseLane"
+        >
+          <span class="i-carbon-close w-3 h-3" />
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 min-h-0">
@@ -396,6 +410,49 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
 </template>
 
 <style scoped>
+.workbench-column-header { min-width: 0; }
+.workbench-column-engine-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.workbench-column-title {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.workbench-column-actions {
+  display: flex;
+  min-width: 30px;
+  max-width: 100%;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.5rem;
+  overflow: hidden;
+}
+.workbench-column-optional-actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.5rem;
+  overflow: hidden;
+}
+.workbench-column-optional-actions > * { flex: 0 0 auto; }
+.workbench-column-close { flex: 0 0 auto; }
 .col-dot-pulse {
   animation: col-pulse 1.6s ease-in-out infinite;
 }

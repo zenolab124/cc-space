@@ -13,10 +13,14 @@ import {
   type AsyncToolState,
 } from '@/composables/useToolDisplay'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   tool: ToolUseBlock
   streaming?: boolean
-}>()
+  /** 分组模式由外层统一折叠,单独模式才显示工具项折叠按钮。 */
+  foldable?: boolean
+}>(), {
+  foldable: true,
+})
 
 const { t } = useI18n()
 const foldState = useToolFoldState()
@@ -39,7 +43,7 @@ const state = computed(() => deriveToolVisualState({
   runInBackground: props.tool.name === 'Bash' && props.tool.input.run_in_background === true,
 }))
 
-const autoExpanded = computed(() => state.value === 'running' || state.value === 'permission')
+const autoExpanded = computed(() => state.value === 'permission')
 const expanded = computed(() => {
   if (foldState.collapsedItems.has(props.tool.id)) return false
   return foldState.expandedItems.has(props.tool.id)
@@ -90,6 +94,7 @@ watch(() => foldState.requestedToolId.value, requested => {
 <template>
   <div class="tool-fold-item" :data-tool-use-id="tool.id">
     <button
+      v-if="foldable"
       type="button"
       class="tool-fold-line"
       :aria-expanded="expanded"
@@ -114,7 +119,23 @@ watch(() => foldState.requestedToolId.value, requested => {
         <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
       </span>
     </button>
-    <div v-if="expanded" class="tool-fold-card">
+    <div v-else class="tool-fold-line tool-fold-line-static">
+      <span class="tool-fold-chevron" aria-hidden="true" />
+      <span :class="[iconClass, 'tool-fold-icon']" />
+      <span class="tool-fold-main">
+        <b>{{ tool.name }}</b>
+        <span v-if="toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
+      </span>
+      <span
+        v-if="stateLabel"
+        class="tool-fold-state"
+        :class="`is-${state}`"
+      >
+        {{ stateLabel }}
+        <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
+      </span>
+    </div>
+    <div v-if="!foldable || expanded" class="tool-fold-card">
       <MessageBlock :block="tool" />
     </div>
   </div>
@@ -136,6 +157,7 @@ watch(() => foldState.requestedToolId.value, requested => {
   cursor: pointer;
   line-height: var(--tool-row-line-height);
 }
+.tool-fold-line-static { cursor: default; }
 .tool-fold-line:hover { color: var(--foreground); }
 .tool-fold-chevron {
   width: 12px;

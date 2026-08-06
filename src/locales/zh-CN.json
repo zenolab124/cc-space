@@ -1177,7 +1177,7 @@
     "foldShiftHint": "Shift + 点击：全部展开或折叠，并记住默认状态",
     "thinking": "思考过程（{length} 字）",
     "thinkingLoading": "思考中...",
-    "thinkingRedacted": "已思考(内容加密，Anthropic 未暴露明文)",
+    "thinkingRedacted": "已思考",
     "toolResult": "→ 结果",
     "toolResultError": "（错误）",
     "unknownType": "未知块类型：{type}",

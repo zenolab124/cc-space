@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "عملية التفكير ({length} حرف)",
     "thinkingLoading": "يفكر...",
-    "thinkingRedacted": "تم التفكير (المحتوى مشفر، Anthropic لم تكشف النص الصريح)",
+    "thinkingRedacted": "تم التفكير",
     "toolResult": "→ النتيجة",
     "toolResultError": "(خطأ)",
     "unknownType": "نوع كتلة غير معروف: {type}",

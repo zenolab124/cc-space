@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "思考過程（{length} 文字）",
     "thinkingLoading": "思考中...",
-    "thinkingRedacted": "思考済み（内容は暗号化、Anthropic は平文を公開していません）",
+    "thinkingRedacted": "思考済み",
     "toolResult": "→ 結果",
     "toolResultError": "（エラー）",
     "unknownType": "不明なブロックタイプ：{type}",

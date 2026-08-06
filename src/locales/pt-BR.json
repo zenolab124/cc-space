@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "Processo de pensamento ({length} caracteres)",
     "thinkingLoading": "Pensando...",
-    "thinkingRedacted": "Pensou (conteúdo criptografado, Anthropic não expôs o texto)",
+    "thinkingRedacted": "Pensou",
     "toolResult": "→ Resultado",
     "toolResultError": "(Erro)",
     "unknownType": "Tipo de bloco desconhecido: {type}",

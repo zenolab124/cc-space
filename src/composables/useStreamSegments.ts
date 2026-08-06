@@ -1,5 +1,5 @@
 import { reactive, ref, watch, onUnmounted } from 'vue'
-import { createStreamSplitter } from '@/lib/stream-markdown/findSafeSplit'
+import { containsBlockHtml, createStreamSplitter } from '@/lib/stream-markdown/findSafeSplit'
 import { renderMarkdownDeferred, renderMarkdownPlain } from './useMarkdown'
 
 /**
@@ -30,6 +30,11 @@ export function useStreamSegments(opts: {
   const segments = reactive<StreamSegment[]>([])
   const tailSource = ref('')
   const tailColored = ref<string | undefined>(undefined)
+  // 块级 HTML 只能放在一个 v-html 根节点内。否则浏览器会分别修复各段的
+  // 未闭合标签,出现样式尾巴、Markdown 管道符泄漏和重复节点。
+  const atomicSource = ref<string | undefined>(undefined)
+  const atomicColored = ref<string | undefined>(undefined)
+  let atomicMode = false
   let splitter = createStreamSplitter()
   let frozenEnd = 0
   // 上色代际:rebuild/续流时 ++,在途回填回调按代际短路作废(FR-004 边界②)
@@ -37,6 +42,16 @@ export function useStreamSegments(opts: {
   let disposed = false
 
   function ingest(text: string): void {
+    if (atomicMode || containsBlockHtml(text)) {
+      atomicMode = true
+      atomicSource.value = text
+      atomicColored.value = undefined
+      segments.length = 0
+      tailSource.value = ''
+      tailColored.value = undefined
+      frozenEnd = text.length
+      return
+    }
     const points = splitter.update(text)
     let start = frozenEnd
     for (const p of points) {
@@ -51,6 +66,14 @@ export function useStreamSegments(opts: {
   /** 流式结束的素→彩:每段一个 defer 队列条目,每帧至多一段 DOM 被替换 */
   function colorize(): void {
     const gen = ++generation
+    const atomicText = atomicSource.value
+    const atomicReady = atomicText ? renderMarkdownDeferred(atomicText) : null
+    if (atomicReady) {
+      atomicReady.then(html => {
+        if (disposed || gen !== generation) return
+        atomicColored.value = html
+      })
+    }
     for (const seg of segments) {
       // plain 与 shiki 输出仅围栏渲染有差,无围栏段 plain 即终态,回填是无谓 DOM 动作
       if (seg.colored !== undefined || !hasFence(seg.source)) continue
@@ -70,15 +93,19 @@ export function useStreamSegments(opts: {
     // deferredRecords 换树时历史区 renderMarkdownCached 必命中。
     // FR-006:预热排在全部段上色之后 resolve,天然是"上色完成"同步点,DEV 下借它做段拼接自查
     const persist = opts.persistText()
-    renderMarkdownDeferred(persist).then(fullHtml => {
+    const persistReady = atomicText && atomicText === persist
+      ? atomicReady!
+      : renderMarkdownDeferred(persist)
+    persistReady.then(fullHtml => {
       if (!import.meta.env.DEV || disposed || gen !== generation) return
       // 展开态下段基于全文而 persist 是截断串,两者不可比,跳过
       if (opts.text() !== persist) return
       import('@/lib/stream-markdown/devConsistencyCheck').then(({ devCheckSegments }) => {
         if (disposed || gen !== generation) return
-        const joined =
-          segments.map(s => s.colored ?? renderMarkdownPlain(s.source)).join('') +
-          (tailColored.value ?? (tailSource.value ? renderMarkdownPlain(tailSource.value) : ''))
+        const joined = atomicText
+          ? (atomicText === persist ? fullHtml : (atomicColored.value ?? renderMarkdownPlain(atomicText)))
+          : segments.map(s => s.colored ?? renderMarkdownPlain(s.source)).join('') +
+            (tailColored.value ?? (tailSource.value ? renderMarkdownPlain(tailSource.value) : ''))
         devCheckSegments(persist, joined, fullHtml)
       })
     })
@@ -90,6 +117,9 @@ export function useStreamSegments(opts: {
     splitter = createStreamSplitter()
     segments.length = 0
     frozenEnd = 0
+    atomicMode = false
+    atomicSource.value = undefined
+    atomicColored.value = undefined
     tailColored.value = undefined
     ingest(opts.text())
     if (!opts.streaming()) colorize()
@@ -105,6 +135,7 @@ export function useStreamSegments(opts: {
       // 罕见同块续流:作废在途上色,已上色段保持彩色(内容不变不回退),tail 回素继续增量
       generation++
       tailColored.value = undefined
+      atomicColored.value = undefined
     }
   })
 
@@ -113,5 +144,5 @@ export function useStreamSegments(opts: {
   // 挂载时流式已在途(delta 已累积):先吞当前文本
   ingest(opts.text())
 
-  return { segments, tailSource, tailColored, rebuild }
+  return { segments, tailSource, tailColored, atomicSource, atomicColored, rebuild }
 }

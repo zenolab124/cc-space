@@ -31,6 +31,15 @@ const VOID_TAGS = new Set([
   'input', 'link', 'meta', 'param', 'source', 'track', 'wbr',
 ])
 
+// 块级 HTML 不能跨多个 v-html 根节点渲染:浏览器会在每个片段末尾自动修复未闭合标签,
+// 后续片段中的 Markdown 便可能被当作原始 HTML 或游离文本。流式阶段遇到这类标签时,
+// 由上层改走单容器原子渲染。只匹配 Markdown 块级 HTML 的行首形式,避免普通行内标签降级。
+const BLOCK_HTML_RE = /(?:^|\n)[ \t]{0,3}<\/?(?:address|article|aside|blockquote|details|dialog|div|dl|fieldset|figcaption|figure|footer|form|h[1-6]|header|hr|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)(?:[ \t][^>]*|\/?)[>]/i
+
+export function containsBlockHtml(text: string): boolean {
+  return BLOCK_HTML_RE.test(text)
+}
+
 export interface StreamSplitter {
   /**
    * 喂入当前全文(须为上次调用的前缀扩展),返回已确认的安全分割点数组(字符偏移,升序)。

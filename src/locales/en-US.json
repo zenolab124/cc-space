@@ -1177,7 +1177,7 @@
     "foldShiftHint": "Shift-click to expand or collapse all and remember the default",
     "thinking": "Thinking process ({length} chars)",
     "thinkingLoading": "Thinking...",
-    "thinkingRedacted": "Thought (encrypted, Anthropic does not expose plaintext)",
+    "thinkingRedacted": "Thought",
     "toolResult": "→ Result",
     "toolResultError": "(Error)",
     "unknownType": "Unknown block type: {type}",

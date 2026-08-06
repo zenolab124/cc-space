@@ -86,7 +86,7 @@ const stateLabel = computed(() => {
 const groupKey = computed(() => props.tools[0]?.id ?? '')
 const containsRequested = computed(() => props.tools.some(tool => tool.id === foldState.requestedToolId.value))
 const autoExpanded = computed(() =>
-  containsRequested.value || groupState.value === 'running' || groupState.value === 'permission',
+  containsRequested.value || groupState.value === 'permission',
 )
 const expanded = computed(() => {
   if (containsRequested.value) return true
@@ -143,6 +143,7 @@ function toggle(event: MouseEvent) {
         :blocks="blocks"
         :block-record-uuids="blockRecordUuids"
         :streaming="streaming"
+        nested
       />
     </slot>
   </SessionProcessDisclosure>

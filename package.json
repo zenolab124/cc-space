@@ -36,6 +36,7 @@
   "packageManager": "pnpm@10.18.2",
   "devDependencies": {
     "@iconify-json/carbon": "^1.2.20",
+    "@iconify-json/simple-icons": "^1.2.93",
     "@tauri-apps/cli": "^2.10.1",
     "@types/diff": "^8.0.0",
     "@types/markdown-it": "^14.1.2",

@@ -4,11 +4,15 @@ import { isToolUseBlock, type ToolUseBlock } from '@/utils/toolDisplay'
 import MessageBlock from './MessageBlock.vue'
 import ToolProcessItem from './ToolProcessItem.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   blocks: ContentBlock[]
   blockRecordUuids?: Array<string | null | undefined>
   streaming?: boolean
-}>()
+  /** 分组展开时由外层统一折叠,工具项只展示内容。 */
+  nested?: boolean
+}>(), {
+  nested: false,
+})
 
 function toolOf(block: ContentBlock): ToolUseBlock | null {
   return isToolUseBlock(block) ? block : null
@@ -22,6 +26,7 @@ function toolOf(block: ContentBlock): ToolUseBlock | null {
         v-if="toolOf(block)"
         :tool="toolOf(block)!"
         :streaming="streaming"
+        :foldable="!props.nested"
       />
       <MessageBlock
         v-else

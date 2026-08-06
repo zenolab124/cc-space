@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "Qua trinh suy nghi ({length} ky tu)",
     "thinkingLoading": "Dang suy nghi...",
-    "thinkingRedacted": "Da suy nghi (noi dung da ma hoa, Anthropic khong hien van ban goc)",
+    "thinkingRedacted": "Da suy nghi",
     "toolResult": "→ Ket qua",
     "toolResultError": "(Loi)",
     "unknownType": "Loai khoi khong xac dinh: {type}",

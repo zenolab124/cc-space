@@ -1053,7 +1053,7 @@
   "block": {
     "thinking": "Denkprozess ({length} Zeichen)",
     "thinkingLoading": "Denkt nach...",
-    "thinkingRedacted": "Hat nachgedacht (Inhalt verschlüsselt, Anthropic gibt keinen Klartext preis)",
+    "thinkingRedacted": "Hat nachgedacht",
     "toolResult": "→ Ergebnis",
     "toolResultError": "(Fehler)",
     "unknownType": "Unbekannter Blocktyp: {type}",
