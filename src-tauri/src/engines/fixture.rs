@@ -56,7 +56,6 @@ impl FixtureEngine {
                 identity: UiIdentityMode::Structured,
                 session_surface: SessionSurface::Standard,
                 install_guide_url: None,
-                configuration_guide_url: None,
             },
         };
         let project = CoreProject {

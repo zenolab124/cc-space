@@ -961,6 +961,35 @@ pub fn open_in_default_app(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 用轻量文本编辑器打开配置文件，避免 JSON 被 IDE 接管。
+pub fn open_in_text_editor(path: String) -> Result<(), String> {
+    use crate::proc_ext::SpawnAndReap;
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-e", &path])
+            .spawn_and_reap()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use crate::proc_ext::HideConsole;
+        std::process::Command::new("notepad.exe")
+            .arg(&path)
+            .hide_console()
+            .spawn_and_reap()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn_and_reap()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
 const MAX_IMAGE_SIZE: u64 = 50 * 1024 * 1024;
 

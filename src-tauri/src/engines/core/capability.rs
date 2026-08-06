@@ -111,7 +111,6 @@ pub struct EngineUiIntegration {
     pub identity: UiIdentityMode,
     pub session_surface: SessionSurface,
     pub install_guide_url: Option<String>,
-    pub configuration_guide_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

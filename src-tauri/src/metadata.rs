@@ -172,25 +172,6 @@ pub async fn generate_permission_hint(
 }
 
 #[tauri::command]
-pub async fn translate_settings_fields(fields_json: String) -> Result<String, String> {
-    if !crate::channels::is_agent_enabled("settings_explain") {
-        return Err("agent.settings_explain 已禁用".to_string());
-    }
-    tauri::async_runtime::spawn_blocking(move || crate::agent::translate_settings(&fields_json))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn extract_settings_defaults(fields_json: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::cli_settings::extract_defaults_from_binary(&fields_json)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 pub async fn generate_tags(project_id: String, session_id: String) -> Result<Vec<String>, String> {
     if !crate::channels::is_agent_enabled("tags") {
         return Err("agent.tags 已禁用".to_string());

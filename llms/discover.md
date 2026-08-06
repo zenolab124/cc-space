@@ -157,7 +157,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Permission risk annotation: the approval card tells you in plain language what the command is about to do
 - Semantic search translation & synthesis (see "Global search")
 - Natural language → cron (see "Routines")
-- CLI settings explained by an expert: what each Claude Code settings field means and what it affects, narrated by AI
+- Engine Center opens Claude Code's settings.json directly for precise edits in the user's preferred JSON editor
 - UI language extension: beyond the 12 built-in languages, type any language name and the AI translates the entire UI on the spot
 - Augmentation sessions stay out of your archive: the sessions AI uses for these chores don't pollute your history (toggleable)
 

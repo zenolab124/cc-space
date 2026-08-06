@@ -7,9 +7,14 @@ import { relaunch } from '@tauri-apps/plugin-process'
 import { useEngines } from '@/engines/useEngines'
 import { instanceKey } from '@/engines/identity'
 import { setEngineEnabled } from '@/engines/client'
+import { useConfirm } from '@/composables/useConfirm'
 import type { EngineDescriptor } from '@/engines/types'
+import ClaudeEnvCard from './ClaudeEnvCard.vue'
+import ClaudeDataDirCard from './ClaudeDataDirCard.vue'
+import CodexEnvCard from './CodexEnvCard.vue'
 
 const { t } = useI18n()
+const { confirm } = useConfirm()
 const { engines, health, loading, errors, refreshEngines } = useEngines()
 const expanded = ref<Set<string>>(new Set())
 const exporting = ref(false)
@@ -53,15 +58,23 @@ function capabilityStatus(available?: boolean, reasonCode?: string | null) {
 async function toggleEnabled(engine: EngineDescriptor) {
   const key = instanceKey(engine.instance)
   updating.value = new Set(updating.value).add(key)
-  exportStatus.value = t('engineSettings.restarting')
+  exportStatus.value = null
   try {
     await setEngineEnabled(engine.instance, !engine.enabled)
-    await relaunch()
+    await refreshEngines()
+    const shouldRestart = await confirm(t('engineSettings.restartConfirm'), t('engineSettings.restart'))
+    if (shouldRestart) {
+      exportStatus.value = t('engineSettings.restarting')
+      await relaunch()
+    } else {
+      exportStatus.value = t('engineSettings.restartLater')
+    }
   } catch (cause) {
+    exportStatus.value = String(cause)
+  } finally {
     const next = new Set(updating.value)
     next.delete(key)
     updating.value = next
-    exportStatus.value = String(cause)
   }
 }
 
@@ -69,6 +82,14 @@ async function openGuide(url: string | null) {
   if (!url) return
   try {
     await invoke('open_in_default_app', { path: url })
+  } catch (cause) {
+    exportStatus.value = String(cause)
+  }
+}
+
+async function openConfiguration(engine: EngineDescriptor) {
+  try {
+    await invoke('engine_open_configuration', { instance: engine.instance })
   } catch (cause) {
     exportStatus.value = String(cause)
   }
@@ -135,6 +156,15 @@ async function openGuide(url: string | null) {
             <span v-if="engine.capabilities.facets.automation" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.automation') }}</span>
           </div>
 
+          <div v-if="engine.instance.engineId === 'claude-code' || engine.instance.engineId === 'codex'" class="mt-3 border-t border-border pt-2">
+            <p class="mb-2 text-[10px] font-medium text-muted-foreground">{{ t('engineSettings.engineCapabilities') }}</p>
+            <template v-if="engine.instance.engineId === 'claude-code'">
+              <ClaudeEnvCard />
+              <ClaudeDataDirCard />
+            </template>
+            <CodexEnvCard v-else />
+          </div>
+
           <div v-if="health[instanceKey(engine.instance)]?.diagnostics.length || errors[instanceKey(engine.instance)]" role="status" class="mt-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-[10px] text-destructive">
             <p v-if="errors[instanceKey(engine.instance)]">{{ errors[instanceKey(engine.instance)] }}</p>
             <p v-for="diagnostic in health[instanceKey(engine.instance)]?.diagnostics" :key="diagnostic.code">{{ diagnostic.message }}</p>
@@ -143,11 +173,11 @@ async function openGuide(url: string | null) {
             <button v-if="engine.ui.installGuideUrl" type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted" @click="openGuide(engine.ui.installGuideUrl)">
               {{ t('engineSettings.installGuide') }}
             </button>
-            <button v-if="engine.ui.configurationGuideUrl" type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted" @click="openGuide(engine.ui.configurationGuideUrl)">
-              {{ t('engineSettings.nativeSettings') }}
+            <button v-if="engine.enabled && engine.capabilities.facets.configuration" type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted" @click="openConfiguration(engine)">
+              <span class="i-carbon-edit mr-1 inline-block h-3 w-3 align-text-bottom" />{{ t('engineSettings.editConfiguration') }}
             </button>
             <button type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted disabled:opacity-50" :disabled="updating.has(instanceKey(engine.instance))" @click="toggleEnabled(engine)">
-              {{ engine.enabled ? t('engineSettings.turnOff') : t('engineSettings.turnOn') }}
+              {{ engine.enabled ? t('engineSettings.ignoreEngine') : t('engineSettings.restoreEngine') }}
             </button>
           </div>
         </div>

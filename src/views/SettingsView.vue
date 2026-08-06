@@ -24,7 +24,6 @@ import { useLocale } from '@/composables/useLocale'
 import ChannelForm from '@/components/settings/ChannelForm.vue'
 import OfficialDefaultsForm from '@/components/settings/OfficialDefaultsForm.vue'
 import AgentIframeDemo from '@/components/settings/AgentIframeDemo.vue'
-import ClaudeCodeSettings from '@/components/settings/ClaudeCodeSettings.vue'
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
 import TurnSignalCard from '@/components/settings/TurnSignalCard.vue'
 import TrayQuotaSelect from '@/components/settings/TrayQuotaSelect.vue'
@@ -37,15 +36,8 @@ import { TOOL_DISPLAY_MODES, useToolDisplayMode, type ToolDisplayMode } from '@/
 import { useUpdater } from '@/composables/useUpdater'
 import { MODELS } from '@/utils/modelContext'
 import EngineCenter from '@/components/settings/EngineCenter.vue'
-import { useEngines } from '@/engines/useEngines'
 
 const { t } = useI18n()
-const { engines } = useEngines()
-const nativeConfigurationEngine = computed(() => engines.value.find(engine =>
-  engine.enabled
-  && engine.capabilities.facets.configuration
-  && engine.ui.sessionSurface === 'native',
-))
 const {
   channels, defaultSessionChannel, defaultAgentChannel, defaultAgentModel,
   probeResults, probing,
@@ -106,7 +98,6 @@ const agentToggles = ref<Record<string, boolean>>({})
 const agentKeys = [
   { key: 'title', label: 'settings.agentTitle', desc: 'settings.agentTitleDesc', tag: 'recommended' as const },
   { key: 'permission_hint', label: 'settings.agentPermissionHint', desc: 'settings.agentPermissionHintDesc', tag: 'beginner' as const },
-  { key: 'settings_explain', label: 'settings.agentSettingsExplain', desc: 'settings.agentSettingsExplainDesc', tag: 'asNeeded' as const },
   { key: 'cron_parse', label: 'settings.agentCronParse', desc: 'settings.agentCronParseDesc', tag: 'asNeeded' as const },
   { key: 'tags', label: 'settings.agentTags', desc: 'settings.agentTagsDesc', tag: 'recommended' as const },
   { key: 'summary', label: 'settings.agentSummary', desc: 'settings.agentSummaryDesc', tag: 'recommended' as const },
@@ -252,12 +243,9 @@ const agentLogsStats = computed(() => {
   return { total: logs.length, totalInput, totalOutput, successCount }
 })
 
-type Tab = 'appearance' | 'channels' | 'agent' | 'engines' | 'engine-config' | 'permissions' | 'extensions' | 'lab' | 'system'
+type Tab = 'appearance' | 'channels' | 'agent' | 'engines' | 'permissions' | 'extensions' | 'lab' | 'system'
 const { isMac } = usePlatform()
 const activeTab = ref<Tab>('appearance')
-watch(nativeConfigurationEngine, engine => {
-  if (!engine && activeTab.value === 'engine-config') activeTab.value = 'engines'
-})
 
 const editing = ref<'new' | ChannelInfo | null>(null)
 /** official 渠道轻量编辑(仅默认模型/思考强度两字段) */
@@ -605,9 +593,6 @@ function onSaved() {
       <button :class="['side-item', { active: activeTab === 'engines' }]" @click="activeTab = 'engines'">
         <span class="i-carbon-ibm-watson-discovery w-3.5 h-3.5" />{{ $t('engineSettings.nav') }}
       </button>
-      <button v-if="nativeConfigurationEngine" :class="['side-item', { active: activeTab === 'engine-config' }]" @click="activeTab = 'engine-config'">
-        <span class="i-carbon-json w-3.5 h-3.5" />{{ nativeConfigurationEngine.displayName }}
-      </button>
       <button v-if="isMac" :class="['side-item', { active: activeTab === 'permissions' }]" @click="activeTab = 'permissions'">
         <span class="i-carbon-security w-3.5 h-3.5" />{{ $t('settings.permissionsNav') }}
       </button>
@@ -621,8 +606,8 @@ function onSaved() {
     </nav>
 
     <!-- 内容区 -->
-    <div :class="['flex-1 min-w-0', activeTab === 'engine-config' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto']">
-      <div :class="['settings-body', { 'flex-1 min-h-0 flex flex-col': activeTab === 'engine-config' }]">
+    <div class="flex-1 min-w-0 overflow-y-auto">
+      <div class="settings-body">
 
         <!-- ====== 外观 ====== -->
         <section v-show="activeTab === 'appearance'">
@@ -1108,12 +1093,8 @@ function onSaved() {
           </div>
         </section>
 
-        <!-- ====== Claude Code 配置 ====== -->
+        <!-- ====== 引擎中心 ====== -->
         <EngineCenter v-if="activeTab === 'engines'" />
-
-        <section v-if="nativeConfigurationEngine" v-show="activeTab === 'engine-config'" class="cli-section">
-          <ClaudeCodeSettings />
-        </section>
 
         <!-- ====== 权限体检 ====== -->
         <section v-if="isMac" v-show="activeTab === 'permissions'">

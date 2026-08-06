@@ -52,7 +52,6 @@ export interface EngineDescriptor {
     identity: 'structured' | 'native'
     sessionSurface: 'standard' | 'native'
     installGuideUrl: string | null
-    configurationGuideUrl: string | null
   }
 }
 

@@ -60,9 +60,6 @@ impl CodexEngine {
                 identity: UiIdentityMode::Structured,
                 session_surface: SessionSurface::Standard,
                 install_guide_url: Some("https://developers.openai.com/codex/cli/".into()),
-                configuration_guide_url: Some(
-                    "https://developers.openai.com/codex/config-basic/".into(),
-                ),
             },
         })
     }
@@ -107,18 +104,16 @@ impl EngineAdapter for CodexEngine {
                         code: "cliNotFound".into(),
                         message: error.clone(),
                     });
+                    let runtime = missing_cli_runtime(&mut diagnostics);
                     return Ok(EngineHealth {
                         instance: self.descriptor.instance.clone(),
-                        status: status_for(
-                            &source,
-                            &CapabilityHealth::unavailable("engine.codex.cliUnavailable"),
-                        ),
+                        status: status_for(&source, &runtime),
                         installed: false,
                         authenticated: None,
                         version: None,
                         version_supported: None,
                         executable_path: None,
-                        runtime: CapabilityHealth::unavailable("engine.codex.cliUnavailable"),
+                        runtime,
                         source,
                         diagnostics,
                     });
@@ -208,6 +203,21 @@ fn status_for(source: &CapabilityHealth, runtime: &CapabilityHealth) -> EngineHe
         (true, true) => EngineHealthStatus::Available,
         (true, false) | (false, true) => EngineHealthStatus::Degraded,
         (false, false) => EngineHealthStatus::Unavailable,
+    }
+}
+
+fn missing_cli_runtime(diagnostics: &mut Vec<HealthDiagnostic>) -> CapabilityHealth {
+    if let Some(path) = crate::codex_locator::desktop_bundle_path() {
+        diagnostics.push(HealthDiagnostic {
+            code: "desktopBundleDetected".into(),
+            message: format!(
+                "ChatGPT desktop includes a bundled Codex binary at {}, but it is not a standalone CLI. Install the Codex CLI for Monet interactive runtime features.",
+                path.display()
+            ),
+        });
+        CapabilityHealth::unavailable("engine.codex.desktopBundleOnly")
+    } else {
+        CapabilityHealth::unavailable("engine.codex.cliUnavailable")
     }
 }
 

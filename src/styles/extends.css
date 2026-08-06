@@ -69,7 +69,7 @@ body {
   min-height: 48px;
 }
 
-/* 紧凑变体（ClaudeCodeSettings 等密集表格用） */
+/* 紧凑变体（设置页密集内容用） */
 .form-input-sm,
 .form-select-sm,
 .form-textarea-sm {

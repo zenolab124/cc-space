@@ -31,12 +31,6 @@ pub trait AssetProvider: Send + Sync {
     fn list_assets(&self, query: FacetQuery) -> EngineFuture<'_, FacetPage>;
 }
 
-pub trait ConfigurationProvider: Send + Sync {
-    fn schema(&self) -> EngineFuture<'_, Value>;
-    fn read(&self) -> EngineFuture<'_, Value>;
-    fn update(&self, patch: Value) -> EngineFuture<'_, Value>;
-}
-
 pub trait QuotaProvider: Send + Sync {
     fn read_quota(&self, force_refresh: bool) -> EngineFuture<'_, Value>;
 }

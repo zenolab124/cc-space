@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -59,7 +58,6 @@ impl ClaudeEngine {
                 identity: UiIdentityMode::Native,
                 session_surface: SessionSurface::Native,
                 install_guide_url: Some("https://code.claude.com/docs/en/installation".into()),
-                configuration_guide_url: Some("https://code.claude.com/docs/en/settings".into()),
             },
         })
     }
@@ -77,6 +75,10 @@ impl ClaudeEngine {
 impl EngineAdapter for ClaudeEngine {
     fn descriptor(&self) -> EngineDescriptor {
         self.descriptor.clone()
+    }
+
+    fn configuration_path(&self) -> Option<std::path::PathBuf> {
+        Some(crate::config::claude_settings_path())
     }
 
     fn health(&self) -> EngineFuture<'_, EngineHealth> {
@@ -131,10 +133,6 @@ impl EngineAdapter for ClaudeEngine {
     }
 
     fn assets(&self) -> Option<&dyn AssetProvider> {
-        Some(self)
-    }
-
-    fn configuration(&self) -> Option<&dyn ConfigurationProvider> {
         Some(self)
     }
 
@@ -198,30 +196,6 @@ impl AssetProvider for ClaudeEngine {
             }
             let (items, next_cursor) = paginate(items, query.cursor, query.limit);
             Ok(FacetPage { items, next_cursor })
-        })
-    }
-}
-
-impl ConfigurationProvider for ClaudeEngine {
-    fn schema(&self) -> EngineFuture<'_, Value> {
-        Box::pin(async { Ok(crate::cli_settings::get_settings_schema()) })
-    }
-
-    fn read(&self) -> EngineFuture<'_, Value> {
-        Box::pin(async { Ok(crate::cli_settings::get_full_cli_settings()) })
-    }
-
-    fn update(&self, patch: Value) -> EngineFuture<'_, Value> {
-        Box::pin(async move {
-            let updates: HashMap<String, Value> =
-                serde_json::from_value(patch).map_err(|error| {
-                    EngineError::new(
-                        EngineErrorKind::Protocol,
-                        format!("configuration patch must be an object: {error}"),
-                    )
-                })?;
-            crate::cli_settings::update_cli_settings(updates).map_err(internal_error)?;
-            Ok(crate::cli_settings::get_full_cli_settings())
         })
     }
 }

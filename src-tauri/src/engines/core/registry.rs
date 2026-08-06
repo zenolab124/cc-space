@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
@@ -11,10 +12,10 @@ pub trait EngineAdapter: Send + Sync {
     fn health(&self) -> EngineFuture<'_, EngineHealth>;
     fn session_source(&self) -> &dyn SessionSource;
     fn runtime(&self) -> Option<&dyn AgentRuntime>;
-    fn assets(&self) -> Option<&dyn super::AssetProvider> {
+    fn configuration_path(&self) -> Option<PathBuf> {
         None
     }
-    fn configuration(&self) -> Option<&dyn super::ConfigurationProvider> {
+    fn assets(&self) -> Option<&dyn super::AssetProvider> {
         None
     }
     fn quota(&self) -> Option<&dyn super::QuotaProvider> {

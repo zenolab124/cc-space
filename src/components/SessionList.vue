@@ -75,7 +75,7 @@ function pickModel(model: string) {
 
 // ====== 虚拟滚动（两档高度） ======
 const ITEM_H = 60
-const ITEM_H_SUMMARY = 80
+const ITEM_H_SUMMARY = 96
 const OVERSCAN = 5
 
 function itemHeight(session: SessionSummary) {
@@ -373,7 +373,7 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               <span v-if="session.model" class="text-muted-foreground">{{ shortModel(session.model) }}</span>
             </div>
             <!-- 摘要（仅展示） -->
-            <div v-if="getMeta(session.id)?.summary" v-tooltip="getMeta(session.id)!.summary" class="text-[11px] text-muted-foreground/70 mt-1 line-clamp-1 leading-relaxed">
+            <div v-if="getMeta(session.id)?.summary" v-tooltip="getMeta(session.id)!.summary" class="text-[11px] text-muted-foreground/70 mt-1 line-clamp-2 leading-relaxed">
               {{ getMeta(session.id)!.summary }}
             </div>
           </div>

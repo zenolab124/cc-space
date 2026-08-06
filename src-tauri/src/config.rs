@@ -113,6 +113,11 @@ pub fn default_claude_root() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".claude")
 }
 
+/// Claude Code 用户级 JSON 配置文件路径。
+pub fn claude_settings_path() -> PathBuf {
+    claude_root().join("settings.json")
+}
+
 /// 会话 JSONL 所在的 projects 根目录
 pub fn projects_dir() -> PathBuf {
     claude_root().join("projects")

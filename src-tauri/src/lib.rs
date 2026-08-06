@@ -49,6 +49,7 @@ mod workshop;
 mod cli_env;
 mod cli_settings;
 mod codex_locator;
+mod codex_env;
 /// pub：类型+获取逻辑同时被 monet-tray 独立二进制复用
 pub mod quota;
 mod tray_agent;
@@ -166,8 +167,6 @@ pub fn run() {
             channels::register_apple_fm_if_available();
             // 系统级定时任务调度器同步（launchctl/pmset 耗时且可能弹授权框，不得阻塞主线程）
             tauri::async_runtime::spawn_blocking(routines::startup_sync);
-            // 后台刷新 CLI settings schema
-            cli_settings::refresh_settings_schema();
             // MCP 二进制启动自愈（存量 adhoc 安装收敛到稳定签名）
             cli_settings::startup_sync_mcp();
             // macOS 13+ 用 SMAppService 管理 Widget updater 与菜单栏 Helper；
@@ -285,6 +284,8 @@ pub fn run() {
             cli_env::claude_env_upgrade,
             cli_env::claude_env_install,
             cli_env::claude_env_diagnose,
+            codex_env::codex_env_check,
+            codex_env::codex_env_install,
             channels::list_channels,
             channels::get_cli_env_target,
             channels::save_channel,
@@ -316,8 +317,6 @@ pub fn run() {
             metadata::generate_permission_hint,
             metadata::set_agent_locale,
             metadata::parse_natural_schedule,
-            metadata::translate_settings_fields,
-            metadata::extract_settings_defaults,
             agent::test_agent_channel,
             agent::get_agent_logs,
             agent::clear_agent_logs,
@@ -333,10 +332,6 @@ pub fn run() {
             routines::get_wake_authorization_status,
             routines::enable_wake_active,
             routines::remove_wake_authorization,
-            cli_settings::get_settings_schema,
-            cli_settings::get_full_cli_settings,
-            cli_settings::update_cli_settings,
-            cli_settings::refresh_settings_schema,
             cli_settings::get_mcp_status,
             cli_settings::register_mcp,
             cli_settings::unregister_mcp,
@@ -382,6 +377,7 @@ pub fn run() {
             engines::commands::engine_list,
             engines::commands::engine_health,
             engines::commands::engine_set_enabled,
+            engines::commands::engine_open_configuration,
             engines::commands::engine_export_diagnostics,
             engines::commands::engine_list_projects,
             engines::commands::engine_list_sessions,
@@ -390,9 +386,6 @@ pub fn run() {
             engines::commands::engine_resolve_asset,
             engines::commands::engine_search,
             engines::commands::engine_list_assets,
-            engines::commands::engine_configuration_schema,
-            engines::commands::engine_configuration_read,
-            engines::commands::engine_configuration_update,
             engines::commands::engine_read_quota,
             engines::commands::engine_list_runtime_commands,
             engines::commands::engine_list_models,

@@ -121,6 +121,27 @@ fn candidate_paths() -> Vec<PathBuf> {
     candidates
 }
 
+/// Detect the Codex binary bundled inside the ChatGPT desktop app without
+/// treating it as a standalone CLI candidate. The bundle is managed by the
+/// desktop app and is not a stable runtime contract for Monet.
+pub fn desktop_bundle_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut candidates = vec![PathBuf::from(
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+        )];
+        if let Some(home) = dirs::home_dir() {
+            candidates.push(home.join("Applications/ChatGPT.app/Contents/Resources/codex"));
+        }
+        return candidates.into_iter().find(|path| is_valid_binary(path));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 pub fn locate() -> Result<PathBuf, String> {
     {
         let mut hit = MEM_HIT.lock().unwrap_or_else(|error| error.into_inner());
@@ -153,6 +174,13 @@ pub fn locate() -> Result<PathBuf, String> {
 
 pub fn is_available() -> bool {
     locate().is_ok()
+}
+
+/// 清除探测缓存后重新定位，供设置页安装完成后立即复测。
+pub fn redetect() -> Result<PathBuf, String> {
+    *MEM_HIT.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    *MEM_FAIL.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    locate()
 }
 
 #[cfg(test)]

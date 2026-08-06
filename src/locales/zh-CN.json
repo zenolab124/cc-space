@@ -884,6 +884,26 @@
       "installFail": "安装脚本执行失败，可用下方命令手动安装",
       "manualFallback": "手动安装："
     },
+    "codexEnv": {
+      "title": "本地环境",
+      "notFound": "未检测到",
+      "detected": "已检测到",
+      "versionUnknown": "版本未知",
+      "refresh": "刷新"
+    },
+    "codexInstall": {
+      "title": "安装 Codex CLI",
+      "hint": "安装完成后点击「刷新」重新检测。",
+      "official": "官方脚本",
+      "copy": "复制",
+      "copied": "已复制",
+      "docs": "官方安装文档",
+      "installNow": "一键安装",
+      "installing": "安装中…",
+      "installOk": "安装完成（{version}），已重新检测",
+      "installFail": "安装脚本执行失败，可用下方命令手动安装",
+      "manualFallback": "手动安装："
+    },
     "claudeRoot": {
       "title": "Claude 数据目录",
       "description": "Monet 读取 Claude Code 会话数据的根目录。若通过 CLAUDE_CONFIG_DIR 将数据存于非标准位置，可在此指定。",
@@ -1320,16 +1340,20 @@
     "description": "查看各 Agent 引擎的安装、认证、版本、能力与诊断状态。单个引擎不可用不会影响其他引擎。",
     "exportDiagnostics": "导出诊断",
     "exported": "诊断报告已导出",
-    "activation": "启用状态",
-    "disabled": "已关闭",
-    "turnOn": "启用并重启",
-    "turnOff": "关闭并重启",
-    "restarting": "正在保存引擎设置并重启…",
+    "activation": "Monet 使用状态",
+    "disabled": "已忽略",
+    "ignoreEngine": "忽略该引擎",
+    "restoreEngine": "恢复该引擎",
+    "restart": "重启 Monet",
+    "restartConfirm": "引擎状态已更新。现在重启 Monet 让它立即生效吗？",
+    "restartLater": "已更新引擎状态，重启 Monet 后生效。",
+    "restarting": "正在重启 Monet…",
     "installed": "安装状态",
     "installedStatus": "已安装",
     "notInstalled": "未安装",
     "installGuide": "安装指南",
-    "nativeSettings": "原生设置",
+    "editConfiguration": "修改配置",
+    "engineCapabilities": "引擎能力",
     "version": "版本",
     "authentication": "认证",
     "authenticated": "已认证",
@@ -1343,7 +1367,7 @@
       "available": "可用",
       "degraded": "部分可用",
       "unavailable": "不可用",
-      "disabled": "已停用"
+      "disabled": "已忽略"
     },
     "capability": {
       "search": "搜索",
@@ -1357,13 +1381,14 @@
     }
   },
   "engine": {
-    "disabled": "该引擎已关闭",
+    "disabled": "该引擎已被 Monet 忽略",
     "claude": {
       "cliUnavailable": "未找到 Claude Code CLI",
       "steerUnavailable": "Claude Code 当前不支持在运行中追加指令"
     },
     "codex": {
       "cliUnavailable": "未找到 Codex CLI",
+      "desktopBundleOnly": "检测到 ChatGPT 桌面版内置 Codex，但需要单独安装 Codex CLI 才能运行交互功能",
       "versionUnsupported": "Codex CLI 版本过旧",
       "handshakeFailed": "无法连接 Codex App Server",
       "authenticationRequired": "需要先在 Codex CLI 完成登录",

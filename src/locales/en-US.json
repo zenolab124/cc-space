@@ -884,6 +884,26 @@
       "installFail": "Install script failed. Use a command below to install manually.",
       "manualFallback": "Manual install:"
     },
+    "codexEnv": {
+      "title": "Local environment",
+      "notFound": "Not detected",
+      "detected": "Detected",
+      "versionUnknown": "Version unknown",
+      "refresh": "Refresh"
+    },
+    "codexInstall": {
+      "title": "Install Codex CLI",
+      "hint": "After installation, click Refresh to detect it again.",
+      "official": "Official script",
+      "copy": "Copy",
+      "copied": "Copied",
+      "docs": "Official install docs",
+      "installNow": "Install now",
+      "installing": "Installing…",
+      "installOk": "Installed ({version}), re-detected",
+      "installFail": "Install script failed. Use a command below to install manually.",
+      "manualFallback": "Manual install:"
+    },
     "claudeRoot": {
       "title": "Claude Data Directory",
       "description": "Root directory where Monet reads Claude Code session data. Set this if your data lives in a non-default location (e.g. via CLAUDE_CONFIG_DIR).",
@@ -1320,16 +1340,20 @@
     "description": "Review installation, authentication, version, capabilities, and diagnostics for every agent engine. One unavailable engine does not block the others.",
     "exportDiagnostics": "Export diagnostics",
     "exported": "Diagnostics report exported",
-    "activation": "Activation",
-    "disabled": "Disabled",
-    "turnOn": "Enable and restart",
-    "turnOff": "Disable and restart",
-    "restarting": "Saving engine settings and restarting…",
+    "activation": "Monet status",
+    "disabled": "Ignored",
+    "ignoreEngine": "Ignore this engine",
+    "restoreEngine": "Restore this engine",
+    "restart": "Restart Monet",
+    "restartConfirm": "The engine status was updated. Restart Monet now to apply it immediately?",
+    "restartLater": "The engine status was updated. Restart Monet for it to take effect.",
+    "restarting": "Restarting Monet…",
     "installed": "Installation",
     "installedStatus": "Installed",
     "notInstalled": "Not installed",
     "installGuide": "Install guide",
-    "nativeSettings": "Native settings",
+    "editConfiguration": "Edit configuration",
+    "engineCapabilities": "Engine capabilities",
     "version": "Version",
     "authentication": "Authentication",
     "authenticated": "Authenticated",
@@ -1343,7 +1367,7 @@
       "available": "Available",
       "degraded": "Degraded",
       "unavailable": "Unavailable",
-      "disabled": "Disabled"
+      "disabled": "Ignored"
     },
     "capability": {
       "search": "Search",
@@ -1357,13 +1381,14 @@
     }
   },
   "engine": {
-    "disabled": "This engine is disabled",
+    "disabled": "This engine is ignored by Monet",
     "claude": {
       "cliUnavailable": "Claude Code CLI was not found",
       "steerUnavailable": "Claude Code cannot steer an active turn"
     },
     "codex": {
       "cliUnavailable": "Codex CLI was not found",
+      "desktopBundleOnly": "ChatGPT desktop includes Codex, but a standalone Codex CLI is required for interactive runtime features",
       "versionUnsupported": "The Codex CLI version is too old",
       "handshakeFailed": "Could not connect to the Codex App Server",
       "authenticationRequired": "Sign in with the Codex CLI first",

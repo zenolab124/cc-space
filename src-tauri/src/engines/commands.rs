@@ -80,6 +80,23 @@ pub fn engine_set_enabled(instance: EngineInstanceId, enabled: bool) -> EngineRe
 }
 
 #[tauri::command]
+pub fn engine_open_configuration(instance: EngineInstanceId) -> EngineResult<()> {
+    let path = system::get()?
+        .registry()
+        .adapter(&instance)?
+        .configuration_path()
+        .ok_or_else(|| unsupported("configuration file"))?;
+
+    if !path.exists() {
+        crate::config::atomic_write(&path, "{}\n")
+            .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+    }
+
+    crate::commands::open_in_text_editor(path.to_string_lossy().into_owned())
+        .map_err(|error| EngineError::new(EngineErrorKind::Io, error))
+}
+
+#[tauri::command]
 pub async fn engine_export_diagnostics(path: PathBuf) -> EngineResult<()> {
     let system = system::get()?;
     let mut engines = Vec::new();
@@ -350,39 +367,6 @@ pub async fn engine_list_assets(
         .assets()
         .ok_or_else(|| unsupported("assets"))?
         .list_assets(query)
-        .await
-}
-
-#[tauri::command]
-pub async fn engine_configuration_schema(instance: EngineInstanceId) -> EngineResult<Value> {
-    let adapter = system::get()?.registry().adapter_arc(&instance)?;
-    adapter
-        .configuration()
-        .ok_or_else(|| unsupported("configuration"))?
-        .schema()
-        .await
-}
-
-#[tauri::command]
-pub async fn engine_configuration_read(instance: EngineInstanceId) -> EngineResult<Value> {
-    let adapter = system::get()?.registry().adapter_arc(&instance)?;
-    adapter
-        .configuration()
-        .ok_or_else(|| unsupported("configuration"))?
-        .read()
-        .await
-}
-
-#[tauri::command]
-pub async fn engine_configuration_update(
-    instance: EngineInstanceId,
-    patch: Value,
-) -> EngineResult<Value> {
-    let adapter = system::get()?.registry().adapter_arc(&instance)?;
-    adapter
-        .configuration()
-        .ok_or_else(|| unsupported("configuration"))?
-        .update(patch)
         .await
 }
 
