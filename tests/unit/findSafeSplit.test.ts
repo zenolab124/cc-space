@@ -123,6 +123,11 @@ describe('围栏与数学块', () => {
   it('同行 $$…$$ 闭合不进入数学块状态', () => {
     expect(fullScan('$$x^2$$\n\nafter\n')).toEqual([9])
   })
+
+  it('\\[…\\] 数学块未闭合期间不分割', () => {
+    const text = '\\[\nx = 1\n\ny = 2\n\\]\n\nafter\n'
+    expect(fullScan(text)).toEqual([text.indexOf('after')])
+  })
 })
 
 describe('守卫④:HTML 块', () => {

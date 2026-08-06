@@ -10,6 +10,17 @@
   overflow-wrap: break-word;
 }
 
+/* KaTeX 数学公式：颜色继承主题，显示公式在窄列中可横向滚动 */
+.prose-msg .katex {
+  color: inherit;
+}
+.prose-msg .katex-display {
+  margin: 0.75em 0;
+  padding: 0.1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* 段落间距 */
 .prose-msg p {
   margin: 0.4em 0;

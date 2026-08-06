@@ -12,7 +12,7 @@
  * ② 脚注 [^ —— 同上
  * ③ 候选点的段首行是列表标记或空白缩进 —— 跳过该点(松散列表切开会重置有序编号、断列表结构)
  * ④ 行首块级 HTML 标签未闭合(含 <!-- 注释)期间 —— 不分割(半个元素各渲染一半,结构不一致)
- * ⑤ 行首 $$ 数学块未闭合期间 —— 不分割(当前 markdown-it 无数学插件,纯防御,防未来引入后误拆)
+ * ⑤ 行首 $$ / \\[ 数学块未闭合期间 —— 不分割(防止 KaTeX 块公式被拆开)
  *
  * 守卫触发的代价只是「少分割」:段变长或整块走 tail,正确性优先于分段收益。
  */
@@ -21,7 +21,9 @@ const BLANK_RE = /^[ \t]*$/
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/
 const LIST_MARKER_RE = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/
 const REF_DEF_RE = /^ {0,3}\[[^\]]*\]:/
-const MATH_FENCE_RE = /^ {0,3}\$\$/
+const MATH_DOLLAR_RE = /^ {0,3}\$\$/
+const MATH_BRACKET_START_RE = /^ {0,3}\\\[/
+const MATH_BRACKET_END_RE = /^ {0,3}\\\]/
 const HTML_LINE_RE = /^ {0,3}<[a-zA-Z!/]/
 const TAG_RE = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?:[^>]*?)(\/?)>/g
 const VOID_TAGS = new Set([
@@ -45,6 +47,7 @@ export function createStreamSplitter(): StreamSplitter {
   let fenceMarker = ''           // '`' 或 '~'
   let fenceLen = 0
   let inMath = false
+  let mathCloser: '$$' | '\\]' | null = null
   let inComment = false
   let htmlDepth = 0
   let blocked = false
@@ -81,9 +84,13 @@ export function createStreamSplitter(): StreamSplitter {
       return
     }
 
-    // 数学块内:只找闭栏 $$
+    // 数学块内:只找对应的闭合分隔符
     if (inMath) {
-      if (MATH_FENCE_RE.test(line)) inMath = false
+      if ((mathCloser === '$$' && MATH_DOLLAR_RE.test(line))
+        || (mathCloser === '\\]' && MATH_BRACKET_END_RE.test(line))) {
+        inMath = false
+        mathCloser = null
+      }
       prevLineBlank = false
       return
     }
@@ -117,10 +124,18 @@ export function createStreamSplitter(): StreamSplitter {
       fenceLen = fence[1].length
       return
     }
-    if (MATH_FENCE_RE.test(line)) {
+    if (MATH_DOLLAR_RE.test(line)) {
       // 同行偶数个 $$(如 "$$x$$")视为已闭合
       const count = (line.match(/\$\$/g) ?? []).length
-      if (count % 2 === 1) inMath = true
+      if (count % 2 === 1) {
+        inMath = true
+        mathCloser = '$$'
+      }
+      return
+    }
+    if (MATH_BRACKET_START_RE.test(line) && !line.includes('\\]')) {
+      inMath = true
+      mathCloser = '\\]'
       return
     }
     if (htmlDepth > 0 || HTML_LINE_RE.test(line)) {

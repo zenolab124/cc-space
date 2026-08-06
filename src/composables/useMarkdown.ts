@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import { katex } from '@mdit/plugin-katex'
 import markdownItShiki from '@shikijs/markdown-it'
 import type { BundledLanguage } from 'shiki'
 // 相对路径 + .ts 扩展名而非 @ 别名:scripts/bench/render-bench.mjs 用 node 直接 import 本模块,
@@ -24,6 +25,11 @@ const LANGS: BundledLanguage[] = [
 ]
 
 const mdOpts = { html: true, linkify: true, breaks: false, typographer: false }
+const katexOpts = {
+  delimiters: 'all' as const,
+  throwOnError: false,
+  trust: false,
+}
 
 function sanitizeHtml(html: string): string {
   return html
@@ -35,8 +41,12 @@ function sanitizeHtml(html: string): string {
     })
 }
 
+function createMarkdownIt(): MarkdownIt {
+  return new MarkdownIt(mdOpts).use(katex, katexOpts)
+}
+
 // 轻量渲染器:无 shiki,常驻。流式期间用它,代码块素色但 parse 成本低一个数量级
-const plainMd = new MarkdownIt(mdOpts)
+const plainMd = createMarkdownIt()
 
 // 当前活跃的完整渲染器（非响应式，避免触发递归更新）;shiki 就绪前由轻量版兜底
 let activeMd: MarkdownIt = plainMd
@@ -62,7 +72,7 @@ function ensureShiki(): void {
     // 'text' 是 shiki 运行时放行的 special language,不在 BundledLanguage 类型里,需断言
     fallbackLanguage: 'text' as BundledLanguage,
   }).then(plugin => {
-    const md = new MarkdownIt(mdOpts)
+    const md = createMarkdownIt()
     md.use(plugin)
     activeMd = md
     shikiReady = true
