@@ -60,7 +60,8 @@ watch(
       }
     }
     const models = u.month.byModel.map(m => m.model)
-    invoke('update_widget', { todaySessions: sessions, todayTokens: todayTokens, models }).catch(() => {})
+    invoke('update_widget', { todaySessions: sessions, todayTokens: todayTokens, models })
+      .catch(error => console.warn('[Monet] widget data sync failed', error))
   },
 )
 

@@ -63,6 +63,12 @@ pub fn ensure_launch_agent() {
     if !crate::scheduler::owns_machine_schedule() {
         return;
     }
+    // macOS 13+ 的后台项目由 SMAppService 接管，plist 必须来自 app bundle；
+    // 不再把开发机路径写入用户的 ~/Library/LaunchAgents。
+    if crate::service_management::available() {
+        crate::background_services::ensure_widget_updater();
+        return;
+    }
     let Some(home) = dirs::home_dir() else { return };
 
     // 旧标签清理:更名前(com.ccspace.widget-updater)安装的 LaunchAgent 会在用户机
@@ -156,12 +162,30 @@ pub fn update_widget(
 
     let json = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
 
-    if let Some(path) = widget_container_path() {
-        let _ = std::fs::write(&path, &json);
-    }
+    let container_result: Result<(), String> = (|| {
+        let path = widget_container_path().ok_or("widget container path unavailable")?;
+        let parent = path.parent().ok_or("widget container parent unavailable")?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create widget container directory: {e}"))?;
+        std::fs::write(&path, &json)
+            .map_err(|e| format!("write widget container data: {e}"))
+    })();
 
-    if let Some(parent) = backup_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let backup_result: Result<(), String> = (|| {
+        if let Some(parent) = backup_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&backup_path, &json).map_err(|e| e.to_string())
+    })();
+
+    match (container_result, backup_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(container), Ok(())) => Err(format!(
+            "widget container write failed; backup updated: {container}"
+        )),
+        (Ok(()), Err(backup)) => Err(format!("widget backup write failed: {backup}")),
+        (Err(container), Err(backup)) => Err(format!(
+            "widget container write failed: {container}; backup write failed: {backup}"
+        )),
     }
-    std::fs::write(&backup_path, &json).map_err(|e| e.to_string())
 }

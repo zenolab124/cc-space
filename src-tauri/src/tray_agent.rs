@@ -93,6 +93,12 @@ pub fn ensure_launch_agent() {
     if !crate::scheduler::owns_machine_schedule() {
         return;
     }
+    // macOS 13+ 的 LoginItem 由 SMAppService 管理；旧 LaunchAgent 仅作为
+    // macOS 11–12 的兼容路径保留。
+    if crate::service_management::available() {
+        crate::background_services::ensure_tray();
+        return;
+    }
     // 用户主动退过 tray → 尊重意图，不装不拉起
     if disabled_marker_path().exists() {
         return;
@@ -123,6 +129,15 @@ pub fn get_tray_enabled() -> bool {
 pub fn set_tray_enabled(enabled: bool) -> Result<(), String> {
     if enabled {
         let _ = std::fs::remove_file(disabled_marker_path());
+        if crate::service_management::available() {
+            return match crate::background_services::register_tray()? {
+                crate::service_management::ServiceStatus::Enabled => Ok(()),
+                crate::service_management::ServiceStatus::RequiresApproval => {
+                    Err("menu bar helper requires approval in System Settings".into())
+                }
+                status => Err(format!("menu bar helper status: {}", status.as_str())),
+            };
+        }
         install_and_start();
 
         // 校验确实起来了，给前端可感知的失败
@@ -140,6 +155,12 @@ pub fn set_tray_enabled(enabled: bool) -> Result<(), String> {
     } else {
         std::fs::write(disabled_marker_path(), "")
             .map_err(|e| format!("write disabled marker: {e}"))?;
+        if crate::service_management::available() {
+            crate::service_management::remove_legacy_launch_agent(
+                crate::background_services::TRAY_SERVICE_ID,
+            );
+            return crate::background_services::unregister_tray();
+        }
         let (_, service) = launchctl_targets();
         let _ = Command::new("launchctl")
             .args(["bootout", &service])

@@ -38,6 +38,8 @@ pub mod routine_types;
 /// pub：搜索引擎同时被 monet-mcp 以 #[path] 方式复用（search_sessions 工具）
 pub mod search;
 mod scheduler;
+mod service_management;
+mod background_services;
 /// pub：唤醒计划逻辑同时被 monet-routine-runner 以 #[path] 方式复用
 pub mod wake;
 #[cfg(target_os = "macos")]
@@ -168,10 +170,9 @@ pub fn run() {
             cli_settings::refresh_settings_schema();
             // MCP 二进制启动自愈（存量 adhoc 安装收敛到稳定签名）
             cli_settings::startup_sync_mcp();
-            // Widget LaunchAgent 自动安装
+            // macOS 13+ 用 SMAppService 管理 Widget updater 与菜单栏 Helper；
+            // macOS 11–12 由各模块保留旧 LaunchAgent 兼容路径。
             widget::ensure_launch_agent();
-            // Tray LaunchAgent 自动安装（独立 menubar 进程）。
-            // launchctl bootout/bootstrap 有 IO 开销，不阻塞主线程
             tauri::async_runtime::spawn_blocking(tray_agent::ensure_launch_agent);
             // 搜索缓存预热：延迟避开启动高峰，后台建/对账文本缓存
             std::thread::spawn(|| {
@@ -351,6 +352,8 @@ pub fn run() {
             widget::update_widget,
             widget::get_widget_config,
             widget::set_widget_config,
+            background_services::get_background_service_status,
+            background_services::open_background_item_settings,
             updater::get_update_channel,
             updater::set_update_channel,
             updater::updater_check,

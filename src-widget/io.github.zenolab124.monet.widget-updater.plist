@@ -6,8 +6,10 @@
 	<string>io.github.zenolab124.monet.widget-updater</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Applications/Monet.app/Contents/MacOS/widget-updater</string>
+		<string>widget-updater</string>
 	</array>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/widget-updater</string>
 	<key>StartInterval</key>
 	<integer>1800</integer>
 	<key>RunAtLoad</key>

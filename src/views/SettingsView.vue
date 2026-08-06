@@ -344,6 +344,39 @@ async function setTraySlots(slots: TrayTitleSlot[]) {
 
 const trayEnabled = ref(true)
 const trayToggleFailed = ref(false)
+interface BackgroundServiceStatus {
+  tray: string
+  widgetUpdater: string
+}
+const backgroundServiceStatus = ref<BackgroundServiceStatus>({
+  tray: 'unknown',
+  widgetUpdater: 'unknown',
+})
+
+const trayStatusHint = computed(() => {
+  switch (backgroundServiceStatus.value.tray) {
+    case 'enabled': return t('settings.trayStatusEnabled')
+    case 'requiresApproval': return t('settings.trayStatusNeedsApproval')
+    case 'notFound': return t('settings.trayStatusNotFound')
+    case 'unavailable': return t('settings.trayStatusUnavailable')
+    default: return ''
+  }
+})
+
+const widgetUpdaterStatusHint = computed(() => {
+  switch (backgroundServiceStatus.value.widgetUpdater) {
+    case 'enabled': return t('settings.widgetUpdaterStatusEnabled')
+    case 'requiresApproval': return t('settings.widgetUpdaterStatusNeedsApproval')
+    case 'notFound': return t('settings.widgetUpdaterStatusNotFound')
+    case 'unavailable': return t('settings.widgetUpdaterStatusUnavailable')
+    default: return ''
+  }
+})
+
+async function openBackgroundItemSettings() {
+  await invoke('open_background_item_settings').catch(() => {})
+}
+
 async function toggleTrayEnabled() {
   const next = !trayEnabled.value
   trayEnabled.value = next
@@ -361,6 +394,9 @@ async function toggleTrayEnabled() {
 async function loadTrayTitleConfig() {
   try {
     trayEnabled.value = await invoke<boolean>('get_tray_enabled')
+  } catch {}
+  try {
+    backgroundServiceStatus.value = await invoke<BackgroundServiceStatus>('get_background_service_status')
   } catch {}
   try {
     const cfg = await invoke<TrayTitleConfig>('get_tray_title_config_v2')
@@ -1236,7 +1272,7 @@ function onSaved() {
           </div>
 
           <div class="settings-grid">
-            <!-- 菜单栏（macOS 专属：launchd Helper 架构） -->
+            <!-- 菜单栏（macOS 专属：系统后台项目 + Helper App） -->
             <div v-if="isMac" class="setting-group setting-group-tray">
               <div class="setting-group-header">
                 <span class="i-carbon-menu w-3.5 h-3.5" />
@@ -1245,8 +1281,14 @@ function onSaved() {
               <div class="setting-row">
                 <div class="setting-row-main">
                   <div class="setting-label">{{ $t('settings.trayAutostart') }}</div>
-                  <div class="setting-hint" :class="{ 'text-red-500': trayToggleFailed }">
+                  <div class="setting-hint" :class="{ 'text-red-500': trayToggleFailed || backgroundServiceStatus.tray === 'notFound' }">
                     {{ trayToggleFailed ? $t('settings.trayLaunchFail') : $t('settings.trayAutostartHint') }}
+                    <span v-if="trayStatusHint"> · {{ trayStatusHint }}</span>
+                    <button
+                      v-if="backgroundServiceStatus.tray === 'requiresApproval'"
+                      class="ml-1 underline underline-offset-2"
+                      @click="openBackgroundItemSettings"
+                    >{{ $t('settings.openBackgroundItemSettings') }}</button>
                   </div>
                 </div>
                 <button :class="['form-toggle', { on: trayEnabled }]" @click="toggleTrayEnabled">
@@ -1271,6 +1313,20 @@ function onSaved() {
               <div class="setting-group-header">
                 <span class="i-carbon-apps w-3.5 h-3.5" />
                 {{ $t('settings.groupWidget') }}
+              </div>
+              <div v-if="widgetUpdaterStatusHint" class="setting-row">
+                <div class="setting-row-main">
+                  <div class="setting-label">{{ $t('settings.widgetUpdater') }}</div>
+                  <div
+                    class="setting-hint"
+                    :class="{ 'text-red-500': backgroundServiceStatus.widgetUpdater !== 'enabled' }"
+                  >{{ widgetUpdaterStatusHint }}</div>
+                </div>
+                <button
+                  v-if="backgroundServiceStatus.widgetUpdater === 'requiresApproval'"
+                  class="px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+                  @click="openBackgroundItemSettings"
+                >{{ $t('settings.openBackgroundItemSettings') }}</button>
               </div>
               <div class="setting-row">
                 <div class="setting-row-main">

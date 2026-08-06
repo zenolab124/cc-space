@@ -52,6 +52,9 @@ mkdir -p "$PLUGINS_DIR"
 rm -rf "$PLUGINS_DIR/MonetWidgetExtension.appex"
 cp -R "build/$CONFIG/MonetWidgetExtension.appex" "$PLUGINS_DIR/"
 cp ../src-tauri/target/release/widget-updater "$APP_BUNDLE/Contents/MacOS/widget-updater"
+LAUNCH_AGENTS_DIR="$APP_BUNDLE/Contents/Library/LaunchAgents"
+mkdir -p "$LAUNCH_AGENTS_DIR"
+cp io.github.zenolab124.monet.widget-updater.plist "$LAUNCH_AGENTS_DIR/"
 
 # --- 签名 ---
 echo "=> Signing..."

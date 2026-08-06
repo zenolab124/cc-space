@@ -27,6 +27,14 @@ fn main() {
     println!("cargo:rerun-if-changed=src/native/local_network.m");
     println!("cargo:rustc-link-lib=framework=Network");
 
+    // macOS 13+ 后台项目注册：SMAppService 取代手写 LaunchAgent / LoginItem。
+    cc::Build::new()
+      .file("src/native/service_management.m")
+      .flag("-fobjc-arc")
+      .compile("monet_service_management");
+    println!("cargo:rerun-if-changed=src/native/service_management.m");
+    println!("cargo:rustc-link-lib=framework=ServiceManagement");
+
     // rustc-link-lib 只随 lib target 传播；runner bin 不依赖 app lib
     //（避免链入 tauri），需要按 bin 显式补链接参数
     let out_dir = std::env::var("OUT_DIR").unwrap();

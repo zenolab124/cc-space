@@ -74,6 +74,15 @@ struct WidgetConfig {
     month_mode: String,
 }
 
+fn write_snapshot(path: &std::path::Path, json: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("snapshot path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    fs::write(path, json).map_err(|error| format!("write {}: {error}", path.display()))
+}
+
 fn read_config() -> WidgetConfig {
     fs::read_to_string(config::data_dir().join("widget-config.json"))
         .ok()
@@ -447,14 +456,16 @@ fn main() {
     let json = serde_json::to_string_pretty(&snap).unwrap_or_default();
 
     let wp = widget_path();
-    if let Some(parent) = wp.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = fs::write(&wp, &json);
-
     let bp = config::data_dir().join("widget-data.json");
-    if let Some(parent) = bp.parent() {
-        let _ = fs::create_dir_all(parent);
+    let mut failures = Vec::new();
+    if let Err(error) = write_snapshot(&wp, &json) {
+        failures.push(error);
     }
-    let _ = fs::write(&bp, &json);
+    if let Err(error) = write_snapshot(&bp, &json) {
+        failures.push(error);
+    }
+    if !failures.is_empty() {
+        eprintln!("widget snapshot update failed:\n{}", failures.join("\n"));
+        std::process::exit(1);
+    }
 }
