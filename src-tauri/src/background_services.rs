@@ -21,11 +21,14 @@ fn ensure_registered(kind: ServiceKind, value: &str, label: &str) -> Result<Serv
     let current = status(kind, value);
     match current {
         ServiceStatus::Enabled | ServiceStatus::RequiresApproval => Ok(current),
-        ServiceStatus::NotRegistered => {
-            service_management::register(kind, value)?;
+        // NotFound 也必须尝试注册：SMAppService 对从未注册过的服务（BTM 无记录）
+        // 返回的就是 notFound，它不代表 bundle 里缺文件。真缺文件时 register
+        // 会带具体 NSError 失败，那才是可信的错误
+        ServiceStatus::NotRegistered | ServiceStatus::NotFound => {
+            service_management::register(kind, value)
+                .map_err(|error| format!("{label} registration was rejected: {error}"))?;
             Ok(status(kind, value))
         }
-        ServiceStatus::NotFound => Err(format!("{label} is not present in the app bundle")),
         ServiceStatus::Unavailable => {
             Err("ServiceManagement is unavailable on this macOS version".into())
         }
