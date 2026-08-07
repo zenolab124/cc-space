@@ -133,7 +133,7 @@ pub fn desktop_bundle_path() -> Option<PathBuf> {
         if let Some(home) = dirs::home_dir() {
             candidates.push(home.join("Applications/ChatGPT.app/Contents/Resources/codex"));
         }
-        return candidates.into_iter().find(|path| is_valid_binary(path));
+        candidates.into_iter().find(|path| is_valid_binary(path))
     }
 
     #[cfg(not(target_os = "macos"))]

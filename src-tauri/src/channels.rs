@@ -1582,7 +1582,7 @@ pub(crate) fn codex_runtime_channel_options(id: &str) -> Result<Map<String, Valu
         }
         "none" => {}
         "bearer" | "" => {
-            if channel.auth_token.as_deref().is_none_or(str::is_empty) {
+            if channel.auth_token.as_deref().map_or(true, str::is_empty) {
                 return Err(format!("渠道 {id} 缺少 Codex Bearer Token"));
             }
             let executable = std::env::current_exe()

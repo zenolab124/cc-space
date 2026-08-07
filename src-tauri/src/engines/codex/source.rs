@@ -186,7 +186,7 @@ impl CodexSource {
             );
         }
         let mut threads: Vec<_> = merged.into_values().collect();
-        threads.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        threads.sort_by_key(|thread| std::cmp::Reverse(thread.updated_at));
         *self
             .thread_cache
             .lock()

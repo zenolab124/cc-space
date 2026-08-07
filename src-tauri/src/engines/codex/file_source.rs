@@ -20,7 +20,7 @@ pub(super) fn list_threads() -> EngineResult<Vec<CodexThread>> {
             threads.push(thread);
         }
     }
-    threads.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    threads.sort_by_key(|thread| std::cmp::Reverse(thread.updated_at));
     Ok(threads)
 }
 

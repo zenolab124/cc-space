@@ -127,7 +127,7 @@ fn codex_env_install_sync(app: AppHandle) -> Result<CodexInstallResult, String> 
     let binary_path = codex_locator::redetect().ok();
     let new_version = binary_path
         .as_deref()
-        .and_then(|path| run_version(path));
+        .and_then(run_version);
     let success = output.status.success() && new_version.is_some();
     emit_install_progress(&app, if success { "completed" } else { "failed" });
 
