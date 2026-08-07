@@ -65,8 +65,17 @@ codesign "${CODESIGN_ARGS[@]}" \
 for BIN in "$APP_BUNDLE/Contents/MacOS/"*; do
     NAME=$(basename "$BIN")
     [ "$NAME" = "app" ] && continue
-    codesign "${CODESIGN_ARGS[@]}" \
-        --identifier "io.github.zenolab124.monet.$NAME" "$BIN"
+    # routine-runner 发 Apple Events（定时任务里的自动化操作），hardened
+    # runtime 下必须随签名授予 apple-events entitlement，否则 tccd 直接
+    # 拒绝授权弹窗，用户无法完成授权
+    if [ "$NAME" = "monet-routine-runner" ]; then
+        codesign "${CODESIGN_ARGS[@]}" \
+            --entitlements ../src-tauri/runner-entitlements.plist \
+            --identifier "io.github.zenolab124.monet.$NAME" "$BIN"
+    else
+        codesign "${CODESIGN_ARGS[@]}" \
+            --identifier "io.github.zenolab124.monet.$NAME" "$BIN"
+    fi
 done
 # Helper App（独立 menubar 进程）：嵌套 bundle 必须先签内层再签外层
 TRAY_APP="$APP_BUNDLE/Contents/Library/LoginItems/MonetTray.app"

@@ -277,7 +277,13 @@ fn run_health_check(prompt: Option<&str>) {
         // 请求式调用：弹系统授权窗并阻塞至用户响应，随后照常快照
         match prompt {
             Some("automationSystemEvents") => {
-                let _ = tcc::check_automation("com.apple.systemevents", true);
+                // 不用 AEDeterminePermissionToAutomateTarget(ask=true)：该预检
+                // API 在 launchd 直启语境下不产生授权弹窗（policy 放行也一样，
+                // 本机实测钉死）。改发真实无害 AE（只读计数），走完整授权路径：
+                // 未决时真弹窗，osascript 为子进程、TCC 归因仍是 runner 自身
+                let _ = Command::new("/usr/bin/osascript")
+                    .args(["-e", "tell application \"System Events\" to count processes"])
+                    .output();
             }
             Some("accessibility") => {
                 let _ = tcc::prompt_accessibility();

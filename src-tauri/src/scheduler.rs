@@ -183,8 +183,14 @@ pub fn prepare_runner_binary() -> Result<PreparedRunnerInstall, String> {
             return Err(format!("failed to set runner permissions: {}", error));
         }
     }
+    // identifier 必须与构建期签名（build.sh 按二进制文件名生成）一致，
+    // 否则重签兜底触发时 DR 漂移，用户已授予的 TCC 权限静默失效
     #[cfg(target_os = "macos")]
-    crate::signing::sign(&tmp, "io.github.zenolab124.monet.routine-runner");
+    crate::signing::sign_with_entitlements(
+        &tmp,
+        "io.github.zenolab124.monet.monet-routine-runner",
+        Some(include_str!("../runner-entitlements.plist")),
+    );
 
     if !is_codesigned(&tmp)
         || runner_environment_protocol(&tmp).as_deref() != Some(source_protocol.as_str())

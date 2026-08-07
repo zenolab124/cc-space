@@ -51,6 +51,17 @@ fn main() {
     ] {
       println!("cargo:rustc-link-arg-bin=monet-routine-runner={}", arg);
     }
+
+    // 裸二进制嵌入 Info.plist（__TEXT,__info_plist 段）：TCC 要求发送
+    // Apple Events 的进程带 NSAppleEventsUsageDescription，缺失时授权
+    // 请求被系统静默丢弃（弹窗不出现、无法授权），launchd 直启的 runner
+    // 没有外层 bundle 可提供 plist，只能链接期嵌入
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    println!(
+      "cargo:rustc-link-arg-bin=monet-routine-runner=-Wl,-sectcreate,__TEXT,__info_plist,{}/runner-info.plist",
+      manifest_dir
+    );
+    println!("cargo:rerun-if-changed=runner-info.plist");
   }
   tauri_build::build()
 }

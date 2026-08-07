@@ -65,23 +65,45 @@ fn unlock_keychain() -> bool {
 
 /// 给二进制签名。预签保留 > 证书重签 > adhoc 兜底
 pub fn sign(path: &Path, identifier: &str) {
+    sign_with_entitlements(path, identifier, None);
+}
+
+/// 带 entitlements 的签名变体：hardened runtime 下 TCC 敏感能力
+/// （如 Apple Events）必须随签名授予，重签丢失 entitlements 会让
+/// 已授权用户静默失去弹窗资格
+pub fn sign_with_entitlements(path: &Path, identifier: &str, entitlements_xml: Option<&str>) {
     if has_stable_signature(path) {
         return;
     }
     if identity_available() {
         if unlock_keychain() {
-            let out = Command::new("codesign")
-                .args([
-                    "--force",
-                    "--options",
-                    "runtime",
-                    "--sign",
-                    IDENTITY,
-                    "--identifier",
-                    identifier,
-                ])
-                .arg(path)
-                .output();
+            let entitlements_file = entitlements_xml.and_then(|xml| {
+                let file = std::env::temp_dir().join(format!(
+                    "monet-entitlements-{}.plist",
+                    std::process::id()
+                ));
+                std::fs::write(&file, xml).ok().map(|_| file)
+            });
+            let mut args: Vec<std::ffi::OsString> = [
+                "--force",
+                "--options",
+                "runtime",
+                "--sign",
+                IDENTITY,
+                "--identifier",
+                identifier,
+            ]
+            .iter()
+            .map(Into::into)
+            .collect();
+            if let Some(file) = &entitlements_file {
+                args.push("--entitlements".into());
+                args.push(file.into());
+            }
+            let out = Command::new("codesign").args(&args).arg(path).output();
+            if let Some(file) = &entitlements_file {
+                let _ = std::fs::remove_file(file);
+            }
             match out {
                 Ok(o) if o.status.success() => return,
                 Ok(o) => log::warn!(
