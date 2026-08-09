@@ -415,7 +415,7 @@
     "routinesTitle": "Geplante Aufgaben (Routines)",
     "newRoutine": "Neu erstellen",
     "noRoutines": "Keine geplanten Aufgaben",
-    "routinesHint": "Nach dem Erstellen werden Claude-Anweisungen während der Monet-Laufzeit planmäßig automatisch ausgeführt",
+    "routinesHint": "Nach dem Erstellen wird die Anweisung planmäßig mit der ausgewählten Engine ausgeführt",
     "routineColumns": {
       "name": "Name",
       "schedule": "Zeitplan",
@@ -437,7 +437,7 @@
       "aiParse": "KI-Erkennung",
       "cronLabel": "Cron-Ausdruck (Min Std Tag Mon Woche)",
       "cronPlaceholder": "z.B.: 0 9 * * *",
-      "promptLabel": "Anweisung (Prompt an Claude)",
+      "promptLabel": "Anweisung (an die ausgewählte Engine gesendet)",
       "promptPlaceholder": "z.B.: Prüfe den Status aller offenen PRs in meinen GitHub-Repos und erstelle eine Zusammenfassung",
       "enableOnCreate": "Nach Erstellung sofort aktivieren",
       "nameRequired": "Name darf nicht leer sein",

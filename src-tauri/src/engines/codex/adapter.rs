@@ -50,7 +50,7 @@ impl CodexEngine {
                 }),
                 facets: FacetCapabilities {
                     assets: false,
-                    automation: false,
+                    automation: true,
                     configuration: false,
                     quota: true,
                     runtime_commands: false,

@@ -10,9 +10,17 @@ const LOCK_FILE: &str = "routine-environment.lock";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RoutineEnvironment {
+struct StoredRoutineEnvironment {
     mode: String,
     claude_config_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_home: Option<String>,
+}
+
+#[allow(dead_code)]
+pub struct RoutineEnvironment {
+    pub claude_config_dir: Option<String>,
+    pub codex_home: Option<String>,
 }
 
 fn snapshot_path(data_dir: &Path) -> PathBuf {
@@ -83,9 +91,10 @@ fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 #[allow(dead_code)]
-pub fn prepare_claude_config_dir<F, G>(
+pub fn prepare_environment<F, G>(
     data_dir: &Path,
     claude_config_dir: Option<&str>,
+    codex_home: Option<&str>,
     force_invalidate: bool,
     prepare: F,
     abort: G,
@@ -104,13 +113,15 @@ where
     lock.lock_exclusive()?;
 
     let environment = match claude_config_dir {
-        Some(value) => RoutineEnvironment {
+        Some(value) => StoredRoutineEnvironment {
             mode: "custom".to_string(),
             claude_config_dir: Some(value.to_string()),
+            codex_home: codex_home.map(str::to_string),
         },
-        None => RoutineEnvironment {
+        None => StoredRoutineEnvironment {
             mode: "default".to_string(),
             claude_config_dir: None,
+            codex_home: codex_home.map(str::to_string),
         },
     };
     let content = serde_json::to_string_pretty(&environment)
@@ -145,7 +156,7 @@ where
 }
 
 #[allow(dead_code)]
-pub fn read_claude_config_dir(data_dir: &Path) -> std::io::Result<Option<String>> {
+pub fn read_environment(data_dir: &Path) -> std::io::Result<RoutineEnvironment> {
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -155,16 +166,82 @@ pub fn read_claude_config_dir(data_dir: &Path) -> std::io::Result<Option<String>
     FileExt::lock_shared(&lock)?;
 
     let content = fs::read_to_string(snapshot_path(data_dir))?;
-    let environment: RoutineEnvironment =
+    let environment: StoredRoutineEnvironment =
         serde_json::from_str(&content).map_err(|error| invalid_data(error.to_string()))?;
-    match environment.mode.as_str() {
-        "default" if environment.claude_config_dir.is_none() => Ok(None),
-        "custom" => environment
-            .claude_config_dir
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .map(Some)
-            .ok_or_else(|| invalid_data("custom routine environment has no Claude config dir")),
-        _ => Err(invalid_data("invalid routine environment mode")),
+    let claude_config_dir = match environment.mode.as_str() {
+        "default" if environment.claude_config_dir.is_none() => None,
+        "custom" => Some(
+            environment
+                .claude_config_dir
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    invalid_data("custom routine environment has no Claude config dir")
+                })?,
+        ),
+        _ => return Err(invalid_data("invalid routine environment mode")),
+    };
+    let codex_home = environment
+        .codex_home
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    Ok(RoutineEnvironment {
+        claude_config_dir,
+        codex_home,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "monet-routine-env-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn reads_legacy_snapshot_without_codex_home() {
+        let directory = test_dir("legacy");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            snapshot_path(&directory),
+            r#"{"mode":"default","claudeConfigDir":null}"#,
+        )
+        .unwrap();
+
+        let environment = read_environment(&directory).unwrap();
+        assert!(environment.claude_config_dir.is_none());
+        assert!(environment.codex_home.is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn round_trips_both_engine_roots() {
+        let directory = test_dir("engines");
+        prepare_environment(
+            &directory,
+            Some("/config/claude"),
+            Some("/config/codex"),
+            false,
+            || Ok(()),
+            || Ok(()),
+        )
+        .unwrap();
+
+        let environment = read_environment(&directory).unwrap();
+        assert_eq!(
+            environment.claude_config_dir.as_deref(),
+            Some("/config/claude")
+        );
+        assert_eq!(environment.codex_home.as_deref(), Some("/config/codex"));
+        fs::remove_dir_all(directory).unwrap();
     }
 }

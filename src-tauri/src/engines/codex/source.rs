@@ -185,7 +185,10 @@ impl CodexSource {
                 app_server_result.expect_err("Codex App Server result was unexpectedly missing")
             );
         }
-        let mut threads: Vec<_> = merged.into_values().collect();
+        let mut threads: Vec<_> = merged
+            .into_values()
+            .filter(|thread| !super::file_source::is_agent_cwd(&thread.cwd))
+            .collect();
         threads.sort_by_key(|thread| std::cmp::Reverse(thread.updated_at));
         *self
             .thread_cache

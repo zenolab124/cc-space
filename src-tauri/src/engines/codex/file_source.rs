@@ -24,6 +24,24 @@ pub(super) fn list_threads() -> EngineResult<Vec<CodexThread>> {
     Ok(threads)
 }
 
+/// 内置 Agent/Routine 的专属 cwd 不进入普通档案、搜索或用量统计。
+pub(super) fn is_agent_cwd(cwd: &str) -> bool {
+    if cwd.trim().is_empty() {
+        return false;
+    }
+    let candidate = PathBuf::from(cwd);
+    let agent = crate::config::agent_cwd();
+    let candidate = candidate.canonicalize().unwrap_or(candidate);
+    let agent = agent.canonicalize().unwrap_or(agent);
+    if cfg!(windows) {
+        candidate
+            .to_string_lossy()
+            .eq_ignore_ascii_case(agent.to_string_lossy().as_ref())
+    } else {
+        candidate == agent
+    }
+}
+
 pub(super) fn read_thread(id: &str) -> EngineResult<CodexThread> {
     for path in session_paths() {
         let Some(summary) = read_thread_summary(&path) else {

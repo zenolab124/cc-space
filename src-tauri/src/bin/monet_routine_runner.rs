@@ -18,6 +18,11 @@ use serde::Serialize;
 #[allow(dead_code)]
 mod claude_locator;
 
+// Codex CLI 走与主 App 相同的绝对路径探测，禁止依赖 launchd 的贫瘠 PATH。
+#[path = "../codex_locator.rs"]
+#[allow(dead_code)]
+mod codex_locator;
+
 // TCC 权限检测（--health-check 模式），与主 App 共享同一份源文件
 #[path = "../tcc.rs"]
 #[allow(dead_code)]
@@ -28,7 +33,14 @@ mod tcc;
 #[path = "../routine_types.rs"]
 #[allow(dead_code)]
 mod routine_types;
-use routine_types::RoutineDefinition;
+use routine_types::{RoutineDefinition, RoutineEngine};
+
+// 两个执行入口共用参数、环境和进程组策略，避免手动运行与 cron 行为漂移。
+#[path = "../routine_command.rs"]
+mod routine_command;
+
+#[path = "../routine_output.rs"]
+mod routine_output;
 
 // 唤醒计划单一事实源：active 模式下 runner 每次执行完续设下一批唤醒点，
 // 形成「唤醒 → 跑任务 → 续设 → 回睡」闭环（主 App 不在场时链条不断）
@@ -63,6 +75,8 @@ mod routine_env;
 #[serde(rename_all = "camelCase")]
 struct ExecutionLog {
     routine_id: String,
+    #[serde(default)]
+    engine: RoutineEngine,
     started_at: String,
     finished_at: Option<String>,
     exit_code: Option<i32>,
@@ -142,75 +156,59 @@ fn main() {
     let persist = agent_session_persist();
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    let output = match claude_locator::locate_lightweight() {
-        Ok(located) => match routine_env::read_claude_config_dir(&data_dir()) {
-            Ok(claude_config_dir) => {
-                let mut cmd = Command::new(&located.path);
-                // claude 本体走绝对路径定位，PATH 是给它的子进程（npx MCP servers 等）用的
-                cmd.env("PATH", path_env::enhanced_path());
-                // MONET_CLAUDE_ROOT 仅供主 App 解析，不应泄漏给独立执行链；
-                // runner 只按快照决定是否向 Claude CLI 注入 CLAUDE_CONFIG_DIR
-                cmd.env_remove("MONET_CLAUDE_ROOT");
-                match claude_config_dir {
-                    Some(dir) => {
-                        cmd.env("CLAUDE_CONFIG_DIR", dir);
-                    }
-                    None => {
-                        cmd.env_remove("CLAUDE_CONFIG_DIR");
-                    }
-                }
-                // 无控制台的父进程 spawn 控制台子进程会新开窗口，必须抑制
-                // （runner 不链 app_lib，不走 proc_ext 收口，内联同款 cfg 块）
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                }
-                // claude 自立进程组（组 ID = claude PID）：主 App 终止时组信号
-                // 整树回收（含其 MCP 子进程），runner 不在组内、存活收尾写日志
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::CommandExt;
-                    cmd.process_group(0);
-                }
-                cmd.arg("-p")
-                    .arg(&routine.prompt)
-                    .arg("--output-format")
-                    .arg("text")
-                    .arg("--session-id")
-                    .arg(&session_id);
-                if !persist {
-                    cmd.arg("--no-session-persistence");
-                }
-                cmd.current_dir(agent_cwd())
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped());
-                match cmd.spawn() {
-                    Ok(child) => {
-                        // spawn 成功即写运行标记：主 App 终止能力与状态展示的事实源
-                        routine_run::write_marker(
-                            &data_dir(),
-                            &routine_id,
-                            &routine_run::RunningMarker {
-                                pid: child.id(),
-                                started_at: started_at.clone(),
-                                source: "cron".to_string(),
-                                cancelled: false,
-                            },
-                        );
-                        child.wait_with_output()
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            Err(error) => Err(std::io::Error::new(
+    let output = routine_env::read_environment(&data_dir())
+        .map_err(|error| {
+            std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("routine environment unavailable: {}", error),
-            )),
-        },
-        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::NotFound, e)),
-    };
+            )
+        })
+        .and_then(|environment| {
+            let executable = if routine.engine.is_claude_code() {
+                claude_locator::locate_lightweight().map(|located| located.path)
+            } else if routine.engine.is_codex() {
+                codex_locator::locate()
+            } else {
+                Err(format!(
+                    "unsupported routine engine: {}/{}",
+                    routine.engine.engine_id, routine.engine.instance_id
+                ))
+            }
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
+            let cwd = agent_cwd();
+            let path = path_env::enhanced_path();
+            let mut cmd = routine_command::build_routine_command(
+                routine_command::RoutineCommandSpec {
+                    engine: &routine.engine,
+                    executable: &executable,
+                    prompt: &routine.prompt,
+                    session_id: &session_id,
+                    persist_session: persist,
+                    cwd: &cwd,
+                    path_env: &path,
+                    claude_config_dir: environment.claude_config_dir.as_deref(),
+                    codex_home: environment.codex_home.as_deref(),
+                },
+            )
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            match cmd.spawn() {
+                Ok(child) => {
+                    // spawn 成功即写运行标记：主 App 终止能力与状态展示的事实源
+                    routine_run::write_marker(
+                        &data_dir(),
+                        &routine_id,
+                        &routine_run::RunningMarker {
+                            pid: child.id(),
+                            started_at: started_at.clone(),
+                            source: "cron".to_string(),
+                            cancelled: false,
+                        },
+                    );
+                    child.wait_with_output()
+                }
+                Err(error) => Err(error),
+            }
+        });
 
     // 收尾前读取终止标志：主 App stop_routine 杀进程前会置位 cancelled
     let cancelled = routine_run::read_marker(&data_dir(), &routine_id)
@@ -222,16 +220,21 @@ fn main() {
     let log = match output {
         Ok(out) => ExecutionLog {
             routine_id: routine_id.clone(),
+            engine: routine.engine.clone(),
             started_at: started_at.clone(),
             finished_at: Some(finished_at),
             exit_code: out.status.code(),
-            stdout: truncate(&String::from_utf8_lossy(&out.stdout), 10240),
+            stdout: truncate(
+                &routine_output::normalize_routine_stdout(&routine.engine, &out.stdout),
+                10240,
+            ),
             stderr: truncate(&String::from_utf8_lossy(&out.stderr), 4096),
-            session_id: persist.then(|| session_id.clone()),
+            session_id: (persist && routine.engine.is_claude_code()).then(|| session_id.clone()),
             cancelled: cancelled.then_some(true),
         },
         Err(e) => ExecutionLog {
             routine_id: routine_id.clone(),
+            engine: routine.engine.clone(),
             started_at: started_at.clone(),
             finished_at: Some(finished_at),
             exit_code: Some(-1),

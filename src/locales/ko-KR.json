@@ -415,7 +415,7 @@
     "routinesTitle": "예약 작업(Routines)",
     "newRoutine": "새로 만들기",
     "noRoutines": "예약 작업 없음",
-    "routinesHint": "생성 후 Monet 실행 중에 계획에 따라 자동으로 Claude 명령이 실행됩니다",
+    "routinesHint": "생성 후 선택한 엔진으로 일정에 따라 명령이 실행됩니다",
     "routineColumns": {
       "name": "이름",
       "schedule": "일정",
@@ -437,7 +437,7 @@
       "aiParse": "AI 인식",
       "cronLabel": "Cron 표현식(분 시 일 월 요일)",
       "cronPlaceholder": "예: 0 9 * * *",
-      "promptLabel": "명령(Claude에 보낼 prompt)",
+      "promptLabel": "명령(선택한 엔진에 전송)",
       "promptPlaceholder": "예: 내 모든 GitHub 저장소의 open PR 상태를 확인하고 요약해 줘",
       "enableOnCreate": "생성 후 즉시 활성화",
       "nameRequired": "이름은 필수 입력입니다",

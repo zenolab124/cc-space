@@ -415,7 +415,7 @@
     "routinesTitle": "定時タスク（Routines）",
     "newRoutine": "新規作成",
     "noRoutines": "定時タスクはまだありません",
-    "routinesHint": "作成後、Monet の実行中にスケジュールに従って Claude の指示が自動実行されます",
+    "routinesHint": "作成後、選択したエンジンでスケジュールに従って指示が実行されます",
     "routineColumns": {
       "name": "名前",
       "schedule": "スケジュール",
@@ -437,7 +437,7 @@
       "aiParse": "AI 認識",
       "cronLabel": "Cron 式（分 時 日 月 曜日）",
       "cronPlaceholder": "例：0 9 * * *",
-      "promptLabel": "指示（Claude に送る prompt）",
+      "promptLabel": "指示（選択したエンジンに送信）",
       "promptPlaceholder": "例：すべての GitHub リポジトリの open PR 状態を確認し、要約を出して",
       "enableOnCreate": "作成後すぐに有効化",
       "nameRequired": "名前は必須です",

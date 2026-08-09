@@ -31,6 +31,10 @@ mod automation;
 mod metadata;
 mod routines;
 pub mod routine_run;
+/// 主 App 与独立 runner 共用的 Routine CLI 命令构造。
+mod routine_command;
+/// 主 App 与独立 runner 共用的 Routine CLI 输出归一化。
+mod routine_output;
 /// Routine 执行环境快照由主 App 写入、独立 runner 读取
 mod routine_env;
 /// pub：结构定义同时被 monet-mcp / monet-routine-runner 以 #[path] 方式复用

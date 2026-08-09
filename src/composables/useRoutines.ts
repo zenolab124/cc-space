@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import i18n from '../locales'
+import type { EngineInstanceId } from '../engines/types'
 import { useNotifications } from './useNotifications'
 
 export interface RoutineSource {
@@ -19,6 +20,7 @@ export interface RoutineDefinition {
   cronExpression: string
   originalText: string
   prompt: string
+  engine: EngineInstanceId
   enabled: boolean
   createdAt: string
   lastRun: string | null
@@ -29,6 +31,7 @@ export interface RoutineDefinition {
 
 export interface RoutineExecutionLog {
   routineId: string
+  engine: EngineInstanceId
   startedAt: string
   finishedAt: string | null
   exitCode: number | null
@@ -126,6 +129,7 @@ async function createRoutine(params: {
   cronExpression: string
   originalText: string
   prompt: string
+  engine: EngineInstanceId
   enabled: boolean
 }): Promise<RoutineDefinition> {
   const result = await invoke<RoutineDefinition>('create_routine', params)
@@ -135,7 +139,7 @@ async function createRoutine(params: {
 
 async function updateRoutine(
   id: string,
-  patch: Partial<Pick<RoutineDefinition, 'name' | 'cronExpression' | 'originalText' | 'prompt' | 'enabled'>>,
+  patch: Partial<Pick<RoutineDefinition, 'name' | 'cronExpression' | 'originalText' | 'prompt' | 'engine' | 'enabled'>>,
 ): Promise<RoutineDefinition> {
   const result = await invoke<RoutineDefinition>('update_routine', { id, ...patch })
   await loadRoutines()

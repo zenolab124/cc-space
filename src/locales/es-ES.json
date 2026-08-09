@@ -415,7 +415,7 @@
     "routinesTitle": "Tareas programadas (Routines)",
     "newRoutine": "Crear",
     "noRoutines": "Sin tareas programadas",
-    "routinesHint": "Una vez creadas, se ejecutaran automaticamente segun la programacion mientras Monet este en ejecucion",
+    "routinesHint": "Después de crearla, la tarea se ejecutará según la programación con el motor seleccionado",
     "routineColumns": {
       "name": "Nombre",
       "schedule": "Programacion",
@@ -437,7 +437,7 @@
       "aiParse": "Reconocimiento IA",
       "cronLabel": "Expresion Cron (min hora dia mes semana)",
       "cronPlaceholder": "Ej: 0 9 * * *",
-      "promptLabel": "Comando (prompt enviado a Claude)",
+      "promptLabel": "Instrucción (enviada al motor seleccionado)",
       "promptPlaceholder": "Ej: Revisa el estado de los PRs abiertos en todos mis repositorios de GitHub y dame un resumen",
       "enableOnCreate": "Habilitar al crear",
       "nameRequired": "El nombre no puede estar vacio",

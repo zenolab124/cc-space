@@ -415,7 +415,7 @@
     "routinesTitle": "Tac vu dinh ky (Routines)",
     "newRoutine": "Tao moi",
     "noRoutines": "Chua co tac vu dinh ky",
-    "routinesHint": "Sau khi tao, Monet se tu dong thuc thi lenh Claude theo lich trong thoi gian chay",
+    "routinesHint": "Sau khi tạo, tác vụ sẽ chạy theo lịch bằng engine đã chọn",
     "routineColumns": {
       "name": "Ten",
       "schedule": "Lich trinh",
@@ -437,7 +437,7 @@
       "aiParse": "AI nhan dien",
       "cronLabel": "Bieu thuc Cron (phut gio ngay thang tuan)",
       "cronPlaceholder": "Vi du: 0 9 * * *",
-      "promptLabel": "Lenh (prompt gui cho Claude)",
+      "promptLabel": "Lệnh (gửi đến engine đã chọn)",
       "promptPlaceholder": "Vi du: Kiem tra trang thai cac PR dang mo tren tat ca repo GitHub cua toi, cho ban tom tat",
       "enableOnCreate": "Bat ngay sau khi tao",
       "nameRequired": "Ten khong duoc de trong",

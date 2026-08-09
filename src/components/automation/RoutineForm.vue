@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoutines, type RoutineDefinition } from '@/composables/useRoutines'
+import { useEngines } from '@/engines/useEngines'
+import { instanceKey } from '@/engines/identity'
 
 const props = defineProps<{
   routine: RoutineDefinition | null
@@ -14,6 +16,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const { createRoutine, updateRoutine, parseNaturalSchedule } = useRoutines()
+const { engines, health, loading: enginesLoading } = useEngines()
 
 const isNew = computed(() => props.routine === null)
 
@@ -22,6 +25,27 @@ const scheduleText = ref(props.routine?.originalText ?? '')
 const cronExpression = ref(props.routine?.cronExpression ?? '')
 const prompt = ref(props.routine?.prompt ?? '')
 const enabled = ref(props.routine?.enabled ?? true)
+const selectedEngineKey = ref(instanceKey(props.routine?.engine ?? {
+  engineId: 'claude-code',
+  instanceId: 'default',
+}))
+
+const engineOptions = computed(() => engines.value
+  .filter(engine => engine.capabilities.facets.automation)
+  .map(engine => ({
+    descriptor: engine,
+    key: instanceKey(engine.instance),
+    available: engine.enabled && health.value[instanceKey(engine.instance)]?.runtime.available === true,
+  })))
+const selectedEngine = computed(() => engineOptions.value
+  .find(option => option.key === selectedEngineKey.value))
+const selectedEngineAvailable = computed(() => selectedEngine.value?.available === true)
+
+watch(engineOptions, (options) => {
+  if (!isNew.value || selectedEngineAvailable.value) return
+  const firstAvailable = options.find(option => option.available)
+  if (firstAvailable) selectedEngineKey.value = firstAvailable.key
+}, { immediate: true })
 
 const saving = ref(false)
 const parsing = ref(false)
@@ -56,6 +80,14 @@ async function onSave() {
     formError.value = t('automation.routineForm.promptRequired')
     return
   }
+  if (!selectedEngine.value) {
+    formError.value = t('automation.routineForm.engineRequired')
+    return
+  }
+  if (!selectedEngineAvailable.value) {
+    formError.value = t('automation.routineForm.engineUnavailable')
+    return
+  }
 
   saving.value = true
   try {
@@ -65,6 +97,7 @@ async function onSave() {
         cronExpression: cronExpression.value.trim(),
         originalText: scheduleText.value.trim(),
         prompt: prompt.value.trim(),
+        engine: selectedEngine.value.descriptor.instance,
         enabled: enabled.value,
       })
     } else {
@@ -73,6 +106,7 @@ async function onSave() {
         cronExpression: cronExpression.value.trim(),
         originalText: scheduleText.value.trim(),
         prompt: prompt.value.trim(),
+        engine: selectedEngine.value.descriptor.instance,
         enabled: enabled.value,
       })
     }
@@ -92,6 +126,33 @@ async function onSave() {
     <label class="form-field">
       <span class="form-label">{{ $t('automation.routineForm.nameLabel') }}</span>
       <input v-model="name" type="text" :placeholder="$t('automation.routineForm.namePlaceholder')" class="form-input" />
+    </label>
+
+    <label class="form-field">
+      <span class="form-label">{{ $t('automation.routineForm.engineLabel') }}</span>
+      <select
+        v-model="selectedEngineKey"
+        class="form-input"
+        :disabled="enginesLoading || engineOptions.length === 0"
+      >
+        <option v-if="engineOptions.length === 0" value="">
+          {{ enginesLoading ? $t('common.loading') : $t('automation.routineForm.noEngines') }}
+        </option>
+        <option
+          v-for="option in engineOptions"
+          :key="option.key"
+          :value="option.key"
+          :disabled="!option.available"
+        >
+          {{ option.descriptor.displayName }}{{ option.available ? '' : ` · ${$t('automation.routineForm.engineUnavailableSuffix')}` }}
+        </option>
+      </select>
+      <p
+        v-if="!enginesLoading && !selectedEngineAvailable"
+        class="text-[10px] text-destructive"
+        role="alert"
+      >{{ $t('automation.routineForm.engineUnavailable') }}</p>
+      <p v-else class="text-[10px] text-muted-foreground">{{ $t('automation.routineForm.engineHint') }}</p>
     </label>
 
     <div class="form-field">
@@ -152,7 +213,7 @@ async function onSave() {
         {{ $t('common.cancel') }}
       </button>
       <button
-        :disabled="saving"
+        :disabled="saving || enginesLoading || !selectedEngineAvailable"
         class="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper transition-shadow disabled:opacity-50"
         @click="onSave"
       >

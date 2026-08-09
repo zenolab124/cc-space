@@ -415,7 +415,7 @@
     "routinesTitle": "المهام المجدولة (Routines)",
     "newRoutine": "جديد",
     "noRoutines": "لا توجد مهام مجدولة",
-    "routinesHint": "بعد الإنشاء، سيتم تنفيذ أوامر Claude تلقائياً وفق الجدول أثناء تشغيل Monet",
+    "routinesHint": "بعد الإنشاء، ستُنفَّذ المهمة وفق الجدول باستخدام المحرك المحدد",
     "routineColumns": {
       "name": "الاسم",
       "schedule": "الجدول الزمني",
@@ -437,7 +437,7 @@
       "aiParse": "تحليل AI",
       "cronLabel": "تعبير Cron (دقيقة ساعة يوم شهر أسبوع)",
       "cronPlaceholder": "مثال: 0 9 * * *",
-      "promptLabel": "الأمر (prompt المرسل إلى Claude)",
+      "promptLabel": "الأمر (يُرسل إلى المحرك المحدد)",
       "promptPlaceholder": "مثال: تحقق من حالة جميع طلبات PR المفتوحة في مستودعات GitHub الخاصة بي وقدم ملخصاً",
       "enableOnCreate": "تفعيل فوري بعد الإنشاء",
       "nameRequired": "الاسم مطلوب",

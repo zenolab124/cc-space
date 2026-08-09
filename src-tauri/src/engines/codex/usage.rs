@@ -25,8 +25,15 @@ pub(crate) fn collect_local_usage() -> EngineUsageData {
     let parts: Vec<_> = paths
         .par_iter()
         .map(|path| {
+            let summary = file_source::read_thread_summary(path);
+            if summary
+                .as_ref()
+                .is_some_and(|thread| file_source::is_agent_cwd(&thread.cwd))
+            {
+                return (Vec::new(), None);
+            }
             let contributions = scan_file_cached(path);
-            let session = file_source::read_thread_summary(path).map(|thread| SessionActivity {
+            let session = summary.map(|thread| SessionActivity {
                 engine_id: ENGINE_ID.to_string(),
                 session_id: thread.id,
                 project_path: (!thread.cwd.trim().is_empty()).then_some(thread.cwd),

@@ -415,7 +415,7 @@
     "routinesTitle": "งานตั้งเวลา (Routines)",
     "newRoutine": "สร้างใหม่",
     "noRoutines": "ยังไม่มีงานตั้งเวลา",
-    "routinesHint": "หลังสร้างแล้ว Monet จะรันคำสั่ง Claude ตามกำหนดเวลาโดยอัตโนมัติขณะที่แอปทำงานอยู่",
+    "routinesHint": "หลังสร้างแล้ว ระบบจะรันคำสั่งตามกำหนดเวลาด้วยเอนจินที่เลือก",
     "routineColumns": {
       "name": "ชื่อ",
       "schedule": "กำหนดเวลา",
@@ -437,7 +437,7 @@
       "aiParse": "AI แปลง",
       "cronLabel": "Cron expression (นาที ชั่วโมง วัน เดือน สัปดาห์)",
       "cronPlaceholder": "เช่น: 0 9 * * *",
-      "promptLabel": "คำสั่ง (prompt ที่จะส่งให้ Claude)",
+      "promptLabel": "คำสั่ง (ส่งไปยังเอนจินที่เลือก)",
       "promptPlaceholder": "เช่น: ตรวจสอบสถานะ PR ที่เปิดอยู่ในทุกรีโพ GitHub ของฉัน แล้วสรุปให้หน่อย",
       "enableOnCreate": "เปิดใช้งานทันทีหลังสร้าง",
       "nameRequired": "ชื่อต้องไม่เว้นว่าง",

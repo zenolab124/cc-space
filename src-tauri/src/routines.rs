@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::config;
+#[cfg(windows)]
 use crate::proc_ext::HideConsole;
 use crate::scheduler;
 
@@ -16,12 +17,15 @@ use crate::scheduler;
 // Data structures（RoutineDefinition/RoutineSource 见 routine_types.rs 单一事实源）
 // ---------------------------------------------------------------------------
 
-pub use crate::routine_types::{RoutineDefinition, RoutineSource};
+pub use crate::routine_types::{RoutineDefinition, RoutineEngine, RoutineSource};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineExecutionLog {
     pub routine_id: String,
+    /// 实际执行引擎；旧日志缺失时按历史行为归为 Claude Code。
+    #[serde(default)]
+    pub engine: RoutineEngine,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub exit_code: Option<i32>,
@@ -146,9 +150,14 @@ pub(crate) fn ensure_scheduler_environment() -> Result<(), String> {
         disable_runner_after_error(error, runner_needs_migration)
     })?;
     let claude_config_dir = config::claude_config_dir_env().map(|(_, value)| value);
-    crate::routine_env::prepare_claude_config_dir(
+    let codex_home = std::env::var("CODEX_HOME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    crate::routine_env::prepare_environment(
         config::data_dir(),
         claude_config_dir.as_deref(),
+        codex_home.as_deref(),
         runner_needs_migration,
         || prepared_runner.commit().map_err(std::io::Error::other),
         || scheduler::disable_runner().map_err(std::io::Error::other),
@@ -312,6 +321,17 @@ fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
+fn validate_routine_engine(engine: &RoutineEngine) -> Result<(), String> {
+    if engine.is_claude_code() || engine.is_codex() {
+        Ok(())
+    } else {
+        Err(format!(
+            "不支持的定时任务引擎: {}/{}",
+            engine.engine_id, engine.instance_id
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
@@ -322,6 +342,7 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
     let id = routine.id.clone();
     let name = routine.name.clone();
     let prompt = routine.prompt.clone();
+    let engine = routine.engine.clone();
     let app = app.clone();
 
     // 与 runner 同一把执行锁：防「立即运行」与 cron 触发并发同跑；
@@ -359,39 +380,40 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
         let persist = crate::channels::agent_session_persist();
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        // .app 环境 PATH 极简，裸命令名找不到 claude，必须走 locator 显式定位
-        let output = match crate::claude_locator::locate() {
-            Ok(located) => {
-                let mut cmd = Command::new(&located.path);
-                cmd.hide_console();
-                // 先清掉父进程覆盖，再按 Monet 已解析的最终根重建 CLI 环境；
-                // 避免 MONET_CLAUDE_ROOT 与继承的 CLAUDE_CONFIG_DIR 优先级交叉。
-                cmd.env_remove("MONET_CLAUDE_ROOT");
-                cmd.env_remove("CLAUDE_CONFIG_DIR");
-                if let Some((k, v)) = config::claude_config_dir_env() {
-                    cmd.env(k, v);
-                }
-                // claude 自立进程组（组 ID = claude PID）：stop_routine 组信号
-                // 整树回收（含其 MCP 子进程），且不伤及主 App 自身
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::CommandExt;
-                    cmd.process_group(0);
-                }
-                cmd.arg("-p")
-                    .arg(&prompt)
-                    .arg("--output-format")
-                    .arg("text")
-                    .arg("--session-id")
-                    .arg(&session_id);
-                if !persist {
-                    cmd.arg("--no-session-persistence");
-                }
-                cmd.env("PATH", crate::streaming::enhanced_path())
-                    .current_dir(agent_cwd())
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped());
+        // .app 环境 PATH 极简，两个 CLI 都必须走各自 locator 的绝对路径。
+        let executable = if engine.is_claude_code() {
+            crate::claude_locator::locate().map(|located| located.path)
+        } else if engine.is_codex() {
+            crate::codex_locator::locate()
+        } else {
+            Err(format!(
+                "unsupported routine engine: {}/{}",
+                engine.engine_id, engine.instance_id
+            ))
+        };
+        let output = executable
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))
+            .and_then(|executable| {
+                let cwd = agent_cwd();
+                let claude_config_dir = config::claude_config_dir_env().map(|(_, value)| value);
+                let codex_home = std::env::var("CODEX_HOME")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let mut cmd = crate::routine_command::build_routine_command(
+                    crate::routine_command::RoutineCommandSpec {
+                        engine: &engine,
+                        executable: &executable,
+                        prompt: &prompt,
+                        session_id: &session_id,
+                        persist_session: persist,
+                        cwd: &cwd,
+                        path_env: &crate::streaming::enhanced_path(),
+                        claude_config_dir: claude_config_dir.as_deref(),
+                        codex_home: codex_home.as_deref(),
+                    },
+                )
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
                 match cmd.spawn() {
                     Ok(child) => {
                         // spawn 成功即写运行标记：终止能力与跨进程状态展示的事实源
@@ -407,11 +429,9 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
                         );
                         child.wait_with_output()
                     }
-                    Err(e) => Err(e),
+                    Err(error) => Err(error),
                 }
-            }
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::NotFound, e)),
-        };
+            });
 
         // 收尾前读取终止标志：stop_routine 杀进程前会置位 cancelled
         let cancelled = crate::routine_run::read_marker(&data_dir, &id)
@@ -423,16 +443,21 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
         let log = match output {
             Ok(out) => RoutineExecutionLog {
                 routine_id: id.clone(),
+                engine: engine.clone(),
                 started_at,
                 finished_at: Some(finished_at),
                 exit_code: out.status.code(),
-                stdout: truncate_str(&String::from_utf8_lossy(&out.stdout), 10240),
+                stdout: truncate_str(
+                    &crate::routine_output::normalize_routine_stdout(&engine, &out.stdout),
+                    10240,
+                ),
                 stderr: truncate_str(&String::from_utf8_lossy(&out.stderr), 4096),
-                session_id: persist.then(|| session_id.clone()),
+                session_id: (persist && engine.is_claude_code()).then(|| session_id.clone()),
                 cancelled: cancelled.then_some(true),
             },
             Err(e) => RoutineExecutionLog {
                 routine_id: id.clone(),
+                engine: engine.clone(),
                 started_at,
                 finished_at: Some(finished_at),
                 exit_code: Some(-1),
@@ -571,9 +596,11 @@ pub async fn create_routine(
     cron_expression: String,
     original_text: String,
     prompt: String,
+    engine: RoutineEngine,
     enabled: bool,
 ) -> Result<RoutineDefinition, String> {
     validate_cron(&cron_expression)?;
+    validate_routine_engine(&engine)?;
 
     let next_run = if enabled {
         compute_next_run_full(&cron_expression)
@@ -587,6 +614,7 @@ pub async fn create_routine(
         cron_expression,
         original_text,
         prompt,
+        engine,
         enabled,
         created_at: Utc::now().to_rfc3339(),
         last_run: None,
@@ -622,10 +650,14 @@ pub async fn update_routine(
     cron_expression: Option<String>,
     original_text: Option<String>,
     prompt: Option<String>,
+    engine: Option<RoutineEngine>,
     enabled: Option<bool>,
 ) -> Result<RoutineDefinition, String> {
     if let Some(ref expr) = cron_expression {
         validate_cron(expr)?;
+    }
+    if let Some(ref engine) = engine {
+        validate_routine_engine(engine)?;
     }
 
     let cron_changed = cron_expression.is_some();
@@ -650,6 +682,9 @@ pub async fn update_routine(
         }
         if let Some(v) = prompt {
             r.prompt = v;
+        }
+        if let Some(v) = engine {
+            r.engine = v;
         }
         if let Some(v) = enabled {
             r.enabled = v;
@@ -728,7 +763,7 @@ pub fn run_routine_now(id: String, app: AppHandle) -> Result<(), String> {
     execute_routine(&routine, &app)
 }
 
-/// 终止正在执行的任务：置 cancelled 标志后对 claude 进程组发 TERM，
+/// 终止正在执行的任务：置 cancelled 标志后对引擎 CLI 进程组发 TERM，
 /// 3 秒未退（marker 未被执行方收尾清除）则 KILL 兜底。执行方（主 App
 /// 闭包 / cron runner）的 wait 随即返回，正常落日志并清理状态。
 #[tauri::command]

@@ -415,7 +415,7 @@
     "routinesTitle": "Tarefas agendadas (Routines)",
     "newRoutine": "Criar",
     "noRoutines": "Nenhuma tarefa agendada",
-    "routinesHint": "Após criação, as instruções Claude serão executadas automaticamente conforme o agendamento enquanto o Monet estiver aberto",
+    "routinesHint": "Após a criação, a tarefa será executada conforme o agendamento usando o mecanismo selecionado",
     "routineColumns": {
       "name": "Nome",
       "schedule": "Agendamento",
@@ -437,7 +437,7 @@
       "aiParse": "IA reconhecer",
       "cronLabel": "Expressão Cron (min hora dia mês semana)",
       "cronPlaceholder": "Ex: 0 9 * * *",
-      "promptLabel": "Instrução (prompt enviado ao Claude)",
+      "promptLabel": "Instrução (enviada ao mecanismo selecionado)",
       "promptPlaceholder": "Ex: Verifique o status dos PRs abertos em todos os meus repositórios GitHub e faça um resumo",
       "enableOnCreate": "Ativar imediatamente após criar",
       "nameRequired": "O nome não pode estar vazio",

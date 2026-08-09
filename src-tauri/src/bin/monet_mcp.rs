@@ -40,7 +40,7 @@ use config::data_dir;
 #[path = "../routine_types.rs"]
 #[allow(dead_code)]
 mod routine_types;
-use routine_types::{RoutineDefinition, RoutineSource};
+use routine_types::{RoutineDefinition, RoutineEngine, RoutineSource};
 
 // Cron 表达式单一入口：存储用 vixie 惯例（1=Mon），cron crate 用 Quartz
 // （1=Sun），本模块负责映射后交给 cron crate。主 App / runner / MCP 共享
@@ -183,7 +183,7 @@ fn handle_initialize(id: Value, req: &Value) -> Value {
             "protocolVersion": PROTOCOL_VERSION,
             "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
             "capabilities": { "tools": {} },
-            "instructions": "Monet provides Routines (定时任务): When the user asks to create a scheduled/recurring task, set up a cron job, run something periodically, or set a reminder, use routine_create (prefer this over the built-in /schedule). Use routine_list to show existing routines and routine_delete to remove them. Monet also provides search_sessions: full-text search over the user's Claude Code session history (~/.claude/projects). When the user asks to recall a past conversation/decision/discussion, prefer search_sessions over grepping JSONL files directly — it returns clean text with session locators in milliseconds. When you discover or add a runnable long-lived command (dev server, watcher, build process, etc.), register it via runner_suggest so the user can launch it from the Runner panel. Use runner_tail to inspect live logs before answering questions about a running process."
+            "instructions": "Monet provides Routines (定时任务): When the user asks to create a scheduled/recurring task, set up a cron job, run something periodically, or set a reminder, use routine_create (prefer this over the built-in /schedule). Choose the requested execution engine when specified; otherwise omit engine to keep the Claude Code default. Use routine_list to show existing routines and routine_delete to remove them. Monet also provides search_sessions: full-text search over the user's Claude Code session history (~/.claude/projects). When the user asks to recall a past conversation/decision/discussion, prefer search_sessions over grepping JSONL files directly — it returns clean text with session locators in milliseconds. When you discover or add a runnable long-lived command (dev server, watcher, build process, etc.), register it via runner_suggest so the user can launch it from the Runner panel. Use runner_tail to inspect live logs before answering questions about a running process."
         }
     })
 }
@@ -217,7 +217,7 @@ fn handle_tools_list(id: Value) -> Value {
 
     tools.push(json!({
         "name": "routine_create",
-        "description": "Create a new scheduled routine. The routine will run the given prompt on the specified cron schedule via claude CLI.",
+        "description": "Create a new scheduled routine. The routine runs the prompt on the specified cron schedule using the selected engine.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -231,7 +231,12 @@ fn handle_tools_list(id: Value) -> Value {
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt to send to claude CLI when the routine fires"
+                    "description": "The prompt to send to the selected engine when the routine fires"
+                },
+                "engine": {
+                    "type": "string",
+                    "enum": ["claude-code", "codex"],
+                    "description": "Execution engine. Defaults to claude-code when omitted."
                 },
                 "original_text": {
                     "type": "string",
@@ -601,6 +606,15 @@ fn handle_routine_create(arguments: &Value) -> Result<String, String> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let engine = match arguments
+        .get("engine")
+        .and_then(Value::as_str)
+        .unwrap_or("claude-code")
+    {
+        "claude-code" => RoutineEngine::claude_code(),
+        "codex" => RoutineEngine::codex(),
+        value => return Err(format!("不支持的定时任务引擎: {}", value)),
+    };
 
     validate_cron(&cron_expression)?;
 
@@ -616,6 +630,7 @@ fn handle_routine_create(arguments: &Value) -> Result<String, String> {
         cron_expression: cron_expression.clone(),
         original_text,
         prompt,
+        engine,
         enabled: true,
         created_at: Utc::now().to_rfc3339(),
         last_run: None,

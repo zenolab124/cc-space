@@ -9,8 +9,11 @@ import { renderMarkdownCached } from '@/composables/useMarkdown'
 import { stripAnsi } from '@/utils/ansi'
 import RoutineForm from '@/components/automation/RoutineForm.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
+import { useEngines } from '@/engines/useEngines'
+import { instanceKey } from '@/engines/identity'
 
 const { t } = useI18n()
+const { engines } = useEngines()
 const { activeSection } = useUiState()
 const {
   config, stats, loadingConfig, loadingStats,
@@ -162,6 +165,11 @@ function sourceProjectName(r: RoutineRow): string {
   const p = r.source?.project
   if (!p) return ''
   return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
+}
+
+function routineEngineName(r: RoutineRow): string {
+  return engines.value.find(engine => instanceKey(engine.instance) === instanceKey(r.engine))?.displayName
+    ?? r.engine.engineId
 }
 
 // --- 日志弹窗 ---
@@ -408,14 +416,15 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
                 <td class="text-xs font-medium">
                   {{ r.name }}
                   <div
-                    v-if="r.source"
-                    v-tooltip="r.source.kind === 'mcp' ? [r.source.project, r.source.client].filter(Boolean).join(' · ') : undefined"
+                    v-tooltip="r.source?.kind === 'mcp' ? [r.source.project, r.source.client].filter(Boolean).join(' · ') : undefined"
                     class="text-[10px] text-muted-foreground font-normal mt-0.5"
                   >
-                    <template v-if="r.source.kind === 'mcp'">
+                    <span>{{ routineEngineName(r) }}</span>
+                    <template v-if="r.source?.kind === 'mcp'">
+                      <span> · </span>
                       MCP<span v-if="sourceProjectName(r)"> · {{ sourceProjectName(r) }}</span>
                     </template>
-                    <template v-else>{{ $t('automation.sourceUi') }}</template>
+                    <template v-else-if="r.source"><span> · </span>{{ $t('automation.sourceUi') }}</template>
                   </div>
                 </td>
                 <td>

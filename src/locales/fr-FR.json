@@ -415,7 +415,7 @@
     "routinesTitle": "Tâches planifiées (Routines)",
     "newRoutine": "Nouveau",
     "noRoutines": "Aucune tâche planifiée",
-    "routinesHint": "Une fois créées, les instructions Claude s'exécuteront automatiquement selon le planning tant que Monet est en cours d'exécution",
+    "routinesHint": "Une fois créée, la tâche s'exécute selon le planning avec le moteur sélectionné",
     "routineColumns": {
       "name": "Nom",
       "schedule": "Planning",
@@ -437,7 +437,7 @@
       "aiParse": "Reconnaissance IA",
       "cronLabel": "Expression Cron (min heure jour mois semaine)",
       "cronPlaceholder": "Ex. : 0 9 * * *",
-      "promptLabel": "Instruction (prompt envoyé à Claude)",
+      "promptLabel": "Instruction (envoyée au moteur sélectionné)",
       "promptPlaceholder": "Ex. : Vérifie l'état des PR ouvertes sur tous mes dépôts GitHub et fais-en un résumé",
       "enableOnCreate": "Activer immédiatement après la création",
       "nameRequired": "Le nom est obligatoire",

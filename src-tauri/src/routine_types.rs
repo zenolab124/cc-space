@@ -24,11 +24,58 @@ pub struct RoutineSource {
 
 impl RoutineSource {
     pub fn ui() -> Self {
-        Self { kind: "ui".to_string(), project: None, client: None }
+        Self {
+            kind: "ui".to_string(),
+            project: None,
+            client: None,
+        }
     }
 
     pub fn mcp(project: Option<String>, client: Option<String>) -> Self {
-        Self { kind: "mcp".to_string(), project, client }
+        Self {
+            kind: "mcp".to_string(),
+            project,
+            client,
+        }
+    }
+}
+
+/// Routine 执行引擎。结构与 EngineInstanceId 的持久化形状一致，但本文件需被
+/// 独立 runner/MCP 直接编译，因此保留 std + serde 的轻量契约。
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineEngine {
+    pub engine_id: String,
+    pub instance_id: String,
+}
+
+impl RoutineEngine {
+    pub fn claude_code() -> Self {
+        Self {
+            engine_id: "claude-code".to_string(),
+            instance_id: "default".to_string(),
+        }
+    }
+
+    pub fn codex() -> Self {
+        Self {
+            engine_id: "codex".to_string(),
+            instance_id: "default".to_string(),
+        }
+    }
+
+    pub fn is_claude_code(&self) -> bool {
+        self.engine_id == "claude-code" && self.instance_id == "default"
+    }
+
+    pub fn is_codex(&self) -> bool {
+        self.engine_id == "codex" && self.instance_id == "default"
+    }
+}
+
+impl Default for RoutineEngine {
+    fn default() -> Self {
+        Self::claude_code()
     }
 }
 
@@ -40,6 +87,9 @@ pub struct RoutineDefinition {
     pub cron_expression: String,
     pub original_text: String,
     pub prompt: String,
+    /// 执行该任务的默认引擎；旧任务未存此字段时保持 Claude Code 行为。
+    #[serde(default)]
+    pub engine: RoutineEngine,
     pub enabled: bool,
     pub created_at: String,
     pub last_run: Option<String>,
@@ -47,4 +97,42 @@ pub struct RoutineDefinition {
     /// 任务来源；旧数据无此字段，反序列化为 None（UI 显示「未知」）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<RoutineSource>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_routine_defaults_to_claude_code() {
+        let routine: RoutineDefinition = serde_json::from_str(
+            r#"{
+                "id":"legacy",
+                "name":"Legacy",
+                "cronExpression":"0 9 * * *",
+                "originalText":"",
+                "prompt":"Summarize",
+                "enabled":true,
+                "createdAt":"2026-08-10T00:00:00Z",
+                "lastRun":null,
+                "nextRun":null
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(routine.engine, RoutineEngine::claude_code());
+    }
+
+    #[test]
+    fn routine_engine_round_trips_as_engine_instance_shape() {
+        let value = serde_json::to_value(RoutineEngine::codex()).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "engineId": "codex", "instanceId": "default" })
+        );
+        assert_eq!(
+            serde_json::from_value::<RoutineEngine>(value).unwrap(),
+            RoutineEngine::codex()
+        );
+    }
 }
