@@ -4,10 +4,13 @@ mod file_source;
 mod runtime;
 mod source;
 mod supervisor;
+mod usage;
 
 pub use runtime::*;
 pub use source::*;
 pub use supervisor::*;
+
+pub(crate) use usage::collect_local_usage;
 
 use super::core::{EngineInstanceId, EngineResult};
 

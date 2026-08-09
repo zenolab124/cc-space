@@ -1013,7 +1013,9 @@ fn normalized_usage(value: &Value) -> Option<Usage> {
         .and_then(Value::as_u64)
         .unwrap_or_default();
     Some(Usage {
-        input_tokens: input_tokens.saturating_sub(cached_input_tokens),
+        input_tokens: input_tokens
+            .saturating_sub(cached_input_tokens)
+            .saturating_sub(cache_creation_input_tokens),
         output_tokens: value.get("output_tokens")?.as_u64()?,
         total_tokens: value.get("total_tokens").and_then(Value::as_u64),
         cached_input_tokens: Some(cached_input_tokens),
@@ -1186,7 +1188,7 @@ mod tests {
             }
         }))
         .unwrap();
-        assert_eq!(snapshot.total.input_tokens, 300);
+        assert_eq!(snapshot.total.input_tokens, 275);
         assert_eq!(snapshot.total.cached_input_tokens, Some(900));
         assert_eq!(snapshot.total.cache_creation_input_tokens, Some(25));
         assert_eq!(snapshot.last.input_tokens, 100);

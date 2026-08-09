@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
 use fs2::FileExt;
@@ -164,29 +163,6 @@ fn compute_day_boundary(day_start_hour: i8) -> (u64, String) {
     (ts, date_str)
 }
 
-/// 内置 Agent 工作目录的 projects 编码名（与主 App discovery/search/usage 同源清单）
-fn agent_dirs() -> &'static std::collections::HashSet<String> {
-    static CELL: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
-    CELL.get_or_init(|| app_lib::config::agent_project_dirs().into_iter().collect())
-}
-
-fn collect_jsonl(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name == "subagents" || agent_dirs().contains(name.as_ref()) {
-                continue;
-            }
-            collect_jsonl(&path, out);
-        } else if path.extension().is_some_and(|e| e == "jsonl")
-            && !path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("agent-")) {
-                out.push(path);
-            }
-    }
-}
-
 fn compute_streak(daily: &[app_lib::usage_stats::DailyUsage]) -> (u32, u32, u32) {
     let today = Local::now().date_naive();
     let active_dates: std::collections::HashSet<NaiveDate> = daily
@@ -241,139 +217,70 @@ fn estimate_cost(
     ((cost * 100.0).round() / 100.0, unpriced)
 }
 
-/// 项目榜显示名：优先采信目录下最新会话 JSONL 的 cwd（编码回目录名一致才认），
-/// 取其末段；无可采信会话时退回有损解码（含连字符的末段目录名会被错拆，仅兜底）
-fn project_display_name(dir: &std::path::Path, proj_name: &str) -> String {
-    if let Some(cwd) = trusted_project_cwd(dir, proj_name) {
-        if let Some(last) = cwd.rsplit(['/', '\\']).find(|s| !s.is_empty()) {
-            return last.to_string();
-        }
-    }
-    let decoded_path = if let Some(stripped) = proj_name.strip_prefix('-') {
-        stripped.replace('-', "/")
-    } else {
-        proj_name.replace('-', "/")
-    };
-    decoded_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(proj_name)
+fn project_display_name(project_path: Option<&str>) -> String {
+    project_path
+        .and_then(|path| path.rsplit(['/', '\\']).find(|part| !part.is_empty()))
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Uncategorized")
         .to_string()
 }
 
-/// 从目录下最新的会话 JSONL 前几行提取 cwd，编码回去与目录名一致才采信
-/// （Windows 下 NTFS 大小写不敏感，忽略 ASCII 大小写差异）
-fn trusted_project_cwd(dir: &std::path::Path, proj_name: &str) -> Option<String> {
-    use std::io::BufRead;
-    let mut jsonls: Vec<(SystemTime, PathBuf)> = fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter_map(|e| {
-            let p = e.path();
-            let name = p.file_name()?.to_str()?;
-            if !name.ends_with(".jsonl") || name.starts_with("agent-") {
-                return None;
-            }
-            let mtime = e.metadata().ok()?.modified().ok()?;
-            Some((mtime, p))
-        })
-        .collect();
-    jsonls.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
-
-    for (_, path) in jsonls.into_iter().take(3) {
-        let Ok(file) = fs::File::open(&path) else { continue };
-        for line in std::io::BufReader::new(file).lines().take(10).flatten() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-            if let Some(cwd) = v.get("cwd").and_then(|c| c.as_str()) {
-                let encoded = config::encode_project_dir(std::path::Path::new(cwd));
-                let matches = if cfg!(windows) {
-                    encoded.eq_ignore_ascii_case(proj_name)
-                } else {
-                    encoded == proj_name
-                };
-                if matches {
-                    return Some(cwd.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn collect_project_stats(start_ts: u64) -> (u32, Vec<ProjectStat>, u32, Vec<u32>) {
-    let mut project_counts: HashMap<String, u32> = HashMap::new();
+fn collect_project_stats(
+    start_ts: u64,
+    sessions: &[app_lib::usage_stats::SessionActivity],
+) -> (u32, Vec<ProjectStat>, u32, Vec<u32>) {
+    let mut project_counts: HashMap<String, (String, u32)> = HashMap::new();
     let mut active_today = std::collections::HashSet::new();
     let mut hourly = vec![0u32; 24];
-    let mut total_sessions = 0u32;
 
-    let Ok(entries) = fs::read_dir(config::projects_dir()) else {
-        return (0, Vec::new(), 0, hourly);
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() { continue; }
-        let proj_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        // 内置 Agent 目录不进项目榜（collect_jsonl 只在递归下降时过滤，入口目录须在此拦截）
-        if agent_dirs().contains(&proj_name) { continue; }
-        let display = project_display_name(&path, &proj_name);
-
-        let mut jsonls = Vec::new();
-        collect_jsonl(&path, &mut jsonls);
-        let count = jsonls.len() as u32;
-        total_sessions += count;
-        *project_counts.entry(display).or_default() += count;
-
-        for jf in &jsonls {
-            if let Ok(meta) = fs::metadata(jf) {
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(dur) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                        let ts = dur.as_secs();
-                        if ts >= start_ts {
-                            active_today.insert(proj_name.clone());
-                        }
-                        let dt = chrono::DateTime::from_timestamp(ts as i64, 0);
-                        if let Some(dt) = dt {
-                            let local = dt.with_timezone(&Local);
-                            hourly[local.hour() as usize] += 1;
-                        }
-                    }
-                }
-            }
+    for session in sessions {
+        let project_key = session
+            .project_path
+            .clone()
+            .unwrap_or_else(|| "uncategorized".into());
+        let entry = project_counts
+            .entry(project_key.clone())
+            .or_insert_with(|| (project_display_name(session.project_path.as_deref()), 0));
+        entry.1 += 1;
+        if session.updated_at >= start_ts {
+            active_today.insert(project_key);
+        }
+        if let Some(datetime) = chrono::DateTime::from_timestamp(session.updated_at as i64, 0) {
+            let local = datetime.with_timezone(&Local);
+            hourly[local.hour() as usize] += 1;
         }
     }
 
     let mut top: Vec<ProjectStat> = project_counts
         .into_iter()
-        .map(|(name, sessions)| ProjectStat { name, sessions })
+        .map(|(_, (name, sessions))| ProjectStat { name, sessions })
         .collect();
     top.sort_by_key(|p| std::cmp::Reverse(p.sessions));
     top.truncate(8);
 
-    (active_today.len() as u32, top, total_sessions, hourly)
+    (active_today.len() as u32, top, sessions.len() as u32, hourly)
 }
 
 fn main() {
     let cfg = read_config();
     let (start_ts, today_str) = compute_day_boundary(cfg.day_start_hour);
 
-    let mut jsonl_files = Vec::new();
-    collect_jsonl(&config::projects_dir(), &mut jsonl_files);
-    let today_sessions = jsonl_files
-        .iter()
-        .filter(|p| {
-            fs::metadata(p)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                .is_some_and(|d| d.as_secs() >= start_ts)
+    let stats = app_lib::usage_stats::collect_usage_stats().ok();
+    let today_sessions = stats
+        .as_ref()
+        .map(|stats| {
+            stats
+                .sessions
+                .iter()
+                .filter(|session| session.updated_at >= start_ts)
+                .count() as u32
         })
-        .count() as u32;
+        .unwrap_or_default();
 
     let (today_tokens, models, monthly_tokens, last_month_tokens, monthly_models,
          estimated_cost, unpriced_tokens, weekly_tokens, daily_heatmap, current_streak,
          longest_streak, active_days, total_tokens) =
-        if let Ok(stats) = app_lib::usage_stats::collect_usage_stats() {
+        if let Some(stats) = stats.as_ref() {
             let now = Local::now();
             let today_date = now.date_naive();
 
@@ -454,14 +361,17 @@ fn main() {
             };
 
             let (cs, ls, ad) = compute_streak(&stats.daily);
-            let total_t: u64 = stats.daily.iter().map(|d| d.total).sum();
+            let total_t = stats.total;
 
             (tt, models_list, monthly_t, lmt, mm, cost, unpriced, weekly, heatmap, cs, ls, ad, total_t)
         } else {
             (0, Vec::new(), 0, 0, Vec::new(), 0.0, 0, Vec::new(), Vec::new(), 0, 0, 0, 0)
         };
 
-    let (active_projects, top_projects, total_sessions, hourly) = collect_project_stats(start_ts);
+    let (active_projects, top_projects, total_sessions, hourly) = stats
+        .as_ref()
+        .map(|stats| collect_project_stats(start_ts, &stats.sessions))
+        .unwrap_or_else(|| (0, Vec::new(), 0, vec![0; 24]));
 
     let snap = WidgetSnapshot {
         today_sessions,

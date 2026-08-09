@@ -133,7 +133,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Customizable title slots: select metrics from any available provider; normal refreshes reuse a five-minute cache, while refresh-now still respects server backoff
 - Codex quota comes from the local official `codex app-server` and its existing sign-in state. Monet does not read or write `auth.json` and never proactively refreshes tokens. A provider failure keeps that provider's old snapshot without affecting the others
 - Honest freshness labeling: "updated X ago"; on refresh failure it falls back to the last good data and says why — never shows fake numbers
-- Desktop widgets (macOS WidgetKit): today's sessions/tokens, streak, month-over-month comparison, per-model stats, weekly trend, active project leaderboard, 24-hour distribution, 28-day heatmap
+- Desktop widgets (macOS WidgetKit): aggregated Claude Code and Codex sessions/tokens for today, streak, month-over-month comparison, per-model stats, weekly trend, active project leaderboard, 24-hour distribution, and a 28-day heatmap
 - Cost estimation: four token classes priced separately (input/output/cache write/cache read); unknown models are honestly labeled "unpriced" instead of guessed
 - Adjustable accounting: "when does my day start" (night-owl friendly), calendar month vs. rolling 30 days
 - Quota credential red line: consumes the CLI's credentials read-only and never refreshes the OAuth token itself (so it can never burn your CLI login)

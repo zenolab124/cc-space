@@ -150,11 +150,21 @@ export interface ModelUsage {
 }
 
 export interface UsageStats {
+  total: number
   daily: DailyUsage[]
   month: {
     total: number
     byModel: ModelUsage[]
   }
+  byEngine: Array<{
+    engineId: string
+    total: number
+    daily: DailyUsage[]
+    month: {
+      total: number
+      byModel: ModelUsage[]
+    }
+  }>
 }
 
 /** get_schema_diagnosis 返回的子集——前端只消费诊断卡需要的字段 */

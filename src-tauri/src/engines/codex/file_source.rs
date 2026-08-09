@@ -39,7 +39,7 @@ pub(super) fn read_thread(id: &str) -> EngineResult<CodexThread> {
     ))
 }
 
-fn codex_home() -> Option<PathBuf> {
+pub(super) fn codex_home() -> Option<PathBuf> {
     std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -55,7 +55,7 @@ fn codex_home() -> Option<PathBuf> {
         .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
 }
 
-fn session_paths() -> Vec<PathBuf> {
+pub(super) fn session_paths() -> Vec<PathBuf> {
     let Some(home) = codex_home() else {
         return Vec::new();
     };
@@ -87,7 +87,7 @@ fn collect_jsonl_paths(directory: &Path, paths: &mut Vec<PathBuf>) {
     }
 }
 
-fn read_thread_summary(path: &Path) -> Option<CodexThread> {
+pub(super) fn read_thread_summary(path: &Path) -> Option<CodexThread> {
     let file = File::open(path).ok()?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();

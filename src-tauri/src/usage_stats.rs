@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cache::{self, CachedContrib, CachedUsage};
 use crate::models::{TokenUsage, UsageSnapshot};
@@ -22,9 +23,26 @@ use crate::probe;
 
 #[derive(Debug, Serialize)]
 pub struct UsageStats {
+    /// 所有可用引擎、所有历史日期的累计 token。
+    pub total: u64,
     /// 近 16 周窗口（本周一往前 15 周起）内有数据的天，date 为本地 "YYYY-MM-DD"
     pub daily: Vec<DailyUsage>,
     /// 本地时区当前自然月
+    pub month: MonthUsage,
+    /// 同一聚合口径下的引擎分项，前端可解释总量来源。
+    #[serde(rename = "byEngine")]
+    pub by_engine: Vec<EngineUsageStats>,
+    /// Widget 后台进程消费的会话活动，不进入 IPC JSON。
+    #[serde(skip)]
+    pub sessions: Vec<SessionActivity>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineUsageStats {
+    pub engine_id: String,
+    pub total: u64,
+    pub daily: Vec<DailyUsage>,
     pub month: MonthUsage,
 }
 
@@ -57,9 +75,36 @@ pub struct RawModelUsage {
     pub usage: TokenUsage,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionActivity {
+    pub engine_id: String,
+    pub session_id: String,
+    pub project_path: Option<String>,
+    pub updated_at: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct EngineUsageContribution {
+    pub id: String,
+    pub engine_id: String,
+    pub date: NaiveDate,
+    pub timestamp: String,
+    pub model: Option<String>,
+    pub usage: TokenUsage,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct EngineUsageData {
+    pub source_available: bool,
+    pub contributions: Vec<EngineUsageContribution>,
+    pub sessions: Vec<SessionActivity>,
+}
+
 /// 单条 assistant 行的贡献；model 存原始串，归一化延后到聚合阶段
 /// （distinct 模型数有限，避免在 10 万级热路径上跑 regex）
 struct Contribution {
+    engine_id: String,
     date: NaiveDate,
     model: Option<String>,
     snapshot: UsageSnapshot,
@@ -141,6 +186,7 @@ fn scan_file(path: &Path) -> Buckets {
         rows.push((
             msg.id,
             Contribution {
+                engine_id: "claude-code".into(),
                 date,
                 model: msg.model,
                 snapshot: UsageSnapshot::new(
@@ -240,6 +286,7 @@ fn cached_to_buckets(cached: CachedUsage) -> Buckets {
                     (
                         id,
                         Contribution {
+                            engine_id: "claude-code".into(),
                             date,
                             model: c.model,
                             snapshot: c.snapshot,
@@ -255,6 +302,7 @@ fn cached_to_buckets(cached: CachedUsage) -> Buckets {
             NaiveDate::parse_from_str(&c.date, "%Y-%m-%d")
                 .ok()
                 .map(|date| Contribution {
+                    engine_id: "claude-code".into(),
                     date,
                     model: c.model,
                     snapshot: c.snapshot,
@@ -306,11 +354,8 @@ fn normalize_model(raw: &str, date_suffix: &Regex, version_tail: &Regex) -> Stri
     s.into_owned()
 }
 
-/// 全量扫描 ~/.claude/projects/ 并聚合。同步阻塞实现，command 层负责丢进 blocking 线程
-pub fn collect_usage_stats() -> Result<UsageStats, String> {
+fn collect_claude_usage() -> Result<(Buckets, Vec<SessionActivity>), String> {
     let root = crate::config::projects_dir();
-    // 显式探测一次：不存在与不可读（EACCES 时 is_dir 仍为 true）都要走 Err，
-    // 否则 collect_jsonl 静默吞错会让前端把「读不到」误显示为「本月 0 用量」
     std::fs::read_dir(&root).map_err(|e| format!("会话数据目录不可读 {}: {e}", root.display()))?;
 
     let mut files = Vec::new();
@@ -327,77 +372,271 @@ pub fn collect_usage_stats() -> Result<UsageStats, String> {
             .unwrap_or(true)
     });
 
+    let sessions = files
+        .iter()
+        .filter(|path| {
+            !path
+                .components()
+                .any(|component| component.as_os_str() == "subagents")
+                && !path.file_name().is_some_and(|name| {
+                    name.to_string_lossy().starts_with("agent-")
+                })
+        })
+        .filter_map(|path| claude_session_activity(path, &root))
+        .collect();
+
     let buckets = files
         .par_iter()
         .map(|p| scan_file_cached(p))
         .reduce(Buckets::default, Buckets::merge);
 
-    let today = Local::now().date_naive();
-    // 16 周窗口起点 = 本周一往前 15 周（最后一列为本周）
+    Ok((buckets, sessions))
+}
+
+fn claude_session_activity(path: &Path, root: &Path) -> Option<SessionActivity> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let updated_at = metadata
+        .modified()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let session_id = path.file_stem()?.to_string_lossy().into_owned();
+    let mut project_path = None;
+    if let Ok(file) = File::open(path) {
+        for line in BufReader::new(file).lines().take(32).flatten() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            project_path = value
+                .get("cwd")
+                .and_then(serde_json::Value::as_str)
+                .filter(|cwd| !cwd.trim().is_empty())
+                .map(String::from);
+            if project_path.is_some() {
+                break;
+            }
+        }
+    }
+    if project_path.is_none() {
+        project_path = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .map(|component| component.as_os_str().to_string_lossy())
+            .map(|encoded| {
+                encoded
+                    .strip_prefix('-')
+                    .map(|value| format!("/{}", value.replace('-', "/")))
+                    .unwrap_or_else(|| encoded.replace('-', "/"))
+            });
+    }
+    Some(SessionActivity {
+        engine_id: "claude-code".into(),
+        session_id,
+        project_path,
+        updated_at,
+    })
+}
+
+#[derive(Default)]
+struct UsageAccumulator {
+    total: u64,
+    daily: HashMap<NaiveDate, u64>,
+    month_total: u64,
+    by_model: HashMap<String, u64>,
+    by_raw_model: HashMap<String, TokenUsage>,
+}
+
+impl UsageAccumulator {
+    fn add(
+        &mut self,
+        contribution: &Contribution,
+        today: NaiveDate,
+        window_start: NaiveDate,
+        date_suffix: &Regex,
+        version_tail: &Regex,
+    ) {
+        let usage = &contribution.snapshot.usage;
+        let tokens = usage.total();
+        if contribution.date <= today {
+            self.total += tokens;
+        }
+        if contribution.date >= window_start && contribution.date <= today {
+            *self.daily.entry(contribution.date).or_default() += tokens;
+        }
+        if contribution.date.year() == today.year()
+            && contribution.date.month() == today.month()
+            && contribution.date <= today
+        {
+            self.month_total += tokens;
+            let model = contribution
+                .model
+                .as_deref()
+                .map(|model| normalize_model(model, date_suffix, version_tail))
+                .unwrap_or_else(|| "未知".to_string());
+            *self.by_model.entry(model).or_default() += tokens;
+            self.by_raw_model
+                .entry(contribution.model.clone().unwrap_or_default())
+                .or_default()
+                .accumulate(usage);
+        }
+    }
+
+    fn finish(self) -> (u64, Vec<DailyUsage>, MonthUsage) {
+        let mut daily: Vec<DailyUsage> = self
+            .daily
+            .into_iter()
+            .map(|(date, total)| DailyUsage {
+                date: date.format("%Y-%m-%d").to_string(),
+                total,
+            })
+            .collect();
+        daily.sort_unstable_by(|left, right| left.date.cmp(&right.date));
+
+        let mut by_model: Vec<ModelUsage> = self
+            .by_model
+            .into_iter()
+            .map(|(model, total)| ModelUsage { model, total })
+            .collect();
+        by_model.sort_unstable_by_key(|model| std::cmp::Reverse(model.total));
+
+        let mut by_raw_model: Vec<RawModelUsage> = self
+            .by_raw_model
+            .into_iter()
+            .map(|(model, usage)| RawModelUsage { model, usage })
+            .collect();
+        by_raw_model.sort_unstable_by_key(|model| std::cmp::Reverse(model.usage.total()));
+
+        (
+            self.total,
+            daily,
+            MonthUsage {
+                total: self.month_total,
+                by_model,
+                by_raw_model,
+            },
+        )
+    }
+}
+
+fn aggregate_usage(
+    buckets: Buckets,
+    sessions: Vec<SessionActivity>,
+    today: NaiveDate,
+) -> Result<UsageStats, String> {
     let days_from_monday = today.weekday().num_days_from_monday() as i64;
     let window_start = today - chrono::Duration::days(days_from_monday + 15 * 7);
 
     let date_suffix = Regex::new(r"-\d{8}$").map_err(|e| e.to_string())?;
     let version_tail = Regex::new(r"-(\d+)-(\d+)$").map_err(|e| e.to_string())?;
 
-    let mut daily: HashMap<NaiveDate, u64> = HashMap::new();
-    let mut by_model: HashMap<String, u64> = HashMap::new();
-    let mut by_raw_model: HashMap<String, TokenUsage> = HashMap::new();
-    let mut month_total: u64 = 0;
-
-    for c in buckets.by_id.into_values().chain(buckets.anon) {
-        let usage = &c.snapshot.usage;
-        let tokens = usage.total();
-        if c.date >= window_start && c.date <= today {
-            *daily.entry(c.date).or_default() += tokens;
-        }
-        // 上界与 daily 同口径：时钟漂移产生的未来时戳不计入月度
-        if c.date.year() == today.year() && c.date.month() == today.month() && c.date <= today {
-            month_total += tokens;
-            let model = c
-                .model
-                .as_deref()
-                .map(|m| normalize_model(m, &date_suffix, &version_tail))
-                .unwrap_or_else(|| "未知".to_string());
-            *by_model.entry(model).or_default() += tokens;
-            by_raw_model
-                .entry(c.model.unwrap_or_default())
-                .or_default()
-                .accumulate(usage);
-        }
+    let mut aggregate = UsageAccumulator::default();
+    let mut engines: HashMap<String, UsageAccumulator> = HashMap::new();
+    for session in &sessions {
+        engines.entry(session.engine_id.clone()).or_default();
+    }
+    for contribution in buckets.by_id.into_values().chain(buckets.anon) {
+        aggregate.add(
+            &contribution,
+            today,
+            window_start,
+            &date_suffix,
+            &version_tail,
+        );
+        engines.entry(contribution.engine_id.clone()).or_default().add(
+            &contribution,
+            today,
+            window_start,
+            &date_suffix,
+            &version_tail,
+        );
     }
 
-    let mut daily: Vec<DailyUsage> = daily
+    let (total, daily, month) = aggregate.finish();
+    let mut by_engine: Vec<EngineUsageStats> = engines
         .into_iter()
-        .map(|(date, total)| DailyUsage {
-            date: date.format("%Y-%m-%d").to_string(),
-            total,
+        .map(|(engine_id, usage)| {
+            let (total, daily, month) = usage.finish();
+            EngineUsageStats {
+                engine_id,
+                total,
+                daily,
+                month,
+            }
         })
         .collect();
-    daily.sort_unstable_by(|a, b| a.date.cmp(&b.date));
-
-    let mut by_model: Vec<ModelUsage> = by_model
-        .into_iter()
-        .map(|(model, total)| ModelUsage { model, total })
-        .collect();
-    by_model.sort_unstable_by_key(|m| std::cmp::Reverse(m.total));
-
-    let mut by_raw_model: Vec<RawModelUsage> = by_raw_model
-        .into_iter()
-        .map(|(model, usage)| RawModelUsage { model, usage })
-        .collect();
-    by_raw_model.sort_unstable_by_key(|m| std::cmp::Reverse(m.usage.total()));
-
-    cache::flush();
+    by_engine.sort_unstable_by(|left, right| left.engine_id.cmp(&right.engine_id));
 
     Ok(UsageStats {
+        total,
         daily,
-        month: MonthUsage {
-            total: month_total,
-            by_model,
-            by_raw_model,
-        },
+        month,
+        by_engine,
+        sessions,
     })
+}
+
+/// 聚合所有可用引擎的本地用量。单个引擎数据源不可读时，其余引擎仍可工作；
+/// 只有所有来源都不可用时才返回错误。
+pub fn collect_usage_stats() -> Result<UsageStats, String> {
+    let mut buckets = Buckets::default();
+    let mut sessions = Vec::new();
+    let mut source_available = false;
+    let mut source_errors = Vec::new();
+
+    match collect_claude_usage() {
+        Ok((claude_buckets, claude_sessions)) => {
+            source_available = true;
+            buckets = buckets.merge(claude_buckets);
+            sessions.extend(claude_sessions);
+        }
+        Err(error) => source_errors.push(error),
+    }
+
+    let codex = crate::engines::codex::collect_local_usage();
+    source_available |= codex.source_available;
+    let mut codex_buckets = Buckets::default();
+    for contribution in codex.contributions {
+        codex_buckets.by_id.insert(
+            contribution.id,
+            Contribution {
+                engine_id: contribution.engine_id,
+                date: contribution.date,
+                model: contribution.model,
+                snapshot: UsageSnapshot::new(
+                    contribution.usage,
+                    Some("complete"),
+                    Some(contribution.timestamp),
+                    contribution.sequence,
+                ),
+            },
+        );
+    }
+    buckets = buckets.merge(codex_buckets);
+    sessions.extend(codex.sessions);
+
+    if !source_available {
+        return Err(source_errors
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "没有可读取的引擎会话数据目录".into()));
+    }
+
+    let mut unique_sessions: HashMap<(String, String), SessionActivity> = HashMap::new();
+    for session in sessions {
+        let key = (session.engine_id.clone(), session.session_id.clone());
+        match unique_sessions.get(&key) {
+            Some(current) if current.updated_at >= session.updated_at => {}
+            _ => {
+                unique_sessions.insert(key, session);
+            }
+        }
+    }
+    let sessions = unique_sessions.into_values().collect();
+    let stats = aggregate_usage(buckets, sessions, Local::now().date_naive())?;
+    cache::flush();
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -452,6 +691,7 @@ mod tests {
     #[test]
     fn cache_creation_inference_skips_openai_models() {
         let contribution = |model: &str, cc: u64, cr: u64, sequence: u64| Contribution {
+            engine_id: "claude-code".into(),
             date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
             model: Some(model.into()),
             snapshot: UsageSnapshot::new(
@@ -504,6 +744,67 @@ mod tests {
             ),
             (0, 4000),
             "GPT 缓存字段保持上游原值"
+        );
+    }
+
+    #[test]
+    fn aggregates_engines_while_preserving_breakdown() {
+        let contribution = |engine_id: &str, model: &str, total: u64| Contribution {
+            engine_id: engine_id.into(),
+            date: NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(),
+            model: Some(model.into()),
+            snapshot: UsageSnapshot::new(
+                TokenUsage {
+                    input_tokens: total,
+                    ..TokenUsage::default()
+                },
+                Some("complete"),
+                Some("2026-08-10T08:00:00Z".into()),
+                total,
+            ),
+        };
+        let mut buckets = Buckets::default();
+        buckets.by_id.insert(
+            "claude-message".into(),
+            contribution("claude-code", "claude-opus-4-6", 10),
+        );
+        buckets.by_id.insert(
+            "codex-event".into(),
+            contribution("codex", "gpt-5.6-sol", 20),
+        );
+        let sessions = vec![
+            SessionActivity {
+                engine_id: "claude-code".into(),
+                session_id: "claude-session".into(),
+                project_path: Some("/workspace/project".into()),
+                updated_at: 1,
+            },
+            SessionActivity {
+                engine_id: "codex".into(),
+                session_id: "codex-session".into(),
+                project_path: Some("/workspace/project".into()),
+                updated_at: 2,
+            },
+        ];
+
+        let stats = aggregate_usage(
+            buckets,
+            sessions,
+            NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(stats.month.total, 30);
+        assert_eq!(stats.total, 30);
+        assert_eq!(stats.daily[0].total, 30);
+        assert_eq!(stats.sessions.len(), 2);
+        assert_eq!(
+            stats
+                .by_engine
+                .iter()
+                .map(|engine| (engine.engine_id.as_str(), engine.month.total))
+                .collect::<Vec<_>>(),
+            vec![("claude-code", 10), ("codex", 20)]
         );
     }
 
