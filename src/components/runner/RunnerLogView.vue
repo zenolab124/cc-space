@@ -3,11 +3,12 @@
  * Runner 日志查看器
  * 工具栏 + 虚拟化日志体 + 自动滚动页脚
  */
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { parseAnsi, stripAnsi } from '@/utils/ansi'
 import type { RunnerSnapshot, LogLine } from '@/types'
+import { shouldCompensateVirtualItemSizeChange } from '@/lib/sessionScrollPolicy'
 
 const props = defineProps<{
   runner: RunnerSnapshot | null
@@ -51,38 +52,167 @@ const tailLines = computed(() => {
 // ---- 滚动容器 & 自动滚动 ----
 const scrollEl = ref<HTMLElement | null>(null)
 const atBottom = ref(true)
+const followLogs = ref(true)
+const BOTTOM_THRESHOLD = 30
+const ACTIVE_SCROLL_INTENT_MS = 500
+let scrollFollowGeneration = 0
+let scrollRequestId = 0
+let lastScrollTop = 0
+let downwardIntentAt = Number.NEGATIVE_INFINITY
+let upwardIntentAt = Number.NEGATIVE_INFINITY
+let virtualAdjustmentUntil = Number.NEGATIVE_INFINITY
+
+function distanceFromBottom(el: HTMLElement): number {
+  return Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+}
+
+function invalidateScrollRequests() {
+  scrollFollowGeneration++
+  scrollRequestId++
+}
+
+function stopFollowingLogs() {
+  followLogs.value = false
+  invalidateScrollRequests()
+}
+
+function resumeFollowingLogs() {
+  if (!followLogs.value) invalidateScrollRequests()
+  followLogs.value = true
+}
+
+function onLogWheel(event: WheelEvent) {
+  const now = performance.now()
+  if (event.deltaY < 0) {
+    upwardIntentAt = now
+    stopFollowingLogs()
+    return
+  }
+  if (event.deltaY <= 0) return
+  downwardIntentAt = now
+  const el = scrollEl.value
+  // 已经由滚动条/键盘到达底部后，向下滚轮可能不会再产生 scroll 事件。
+  if (el && distanceFromBottom(el) <= BOTTOM_THRESHOLD) resumeFollowingLogs()
+}
 
 function onScroll() {
   if (!scrollEl.value) return
   const el = scrollEl.value
-  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 30
+  const now = performance.now()
+  const nextScrollTop = el.scrollTop
+  const delta = nextScrollTop - lastScrollTop
+  const reachedBottom = distanceFromBottom(el) <= BOTTOM_THRESHOLD
+  lastScrollTop = nextScrollTop
+  atBottom.value = reachedBottom
+
+  // wheel 之外的上滚（滚动条、键盘）也必须同步取消已排队的滚底。
+  if (delta < -0.5 && !reachedBottom) {
+    upwardIntentAt = now
+    if (followLogs.value) stopFollowingLogs()
+    return
+  }
+
+  // 只认近期用户向下意图。虚拟项首次测量也会写 scrollTop，不能借此恢复跟随。
+  if (
+    !followLogs.value
+    && reachedBottom
+    && delta > 0.5
+    && downwardIntentAt > upwardIntentAt
+    && now - downwardIntentAt <= ACTIVE_SCROLL_INTENT_MS
+    && now >= virtualAdjustmentUntil
+  ) {
+    resumeFollowingLogs()
+  }
 }
 
-function scrollToEnd() {
-  nextTick(() => {
-    if (!scrollEl.value) return
-    scrollEl.value.scrollTop = scrollEl.value.scrollHeight
+function requestScrollToEnd(allowLayoutReset = false) {
+  if (!followLogs.value) return
+  const generation = scrollFollowGeneration
+  const requestId = ++scrollRequestId
+  const scheduledElement = scrollEl.value
+  const scheduledScrollTop = scheduledElement?.scrollTop ?? 0
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      const el = scrollEl.value
+      if (
+        !followLogs.value
+        || generation !== scrollFollowGeneration
+        || requestId !== scrollRequestId
+        || !el
+        || (scheduledElement !== null && el !== scheduledElement)
+      ) return
+      // scroll 回调若尚未运行，位置本身的上移仍能使旧请求失效。
+      if (
+        !allowLayoutReset
+        && el.scrollTop < scheduledScrollTop - 0.5
+        && distanceFromBottom(el) > BOTTOM_THRESHOLD
+      ) {
+        upwardIntentAt = performance.now()
+        stopFollowingLogs()
+        return
+      }
+      el.scrollTop = el.scrollHeight
+      lastScrollTop = el.scrollTop
+      atBottom.value = true
+    })
   })
 }
 
 // 切换 runner 时重置滚底状态并立即滚到底部
 watch(() => props.runner?.id, () => {
+  invalidateScrollRequests()
+  followLogs.value = true
   atBottom.value = true
-  nextTick(scrollToEnd)
+  downwardIntentAt = Number.NEGATIVE_INFINITY
+  upwardIntentAt = Number.NEGATIVE_INFINITY
+  lastScrollTop = scrollEl.value?.scrollTop ?? 0
+  requestScrollToEnd(true)
 }, { immediate: true })
 
 // 新行到达时若在底部则自动滚
 watch(() => filteredLines.value.length, () => {
-  if (atBottom.value) scrollToEnd()
+  if (followLogs.value) requestScrollToEnd()
 })
 
 // ---- 虚拟化 ----
+const virtualLineKeys = computed(() => {
+  const runnerId = props.runner?.id ?? 'none'
+  return virtualLines.value.map((line, index) => `${runnerId}:${line.seq ?? index}`)
+})
+const virtualLineKeySnapshot = shallowRef<readonly string[]>([])
+const virtualLineKeyExtractor = shallowRef<(index: number) => string>(
+  index => `none:${index}`,
+)
+
+watch(virtualLineKeys, (keys) => {
+  const previous = virtualLineKeySnapshot.value
+  if (keys.length === previous.length && keys.every((key, index) => key === previous[index])) return
+  const snapshot = [...keys]
+  const runnerId = props.runner?.id ?? 'none'
+  virtualLineKeySnapshot.value = snapshot
+  virtualLineKeyExtractor.value = index => snapshot[index] ?? `${runnerId}:${index}`
+}, { immediate: true, flush: 'sync' })
+
 const virtualizer = useVirtualizer(computed(() => ({
   count: virtualLines.value.length,
   getScrollElement: () => scrollEl.value ?? null,
+  getItemKey: virtualLineKeyExtractor.value,
   estimateSize: () => 20,
   overscan: 20,
 })))
+
+virtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) => {
+  const shouldAdjust = shouldCompensateVirtualItemSizeChange({
+    scrollDirection: instance.scrollDirection,
+    upwardGestureActive: performance.now() - upwardIntentAt < 220,
+    itemStart: item.start,
+    itemSize: item.size,
+    scrollOffset: instance.scrollOffset ?? 0,
+    delta,
+  })
+  if (shouldAdjust) virtualAdjustmentUntil = performance.now() + 80
+  return shouldAdjust
+}
 
 // ---- 时长计时 ----
 const now = ref(Date.now())
@@ -213,13 +343,13 @@ function onStop() {
       </div>
 
       <!-- 日志体 -->
-      <div ref="scrollEl" class="log-body" @scroll="onScroll">
+      <div ref="scrollEl" class="log-body" @wheel.passive="onLogWheel" @scroll.passive="onScroll">
         <!-- 虚拟化模式 -->
         <template v-if="shouldVirtualize">
           <div :style="{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }">
             <div
               v-for="vRow in virtualizer.getVirtualItems()"
-              :key="vRow.index"
+              :key="String(vRow.key)"
               :style="{
                 position: 'absolute',
                 top: `${vRow.start}px`,
@@ -259,7 +389,7 @@ function onStop() {
 
       <!-- 页脚 -->
       <div class="log-foot">
-        <template v-if="atBottom && (runner.status === 'running' || runner.status === 'starting')">
+        <template v-if="followLogs && atBottom && (runner.status === 'running' || runner.status === 'starting')">
           <span class="pulse" />
           <span>{{ t('runner.following') }}</span>
         </template>

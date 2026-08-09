@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onUnmounted, provide, inject, type ComputedRef } from 'vue'
+import { ref, shallowRef, computed, watch, nextTick, onMounted, onUnmounted, provide, inject, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useConfirm } from '@/composables/useConfirm'
 import { invoke } from '@tauri-apps/api/core'
@@ -65,6 +65,7 @@ import UserMsgContent from './UserMsgContent.vue'
 import SessionSurface from './session/SessionSurface.vue'
 import SessionComposer from './session/SessionComposer.vue'
 import SessionComposerField from './session/SessionComposerField.vue'
+import { shouldSubmitComposer } from './session/composerAction'
 import SessionViewport from './session/SessionViewport.vue'
 import SessionContentState from './session/SessionContentState.vue'
 import SessionBackToBottom from './session/SessionBackToBottom.vue'
@@ -91,8 +92,22 @@ import { persistKeyOf } from '@/lib/stream-markdown/constants'
 import { useFileLedger } from '@/composables/useFileLedger'
 import FileLedgerPanel from './FileLedgerPanel.vue'
 import RunnerPanel from './runner/RunnerPanel.vue'
-import { useVirtualizer } from '@tanstack/vue-virtual'
+import {
+  elementScroll,
+  measureElement as measureVirtualElement,
+  useVirtualizer,
+  type Virtualizer,
+} from '@tanstack/vue-virtual'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
+import {
+  canApplyScrollFollowToken,
+  captureScrollFollowToken,
+  createScrollFollowState,
+  shouldCompensateVirtualItemSizeChange,
+  stableMessageGroupKey,
+  transitionScrollFollow,
+  type ScrollFollowToken,
+} from '@/lib/sessionScrollPolicy'
 import { useRunners } from '@/composables/useRunners'
 import {
   TOOL_EXECUTION_CONTEXT,
@@ -664,14 +679,13 @@ watch(effectiveSessionId, () => {
   hideHistory.value = false
   showHelpCard.value = false
   slashNotice.value = null
-  followStreaming.value = true
+  resumeFollow(true)
   featureBannerShown.value = false
   bannerResumed.value = false
   bannerCwd.value = ''
   bannerHookEvents.value = []
   lastScrollTop = 0
-  lastSnapScrollTop = 0
-  })
+})
 
 // --- 权限请求(仅工作台列交互;档案馆只读不渲染) ---
 const permissionRequest = currentForSession(effectiveSessionId)
@@ -946,7 +960,7 @@ function restoreReleasedHistory() {
     true,
     forkSourceOf(cs.summary.id) ?? undefined,
   ).then(() => {
-    if (followStreaming.value) scrollToBottom(true)
+    if (followStreaming.value) scrollToBottom()
   })
 }
 
@@ -1341,6 +1355,91 @@ const lastGroup = computed(() => {
 })
 const lastGroupIndex = computed(() => messageGroups.value.length - 1)
 
+function messageGroupKey(group: MsgGroup, index: number): string {
+  return stableMessageGroupKey(
+    effectiveSessionId.value ?? 'no-session',
+    group,
+    index,
+  )
+}
+
+// key 既供 Vue DOM diff，也供 virtualizer 的测量缓存使用。把 session scope
+// 带进 key，避免同一个详情组件切会话后按 index 复用上一会话的高度。
+const renderGroupKeys = computed(() =>
+  renderGroups.value.map((group, index) => messageGroupKey(group, index)),
+)
+const groupKeySnapshot = shallowRef<readonly string[]>([])
+const groupKeyExtractor = shallowRef<(index: number) => string>(
+  index => JSON.stringify(['no-session', `missing:${index}`]),
+)
+
+// 流式最后一组每个 tick 都会重建派生数组，但历史组 key 通常未变。只有 key
+// 序列真的变化时才换 extractor 引用，避免 virtual-core 反复失效整批 measurement。
+watch(renderGroupKeys, (keys) => {
+  const previous = groupKeySnapshot.value
+  if (keys.length === previous.length && keys.every((key, index) => key === previous[index])) return
+  const snapshot = [...keys]
+  const sessionId = effectiveSessionId.value ?? 'no-session'
+  groupKeySnapshot.value = snapshot
+  groupKeyExtractor.value = index => snapshot[index] ?? JSON.stringify([
+    sessionId,
+    `missing:${index}`,
+  ])
+}, { immediate: true, flush: 'sync' })
+
+// 末组从直铺区迁入虚拟区前先保存真高；estimateSize 首帧直接使用，避免
+// 4000px 长回复先退回 200px、WebKit clamp scrollTop 后再校正的中间帧。
+const groupHeightEstimates = new Map<string, number>()
+const virtualBoxRef = ref<HTMLElement>()
+let virtualBoxOrigin = 0
+let virtualBoxOriginReady = false
+
+function updateVirtualBoxOrigin(): void {
+  const sc = scrollContainer.value
+  const box = virtualBoxRef.value
+  if (!sc || !box) {
+    virtualBoxOrigin = 0
+    virtualBoxOriginReady = false
+    return
+  }
+  virtualBoxOrigin = box.getBoundingClientRect().top
+    - sc.getBoundingClientRect().top
+    + sc.scrollTop
+  virtualBoxOriginReady = true
+}
+
+function measureMessageGroupElement(
+  element: Element,
+  entry: ResizeObserverEntry | undefined,
+  instance: Virtualizer<HTMLElement, Element>,
+): number {
+  const index = instance.indexFromElement(element)
+  if (!virtualBoxOriginReady) {
+    const sc = scrollContainer.value
+    const box = element.parentElement
+    if (sc && box) {
+      virtualBoxOrigin = box.getBoundingClientRect().top
+        - sc.getBoundingClientRect().top
+        + sc.scrollTop
+      virtualBoxOriginReady = true
+    }
+  }
+  const size = measureVirtualElement(element, entry, instance)
+  const key = instance.options.getItemKey(index)
+  if (size > 0) groupHeightEstimates.set(String(key), size)
+  return size
+}
+
+const scrollMessageVirtualizer = (
+  offset: number,
+  options: { adjustments?: number; behavior?: ScrollBehavior },
+  instance: Virtualizer<HTMLElement, Element>,
+) => {
+  const sc = instance.scrollElement as HTMLElement | null
+  elementScroll(offset, options, instance)
+  if (sc) rememberProgrammaticScroll(sc, 'virtualizer')
+}
+
 // 虚拟化启用阈值:useVirtualizationSettings 共享 ref(SettingsView 里可调)
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
 const shouldVirtualize = computed(() => renderGroups.value.length > virtualizationThreshold.value)
@@ -1353,11 +1452,50 @@ const messageVirtualizer = useVirtualizer(
   computed(() => ({
     count: renderGroups.value.length,
     getScrollElement: () => scrollContainer.value ?? null,
-    estimateSize: () => 200,
+    getItemKey: groupKeyExtractor.value,
+    estimateSize: (index: number) =>
+      groupHeightEstimates.get(String(groupKeyExtractor.value(index))) ?? 200,
+    measureElement: measureMessageGroupElement,
+    scrollToFn: scrollMessageVirtualizer,
     gap: 16,
     overscan: 5,
   })),
 )
+
+// virtual-core 的默认“首次测量”只判断 item.start 在视口上方，即使用户正在
+// 上滚也会把 actual-estimate 直接加到 scrollTop。统一收紧为：手势静止、
+// 旧测量盒完整位于虚拟区视口上方时才允许补偿。
+messageVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) =>
+  shouldCompensateVirtualItemSizeChange({
+    scrollDirection: instance.scrollDirection,
+    upwardGestureActive: performance.now() - wheelUpIntentAt < 220,
+    itemStart: item.start,
+    itemSize: item.size,
+    scrollOffset: Math.max(0, (instance.scrollOffset ?? 0) - virtualBoxOrigin),
+    delta,
+  })
+
+watch(virtualBoxRef, (box) => {
+  if (box) void nextTick(updateVirtualBoxOrigin)
+}, { immediate: true })
+
+watch(shouldVirtualize, (enabled, wasEnabled) => {
+  if (enabled && !wasEnabled) rememberRenderedGroupHeights()
+  void nextTick(() => {
+    updateVirtualBoxOrigin()
+    messageVirtualizer.value.measure()
+  })
+})
+
+watch(effectiveSessionId, () => {
+  groupHeightEstimates.clear()
+  virtualBoxOrigin = 0
+  virtualBoxOriginReady = false
+  void nextTick(() => {
+    messageVirtualizer.value.measure()
+    updateVirtualBoxOrigin()
+  })
+})
 
 // ---- 滚动锚定补偿（WebKit 无原生 scroll anchoring）----
 // 消息组解冻（content-visibility 估算高度→真实高度）与图片按需加载都会改变
@@ -1436,7 +1574,6 @@ onMounted(() => {
       // "用户上滚"而静默关闭跟随);clamp 时以实际生效量为准
       const actual = sc.scrollTop - before
       lastScrollTop += actual
-      lastSnapScrollTop += actual
     }
     performance.measure('anchor-comp', { start: perfT0, duration: performance.now() - perfT0 })
   })
@@ -1448,7 +1585,10 @@ onUnmounted(() => {
   posIO?.disconnect()
   posIO = null
 })
-watch(messageGroups, () => nextTick(observeAnchorGroups))
+watch(messageGroups, () => nextTick(() => {
+  updateVirtualBoxOrigin()
+  observeAnchorGroups()
+}))
 
 function userTextPreview(record: VisibleRecord): string {
   if (record.type !== 'user' || !record.message) return ''
@@ -1783,7 +1923,7 @@ function handleNativeCommand(cmd: SlashCommand) {
   switch (cmd.name) {
     case 'help':
       showHelpCard.value = true
-      scrollToBottom(true)
+      resumeFollow()
       break
     case 'clear':
       clearCurrentPaneView()
@@ -1863,14 +2003,13 @@ async function handleSend() {
   // unknown / 普通文本:走原始流式发送
   inputText.value = ''
   if (textareaRef.value) textareaRef.value.style.height = 'auto'
-  followStreaming.value = true
+  const sendFollowToken = resumeFollow()
   featureBannerShown.value = false
   // 发送前即时落账:上一轮流式 turns 还在时,sendMessage 会清 streamingTurns
   // 但 records 尚未 reload——内容从两源同时消失。先应用暂存/重新 reload 收进历史区
   if (stream.value.streamingTurns.length > 0) {
-    pinLastGroupBeforeSwap()
-    devObserveSwap('send-swap')
     if (deferredRecords?.sid === cs.summary.id) {
+      devObserveSwap('send-swap')
       records.value = deferredRecords.recs
       deferredRecords = null
     } else {
@@ -1880,6 +2019,7 @@ async function handleSend() {
           sessionId: cs.summary.id,
         })
         if (effectiveSessionId.value === cs.summary.id && fresh.length >= records.value.length) {
+          devObserveSwap('send-swap')
           records.value = fresh
         }
       } catch { /* next reload will pick it up */ }
@@ -1907,95 +2047,147 @@ async function handleSend() {
     return
   }
   await sendMessage(cs.summary.id, cs.summary.cwd, text, opts)
-  scrollToBottom(true)
+  scrollToBottom(sendFollowToken)
 }
 
 function onInputKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (shouldSubmitComposer(e)) {
     e.preventDefault()
     handleSend()
   }
 }
 
 const followStreaming = ref(true)
-provide(TOOL_FOLD_INTERACTION, () => {
-  followStreaming.value = false
-})
+let scrollFollowState = createScrollFollowState()
 let lastScrollTop = 0
-let lastSnapScrollTop = 0
-let resumedAt = 0
-let scrollCoalesced = false
 let scrollRafId = 0
-let programmaticScroll = false
-let programmaticTimer = 0
+let scrollBottomRequestId = 0
+let scrollBottomQueuedEpoch: number | null = null
+
+interface ProgrammaticScrollWrite {
+  target: number
+  at: number
+  source: 'follow' | 'virtualizer' | 'anchor' | 'navigation'
+}
+
+let programmaticScrollWrite: ProgrammaticScrollWrite | null = null
+
+function cancelPendingFollowWrites(): void {
+  scrollBottomRequestId++
+  scrollBottomQueuedEpoch = null
+  if (followScrollTimer !== null) window.clearTimeout(followScrollTimer)
+  followScrollTimer = null
+  followScrollScheduledAt = Number.POSITIVE_INFINITY
+  followScrollToken = null
+  followScrollSessionId = null
+  followScrollElement = null
+  followScrollTop = 0
+}
+
+function detachFollow(): void {
+  scrollFollowState = transitionScrollFollow(scrollFollowState, 'detach')
+  followStreaming.value = false
+  cancelPendingFollowWrites()
+}
+
+function resumeFollow(allowLayoutReset = false): ScrollFollowToken | null {
+  scrollFollowState = transitionScrollFollow(scrollFollowState, 'resume')
+  followStreaming.value = true
+  wheelUpIntentAt = Number.NEGATIVE_INFINITY
+  cancelPendingFollowWrites()
+  const token = captureScrollFollowToken(scrollFollowState)
+  scrollToBottom(token, allowLayoutReset)
+  return token
+}
+
+function preserveFollowAfterStreamFinished(): void {
+  scrollFollowState = transitionScrollFollow(scrollFollowState, 'stream-finished')
+  followStreaming.value = scrollFollowState.mode === 'following'
+}
+
+function isScrollGenerationCurrent(epoch: number, sessionId: string | null): boolean {
+  return scrollFollowState.epoch === epoch
+    && (effectiveSessionId.value ?? null) === sessionId
+}
+
+function rememberProgrammaticScroll(
+  element: HTMLElement,
+  source: ProgrammaticScrollWrite['source'],
+): void {
+  programmaticScrollWrite = {
+    target: element.scrollTop,
+    at: performance.now(),
+    source,
+  }
+  lastScrollTop = element.scrollTop
+}
+
+function consumeProgrammaticScrollEvent(element: HTMLElement): boolean {
+  const write = programmaticScrollWrite
+  if (!write) return false
+  programmaticScrollWrite = null
+  return performance.now() - write.at < 160
+    && Math.abs(element.scrollTop - write.target) < 1.5
+}
+
+provide(TOOL_FOLD_INTERACTION, detachFollow)
 
 /** 最近一次滚轮上滚意图时刻:窗口期内 contentRO 暂停贴底。
  *  没有它,用户上滚与打字机/图片增高同帧竞争时,RO 在 layout 后把位置贴回、
  *  onScroll 事后读到的已是贴底值——脱离手势被吞,表现为"滚不上去被拽回" */
-let wheelUpIntentAt = 0
-
-/** 亚阈值上滚累积:单次 |deltaY|≤3 的极缓滚轮不触发脱离、又被 contentRO 逐帧
- *  贴回,曾表现为"流式期缓慢上滚永远滚不上去"(审计遗留⑤)。200ms 窗口内累积
- *  凑够阈值同样视为有效上滚;下滚清零,方向交替的触控板噪声天然被挡 */
-let wheelUpAcc = 0
-let wheelAccAt = 0
+let wheelUpIntentAt = Number.NEGATIVE_INFINITY
+let wheelDownIntentAt = Number.NEGATIVE_INFINITY
 
 function onScrollWheel(e: WheelEvent) {
-  if (e.deltaY >= 0) {
-    wheelUpAcc = 0
+  const now = performance.now()
+  if (e.deltaY > 0) {
+    wheelDownIntentAt = now
+    const element = scrollContainer.value
+    if (
+      !followStreaming.value
+      && element
+      && element.scrollHeight - element.scrollTop - element.clientHeight < 2
+    ) resumeFollow()
     return
   }
-  const now = performance.now()
-  if (now - wheelAccAt > 200) wheelUpAcc = 0
-  wheelAccAt = now
-  wheelUpAcc += e.deltaY
-  if (wheelUpAcc < -3) {
-    wheelUpAcc = 0
-    wheelUpIntentAt = now
-  }
+  if (e.deltaY >= 0) return
+  // 用户手势优先：第一帧负向 wheel 就同步脱离，不能等 scroll/rAF 后判定。
+  wheelUpIntentAt = now
+  detachFollow()
 }
 
 function onScroll() {
+  const element = scrollContainer.value
+  if (!element) return
+  const programmatic = consumeProgrammaticScrollEvent(element)
+  const delta = element.scrollTop - lastScrollTop
+  lastScrollTop = element.scrollTop
+  const distFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+
+  // rAF 之前先处理用户向上意图，覆盖滚动条拖拽、键盘滚动等非 wheel 路径。
+  if (!programmatic && delta < -0.5 && distFromBottom > 2) detachFollow()
+  if (
+    !programmatic
+    && !followStreaming.value
+    && delta > 0
+    && distFromBottom < 2
+    && performance.now() - wheelDownIntentAt < 350
+  ) {
+    resumeFollow()
+  }
+
   if (scrollRafId) return
   scrollRafId = requestAnimationFrame(() => {
     scrollRafId = 0
     const el = scrollContainer.value
     if (!el) return
     updateStickyGroup()
-    if (programmaticScroll) {
-      lastScrollTop = el.scrollTop
-      programmaticScroll = false
-      return
-    }
-    const delta = el.scrollTop - lastScrollTop
-    lastScrollTop = el.scrollTop
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (performance.now() - resumedAt < 300) return
-    if (delta < 0 && lastSnapScrollTop - el.scrollTop > 10 && distFromBottom > 5) {
-      followStreaming.value = false
-    } else if (delta > 0 && !followStreaming.value) {
-      // 恢复阈值必须窄:曾是 max(半屏,400),触控板惯性衰减的微小下滑就会在
-      // 距底几百 px 处误恢复跟随,contentRO 随即贴底=「还差几行被强制吸走」。
-      // 收紧为"几乎滚到底才算想回去",滚到底本身另有 dist<2 兜底
-      if (distFromBottom < 48) {
-        followStreaming.value = true
-        resumedAt = performance.now()
-        lastSnapScrollTop = el.scrollTop
-      }
-    }
-    // 兜底：到底部就恢复，不依赖 delta 方向
-    if (!followStreaming.value && distFromBottom < 2) {
-      followStreaming.value = true
-      resumedAt = performance.now()
-      lastSnapScrollTop = el.scrollTop
-    }
   })
 }
 
 // --- 虚拟化下的自绘吸顶层 ---
 // 虚拟项容器带 transform,原生 position:sticky 的包含块被劫持而失效(末组独立铺不受影响);
 // 改为滚动时计算视口顶部所在组,在滚动视口顶部渲染该组用户消息的克隆
-const virtualBoxRef = ref<HTMLElement>()
 const pendingStickyRef = ref<HTMLElement>()
 const stickyGroupIndex = ref(-1)
 
@@ -2070,6 +2262,7 @@ const pendingTimeLabel = computed(() => fullStamp(stream.value.pendingSentAt))
 
 function scrollToGroupIndex(i: number) {
   if (i < 0 || !shouldVirtualize.value) return
+  detachFollow()
   if (i >= renderGroups.value.length) {
     // 末组:滚到虚拟容器底部即末组顶
     const sc = scrollContainer.value
@@ -2077,6 +2270,7 @@ function scrollToGroupIndex(i: number) {
     if (!sc || !vbox) return
     const vTop = vbox.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
     sc.scrollTop = vTop + messageVirtualizer.value.getTotalSize()
+    rememberProgrammaticScroll(sc, 'navigation')
   } else {
     messageVirtualizer.value.scrollToIndex(i, { align: 'start' })
   }
@@ -2106,6 +2300,7 @@ watch(renderGroups, () => nextTick(updateStickyGroup))
 
 /** SessionAnchorNav 点击时的虚拟化前置:让目标组先进虚拟窗口渲染出来,再由 SessionAnchorNav 的 rAF 精调 offsetTop */
 function onAnchorScrollToIndex(index: number) {
+  detachFollow()
   if (shouldVirtualize.value && index < renderGroups.value.length) {
     messageVirtualizer.value.scrollToIndex(index, { align: 'start' })
   }
@@ -2116,7 +2311,10 @@ function locateToolUse(toolUseId: string) {
   // 1. 反查 tool_use 所在的组 gi,虚拟窗口内 scrollToIndex 到大致偏移
   // 2. rAF×2 后精调 scrollIntoView 到 tool_use 元素(第一帧让 virtualizer 布局落定,第二帧让 measureElement 校准真高)
   // 兼顾旧行为:目标已在 DOM(如末组或已渲染的窗口内)则同帧直接 scrollIntoView,避免多余延迟
-  followStreaming.value = false
+  detachFollow()
+  const scrollEpoch = scrollFollowState.epoch
+  const sessionId = effectiveSessionId.value ?? null
+  const valid = () => isScrollGenerationCurrent(scrollEpoch, sessionId)
   toolFoldState.requestReveal(toolUseId)
   const gi = messageGroups.value.findIndex(g =>
     g.responses.some(r => {
@@ -2131,12 +2329,22 @@ function locateToolUse(toolUseId: string) {
   }
   const tryImmediate = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`)
   if (tryImmediate) {
-    nextTick(() => requestAnimationFrame(() => {
-      const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`) ?? tryImmediate
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      highlight(el)
-      toolFoldState.clearRevealRequest(toolUseId)
-    }))
+    void nextTick(() => {
+      if (!valid()) {
+        toolFoldState.clearRevealRequest(toolUseId)
+        return
+      }
+      requestAnimationFrame(() => {
+        if (!valid()) {
+          toolFoldState.clearRevealRequest(toolUseId)
+          return
+        }
+        const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`) ?? tryImmediate
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        highlight(el)
+        toolFoldState.clearRevealRequest(toolUseId)
+      })
+    })
     return
   }
   if (gi < 0) {
@@ -2148,87 +2356,140 @@ function locateToolUse(toolUseId: string) {
     messageVirtualizer.value.scrollToIndex(gi, { align: 'center' })
   }
   // Step 2: rAF×2 后精调
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`)
-    if (!el) {
+  requestAnimationFrame(() => {
+    if (!valid()) {
       toolFoldState.clearRevealRequest(toolUseId)
       return
     }
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    highlight(el)
-    toolFoldState.clearRevealRequest(toolUseId)
-  }))
+    requestAnimationFrame(() => {
+      if (!valid()) {
+        toolFoldState.clearRevealRequest(toolUseId)
+        return
+      }
+      const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-tool-use-id="${escaped}"]`)
+      if (!el) {
+        toolFoldState.clearRevealRequest(toolUseId)
+        return
+      }
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      highlight(el)
+      toolFoldState.clearRevealRequest(toolUseId)
+    })
+  })
 }
 
 watch(toolDisplayMode, async () => {
   const sc = scrollContainer.value
   if (!sc) return
   const wasFollowing = followStreaming.value
+  const followToken = captureScrollFollowToken(scrollFollowState)
+  const scrollEpoch = scrollFollowState.epoch
+  const sessionId = effectiveSessionId.value ?? null
+  const valid = () => isScrollGenerationCurrent(scrollEpoch, sessionId)
   const scTop = sc.getBoundingClientRect().top
   const candidates = [...sc.querySelectorAll<HTMLElement>('[data-anchor-index]')]
   const anchor = candidates.find(el => el.getBoundingClientRect().bottom > scTop) ?? null
   const anchorIndex = anchor?.dataset.anchorIndex ?? null
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top - scTop : 0
+  const finishSwap = () => {
+    suppressAnchorCompensation = false
+    observeAnchorGroups()
+  }
 
   suppressAnchorCompensation = true
   await nextTick()
+  if (!valid()) {
+    finishSwap()
+    return
+  }
   messageVirtualizer.value.measure()
   await nextTick()
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (wasFollowing) {
-      scrollToBottom(true)
-    } else if (anchorIndex !== null) {
-      const nextAnchor = scrollContainer.value?.querySelector<HTMLElement>(`[data-anchor-index="${CSS.escape(anchorIndex)}"]`)
-      if (nextAnchor && scrollContainer.value) {
-        const nextTop = nextAnchor.getBoundingClientRect().top - scrollContainer.value.getBoundingClientRect().top
-        scrollContainer.value.scrollTop += nextTop - anchorOffset
-        lastScrollTop = scrollContainer.value.scrollTop
-        lastSnapScrollTop = scrollContainer.value.scrollTop
-      }
+  if (!valid()) {
+    finishSwap()
+    return
+  }
+  requestAnimationFrame(() => {
+    if (!valid()) {
+      finishSwap()
+      return
     }
-    suppressAnchorCompensation = false
-    observeAnchorGroups()
-  }))
+    requestAnimationFrame(() => {
+      if (!valid()) {
+        finishSwap()
+        return
+      }
+      if (wasFollowing) {
+        scrollToBottom(followToken)
+      } else if (anchorIndex !== null) {
+        const nextAnchor = scrollContainer.value?.querySelector<HTMLElement>(`[data-anchor-index="${CSS.escape(anchorIndex)}"]`)
+        if (nextAnchor && scrollContainer.value) {
+          const nextTop = nextAnchor.getBoundingClientRect().top - scrollContainer.value.getBoundingClientRect().top
+          scrollContainer.value.scrollTop += nextTop - anchorOffset
+          rememberProgrammaticScroll(scrollContainer.value, 'anchor')
+        }
+      }
+      finishSwap()
+    })
+  })
 })
 
-function resumeFollow() {
-  followStreaming.value = true
-  resumedAt = performance.now()
-  wheelUpIntentAt = 0
-  scrollToBottom(true)
-}
+function scrollToBottom(
+  token: ScrollFollowToken | null = captureScrollFollowToken(scrollFollowState),
+  allowLayoutReset = false,
+) {
+  if (!token || !canApplyScrollFollowToken(scrollFollowState, token)) return
+  if (scrollBottomQueuedEpoch === token.epoch) return
+  const sessionId = effectiveSessionId.value ?? null
+  const requestId = ++scrollBottomRequestId
+  scrollBottomQueuedEpoch = token.epoch
+  const scheduledElement = scrollContainer.value
+  const scheduledScrollTop = scheduledElement?.scrollTop ?? 0
+  const valid = () => requestId === scrollBottomRequestId
+    && isScrollGenerationCurrent(token.epoch, sessionId)
+    && canApplyScrollFollowToken(scrollFollowState, token)
 
-function scrollToBottom(force = false) {
-  if (!force && !followStreaming.value) return
-  if (scrollCoalesced) return
-  scrollCoalesced = true
-  // 仅在真的会产生位移时置 programmaticScroll:已贴底时写 scrollTop 无位移
-  // 无 scroll 事件,标志空转置位 50ms 会把期间的滚动条拖拽/键盘上滚吞成程序
-  // 滚动(审计遗留④——输入框每次按键都会走到这里,触发面很宽)
-  const applyScroll = (el: HTMLElement) => {
-    if (el.scrollTop >= el.scrollHeight - el.clientHeight) return
-    programmaticScroll = true
-    clearTimeout(programmaticTimer)
-    programmaticTimer = window.setTimeout(() => { programmaticScroll = false }, 50)
-    el.scrollTop = el.scrollHeight
-    lastSnapScrollTop = el.scrollTop
+  const userMovedUp = (element: HTMLElement) => !allowLayoutReset
+    && scheduledElement === element
+    && element.scrollTop < scheduledScrollTop - 0.5
+    && element.scrollHeight - element.scrollTop - element.clientHeight > 2
+
+  const applyScroll = (element: HTMLElement) => {
+    if (!valid()) return
+    if (userMovedUp(element)) {
+      wheelUpIntentAt = performance.now()
+      detachFollow()
+      return
+    }
+    const target = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (target - element.scrollTop > 0.5) {
+      element.scrollTop = target
+      rememberProgrammaticScroll(element, 'follow')
+    } else {
+      lastScrollTop = element.scrollTop
+    }
   }
-  nextTick(() => {
+
+  void nextTick(() => {
+    if (!valid()) return
     requestAnimationFrame(() => {
-      scrollCoalesced = false
-      const el = scrollContainer.value
-      if (!el) return
-      applyScroll(el)
-      // 内容刚挂载时 scrollHeight 可能还是 0，延迟重试一次
-      if (el.scrollHeight <= el.clientHeight) {
-        requestAnimationFrame(() => applyScroll(el))
+      if (!valid()) return
+      scrollBottomQueuedEpoch = null
+      const element = scrollContainer.value
+      if (!element) return
+      if (scheduledElement && element !== scheduledElement) return
+      applyScroll(element)
+      // 内容刚挂载时 scrollHeight 可能还是 0，第二帧再测一次；同样复核 ticket。
+      if (element.scrollHeight <= element.clientHeight) {
+        requestAnimationFrame(() => {
+          if (valid()) applyScroll(element)
+        })
       }
     })
   })
 }
 
 watch(() => stream.value.pendingUserMessage, (val) => {
-  if (val) scrollToBottom(true)
+  if (val) scrollToBottom()
 })
 
 // ---- 布局层滚动跟随(水平触发) ----
@@ -2240,33 +2501,62 @@ let contentRO: ResizeObserver | null = null
 let followScrollTimer: number | null = null
 let followScrollScheduledAt = Number.POSITIVE_INFINITY
 let lastFollowScrollAt = 0
+let followScrollToken: ScrollFollowToken | null = null
+let followScrollSessionId: string | null = null
+let followScrollElement: HTMLElement | null = null
+let followScrollTop = 0
 
 function applyFollowScroll() {
+  const token = followScrollToken
+  const sessionId = followScrollSessionId
+  const scheduledElement = followScrollElement
+  const scheduledScrollTop = followScrollTop
   followScrollTimer = null
   followScrollScheduledAt = Number.POSITIVE_INFINITY
-  if (!followStreaming.value) return
-  // 用户刚有上滚意图:让手势先走,onScroll/onScrollWheel 正常完成脱离判定
-  if (performance.now() - wheelUpIntentAt < 150) return
+  followScrollToken = null
+  followScrollSessionId = null
+  followScrollElement = null
+  followScrollTop = 0
+  if (!token || !canApplyScrollFollowToken(scrollFollowState, token)) return
+  if (!isScrollGenerationCurrent(token.epoch, sessionId)) return
   const sc = scrollContainer.value
   if (!sc) return
+  if (scheduledElement && sc !== scheduledElement) return
+  if (
+    scheduledElement === sc
+    && sc.scrollTop < scheduledScrollTop - 0.5
+    && sc.scrollHeight - sc.scrollTop - sc.clientHeight > 2
+  ) {
+    wheelUpIntentAt = performance.now()
+    detachFollow()
+    return
+  }
   const target = Math.max(0, sc.scrollHeight - sc.clientHeight)
   // 留出亚像素容差，防 WebKit 分数布局下对相同位置反复写 scrollTop。
-  if (target - sc.scrollTop > 0.5) sc.scrollTop = target
-  lastScrollTop = sc.scrollTop
-  lastSnapScrollTop = sc.scrollTop
+  if (target - sc.scrollTop > 0.5) {
+    sc.scrollTop = target
+    rememberProgrammaticScroll(sc, 'follow')
+  } else {
+    lastScrollTop = sc.scrollTop
+  }
   lastFollowScrollAt = performance.now()
 }
 
-function scheduleFollowScroll(force = false) {
-  if (!followStreaming.value) return
+function scheduleFollowScroll() {
+  const token = captureScrollFollowToken(scrollFollowState)
+  if (!token) return
   const sid = effectiveSessionId.value
   const interval = sid ? sessionRenderCadence(sid) : 66
   const now = performance.now()
-  const delay = force ? 0 : Math.max(0, lastFollowScrollAt + interval - now)
+  const delay = Math.max(0, lastFollowScrollAt + interval - now)
   const nextAt = now + delay
   if (followScrollTimer !== null && followScrollScheduledAt <= nextAt + 1) return
   if (followScrollTimer !== null) window.clearTimeout(followScrollTimer)
   followScrollScheduledAt = nextAt
+  followScrollToken = token
+  followScrollSessionId = sid ?? null
+  followScrollElement = scrollContainer.value ?? null
+  followScrollTop = followScrollElement?.scrollTop ?? 0
   followScrollTimer = window.setTimeout(applyFollowScroll, delay)
 }
 
@@ -2281,8 +2571,7 @@ watch(scrollContentEl, (el) => {
 onUnmounted(() => {
   contentRO?.disconnect()
   contentRO = null
-  if (followScrollTimer !== null) window.clearTimeout(followScrollTimer)
-  followScrollTimer = null
+  cancelPendingFollowWrites()
 })
 
 // ====== 流式结束 → 延迟清理（零 DOM 重建方案）======
@@ -2291,27 +2580,33 @@ onUnmounted(() => {
 // 一并应用 + 清理 turns。shiki 上色虽有高度变化，但 contentRO 持续贴底足够覆盖。
 let deferredRecords: { sid: string; recs: SessionRecord[] } | null = null
 
-/**
- * 换树防坍缩:新组入列使原末组失去 cv 豁免(gi < length-1 条件)。首次进入
- * content-visibility 管理的元素没有 auto 尺寸记忆,视口外直接按兜底 300px 估高——
- * 上一轮长回复瞬间坍缩几千 px:贴底的 scrollTop 先被浏览器 clamp 一重,anchorRO
- * 观察到减高又补偿一重,双重上移让视口"掉"进新回答中间。
- * 换树前测原末组实高,DOM 更新后(paint 前)钉成 inline contain-intrinsic-size,
- * 坍缩从源头消失。低频路径,一次 offsetHeight 强制布局可接受。
- */
-function pinLastGroupBeforeSwap(): void {
+function rememberRenderedGroupHeights(lastOnly = false): void {
   const sc = scrollContainer.value
   if (!sc) return
-  const groups = sc.querySelectorAll('[data-anchor-index]')
-  const last = groups[groups.length - 1] as HTMLElement | undefined
-  if (!last) return
-  const h = last.offsetHeight
-  if (h > 0) {
-    void nextTick(() => {
-      if (last.isConnected) last.style.containIntrinsicSize = `auto ${h}px`
-    })
+  const groups = [...sc.querySelectorAll<HTMLElement>('[data-group-key]')]
+  const targets = lastOnly ? groups.slice(-1) : groups
+  for (const element of targets) {
+    const key = element.dataset.groupKey
+    if (!key) continue
+    const height = element.offsetHeight
+    if (height > 0) groupHeightEstimates.set(key, height)
   }
 }
+
+/**
+ * 换树防坍缩：新组入列时，原直铺末组会迁入虚拟器。必须在 records 赋值前
+ * 同步保存旧节点真高，让 estimateSize 在 Vue patch 的第一帧就得到正确尺寸；
+ * 等 nextTick 再修旧 DOM 已经太晚，WebKit 会先按 200px sizer clamp scrollTop。
+ */
+function pinLastGroupBeforeSwap(): void {
+  rememberRenderedGroupHeights(true)
+}
+
+// 消息来源不只 records：pending/队列/自发轮也会让旧末组迁入虚拟区。
+// 同步观察历史 key 增长，在 Vue patch 前统一捕获当前直铺末组的真实高度。
+watch(renderGroupKeys, (keys, previous) => {
+  if (keys.length > previous.length) pinLastGroupBeforeSwap()
+}, { flush: 'sync' })
 
 // FR-006 开发期换树位移观测:前后 scrollHeight diff >1px 落档(生产构建 tree-shake)
 function devObserveSwap(label: string) {
@@ -2341,9 +2636,9 @@ watch(() => stream.value.streaming, async (val, oldVal) => {
     settlingSessions.add(sid)
     try {
     finishedDirty.delete(sid)
-    // shiki 上色过渡保护
-    followStreaming.value = true
-    resumedAt = performance.now()
+    // 流结束只能保持当前模式；用户若正在阅读历史，settle / shiki / 换树均不得
+    // 把它重新切回跟随。原本已跟随时 contentRO 仍会正常贴底。
+    preserveFollowAfterStreamFinished()
     // 后台预取 records 暂存，不赋值给 records.value——零 DOM 变化
     const pendingLanded = (recs: SessionRecord[] | null) => {
       const s = getStream(sid)
@@ -2405,7 +2700,6 @@ watch(() => stream.value.streaming, async (val, oldVal) => {
         await Promise.all(texts.map(t => renderMarkdownDeferred(t)))
         // 等待期间可能切会话/新消息已发出,复查后再换树
         if (effectiveSessionId.value !== sid) return
-        pinLastGroupBeforeSwap()
         devObserveSwap('settle-swap')
         records.value = newRecords
         removeLandedTurns(sid, newRecords)
@@ -2475,7 +2769,6 @@ watch(autoTurnLanded, async () => {
   }
   if (effectiveSessionId.value !== sid || !fresh) return
   if (fresh.length >= records.value.length) {
-    pinLastGroupBeforeSwap()
     records.value = fresh
     // 同一同步段摘除已落账 turn:历史区解除 streamingMessageIds 过滤,原子切换;
     // 快照内未落盘的孤儿 turn 降级 live(记录不会再来,防永久卡「进行中」)
@@ -2536,7 +2829,9 @@ async function silentReloadRecords() {
     })
     // 异步窗口内可能已切会话
     if (effectiveSessionId.value !== cs.summary.id) return
-    if (fresh.length > records.value.length) records.value = fresh
+    if (fresh.length > records.value.length) {
+      records.value = fresh
+    }
   } catch {
     // 下一轮探测重试
   }
@@ -2565,11 +2860,8 @@ async function probeExternal() {
     if (effectiveSessionId.value !== cs.summary.id) return
     if (running) {
       // 进程在跑就保持运行态,不做闲置退出(API 调用等响应可能 10-30s 无输出)
-      // 恢复跟随必须先于首批 reload:否则 watch 链在 follow=false 时错过唯一一发
-      // 贴底,且 false→true 沿过后不再有人补滚(resumeFollow 自带补滚,时序免疫)
       if (!externalRunning.value) {
         externalRunning.value = true
-        resumeFollow()
       }
       const prevCount = records.value.length
       await silentReloadRecords()
@@ -2651,19 +2943,27 @@ function consumeScrollTarget(): boolean {
     || g.responses.some(r => (r as { uuid?: string }).uuid === target.uuid))
   if (gi < 0) return false
   // 定位后禁跟随:外部跟随 reload 的 scrollToBottom 不得抢走落点
-  followStreaming.value = false
+  detachFollow()
+  const scrollEpoch = scrollFollowState.epoch
+  const sessionId = effectiveSessionId.value ?? null
+  const valid = () => isScrollGenerationCurrent(scrollEpoch, sessionId)
   // 三层收敛:虚拟窗口内 scrollToIndex 到大致偏移 + rAF×2 精调 scrollIntoView
   if (gi < renderGroups.value.length) {
     messageVirtualizer.value.scrollToIndex(gi, { align: 'start' })
   }
-  nextTick(() => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-anchor-index="${gi}"]`)
-      if (!el) return
-      el.scrollIntoView({ block: 'start' })
-      el.classList.add('search-hit-flash')
-      setTimeout(() => el.classList.remove('search-hit-flash'), 1600)
-    }))
+  void nextTick(() => {
+    if (!valid()) return
+    requestAnimationFrame(() => {
+      if (!valid()) return
+      requestAnimationFrame(() => {
+        if (!valid()) return
+        const el = scrollContainer.value?.querySelector<HTMLElement>(`[data-anchor-index="${gi}"]`)
+        if (!el) return
+        el.scrollIntoView({ block: 'start' })
+        el.classList.add('search-hit-flash')
+        setTimeout(() => el.classList.remove('search-hit-flash'), 1600)
+      })
+    })
   })
   return true
 }
@@ -2681,9 +2981,10 @@ watch(
     if (cs) {
       const force = finishedDirty.has(cs.summary.id)
       if (force) finishedDirty.delete(cs.summary.id)
+      const sessionChanged = cs.summary.id !== loadedSessionId
       // 同一会话 summary 属性变化(标题/标签等)不重新加载 records,
       // 只有切换会话或 force(后台流式落账)才刷新
-      if (cs.summary.id !== loadedSessionId || force) {
+      if (sessionChanged || force) {
         loadedSessionId = cs.summary.id
         deferredRecords = null
         closeAllSubAgents()
@@ -2698,7 +2999,7 @@ watch(
           removeLandedTurns(cs.summary.id, records.value)
         }
         // 搜索命中定位优先于默认滚底
-        if (!consumeScrollTarget()) scrollToBottom(true)
+        if (!consumeScrollTarget()) scrollToBottom()
       }
       if (cs.summary.id !== followSessionId) {
         followSessionId = cs.summary.id
@@ -2926,9 +3227,10 @@ async function onReload() {
         >
           <div
             v-for="vitem in messageVirtualizer.getVirtualItems()"
-            :key="renderGroups[vitem.index].user?.uuid || renderGroups[vitem.index].responses[0]?.uuid || `group-${vitem.index}`"
+            :key="String(vitem.key)"
             :ref="(el) => el && messageVirtualizer.measureElement(el as Element)"
             :data-anchor-index="vitem.index"
+            :data-group-key="vitem.key"
             :data-index="vitem.index"
             data-virtual-anchor="true"
             :style="{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vitem.start}px)` }"
@@ -2955,8 +3257,9 @@ async function onReload() {
         <template v-else>
           <div
             v-for="(group, gi) in renderGroups"
-            :key="group.user?.uuid || group.responses[0]?.uuid || `group-${gi}`"
+            :key="messageGroupKey(group, gi)"
             :data-anchor-index="gi"
+            :data-group-key="messageGroupKey(group, gi)"
             class="space-y-4"
           >
             <MessageGroup
@@ -2978,8 +3281,9 @@ async function onReload() {
         <!-- 末组独立铺(始终豁免虚拟化) -->
         <div
           v-if="lastGroup"
-          :key="lastGroup.user?.uuid || lastGroup.responses[0]?.uuid || `group-${lastGroupIndex}`"
+          :key="messageGroupKey(lastGroup, lastGroupIndex)"
           :data-anchor-index="lastGroupIndex"
+          :data-group-key="messageGroupKey(lastGroup, lastGroupIndex)"
           class="space-y-4"
         >
           <MessageGroup
@@ -3072,7 +3376,7 @@ async function onReload() {
       <SlashHelpCard v-if="showHelpCard" :commands="allSlashCommands" />
 
       <!-- 回到底部:用户上滚脱离底部时,贴滚动视口底部 -->
-      <SessionBackToBottom v-if="!followStreaming" @click="resumeFollow" />
+      <SessionBackToBottom v-if="!followStreaming" @click="resumeFollow()" />
     </div>
     </SessionViewport>
 
@@ -3092,6 +3396,17 @@ async function onReload() {
     <SessionComposer
       v-if="interactive && !hideInput && currentSession.summary.cwd"
       :dragging="imageInput.isDragging.value"
+      :busy="stream.streaming || externalRunning || ownProcessBusy"
+      :has-content="!!inputText.trim() || !!imageInput.images.value.length"
+      can-send-while-busy
+      :stop-disabled="stopping"
+      :stop-loading="stopping"
+      :stop-variant="externalRunning && !stream.streaming ? 'danger' : 'accent'"
+      :stop-label="externalRunning && !stream.streaming
+        ? (stopping ? $t('session.terminating') : $t('session.terminateExternal'))
+        : $t('common.stop')"
+      @send="handleSend"
+      @stop="onStop"
     >
       <template #notices>
         <div v-if="slashError" class="mb-1 text-xs text-destructive">
@@ -3189,34 +3504,6 @@ async function onReload() {
         />
       </template>
 
-      <template #actions="{ primaryActionClass, secondaryActionClass, dangerActionClass }">
-        <!-- 停止/终止按钮:应用内是温和中断自家生成(停止,含 streaming=false 的自发轮 ownProcessBusy);外部运行是 SIGTERM 别家进程(终止,destructive 色 + 进行中锁定) -->
-        <button
-          v-if="(stream.streaming || externalRunning || ownProcessBusy) && !inputText.trim() && !imageInput.images.value.length"
-          type="button"
-          :disabled="stopping"
-          :class="['flex items-center gap-1.5',
-                   externalRunning && !stream.streaming
-                     ? dangerActionClass
-                     : [secondaryActionClass, 'border-accent bg-accent text-accent-foreground']]"
-          @click="onStop"
-        >
-          <span v-if="stopping" class="i-carbon-circle-dash w-3 h-3 animate-spin shrink-0" />
-          <template v-if="externalRunning && !stream.streaming">
-            {{ stopping ? $t('session.terminating') : $t('session.terminateExternal') }}
-          </template>
-          <template v-else>{{ $t('common.stop') }}</template>
-        </button>
-        <button
-          v-else
-          type="button"
-          :disabled="!inputText.trim() && !imageInput.images.value.length"
-          :class="primaryActionClass"
-          @click="handleSend"
-        >
-          {{ $t('common.send') }}
-        </button>
-      </template>
     </SessionComposer>
 
     <!-- 档案馆:常驻只读条(FR-009) -->
