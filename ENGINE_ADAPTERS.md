@@ -9,7 +9,7 @@ Monet's engine layer keeps coding-agent protocol differences inside adapters. A 
 - `EngineInstanceId`: one concrete installation or data-source instance of an engine.
 - `ProjectRef` / `SessionRef`: global identities composed from an engine instance and an opaque `nativeId`.
 - `SessionSource`: projects, sessions, timelines, search documents, assets, session actions, and change delivery.
-- `AgentRuntime`: create/resume sessions, start/steer/interrupt turns, answer interactions, and close.
+- `AgentRuntime`: create/resume sessions, start turns, accept input while a turn is running, interrupt turns, answer interactions, and close.
 - `EngineCapabilities` / `SessionActions`: decide what the UI exposes; shared UI must never infer capabilities from an engine name.
 - Facets: optional assets, automation, configuration, quota, runtime-command, and model-catalog providers.
 
@@ -48,6 +48,8 @@ ui: EngineUiIntegration {
 ```
 
 The standard surface consumes only descriptors, `SessionActions`, the neutral timeline, and unified runtime events. Use `SessionSurface::Native` only for a first-party engine with an existing specialized surface that cannot yet be replaced; it is not an escape hatch for adding engine-name checks to shared components.
+
+`sendWhileRunning` only says whether the upper layer can keep accepting user input during an active turn; it does not prescribe delivery. An adapter may inject the input into the active turn or queue it for the next turn. Shared UI always presents this as “Send” and must not expose provider protocol terminology.
 
 Engine activation belongs to Monet settings. A disabled adapter remains visible in the engine catalog, but it is not constructed and cannot subscribe to a source, start a watcher, poll, or launch a resident process; enabling it takes effect after an app restart. If an adapter receives changes from an external legacy watcher, route them through `EngineAdapter::notify_source_change` and the adapter's own `subscribe_changes` channel instead of emitting a top-level Tauri event from the watcher.
 

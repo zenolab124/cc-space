@@ -11,6 +11,7 @@ import MonitorCard from './MonitorCard.vue'
 import { createSession, engineHealth, listEngines } from '@/engines/client'
 import { instanceKey } from '@/engines/identity'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
+import { channelSupportsEngine, refreshChannels, useChannels } from '@/composables/useChannels'
 import type { EngineDescriptor, ProjectRef } from '@/engines/types'
 import type { Project } from '@/types'
 
@@ -19,6 +20,7 @@ const { activeTab, createDraftSession, registerEngineDraft } = useWorkbench()
 const { projects } = useProjects()
 const { switchSection } = useUiState()
 const { notifyTransient } = useNotifications()
+const { channels, defaultSessionChannels } = useChannels()
 
 const expandedSet = computed(() => new Set(activeTab.value.columns.map(c => c.sessionId)))
 
@@ -87,6 +89,19 @@ function onEngineSelectionChanged() {
   engineSelectionOverridden.value = true
 }
 
+function defaultChannelForEngine(engine: EngineDescriptor): string | null {
+  const engineId = engine.instance.engineId
+  if (engineId !== 'claude-code' && engineId !== 'codex') return null
+  const channelId = defaultSessionChannels.value[engineId]
+  if (!channelId) return null
+  const channel = channels.value.find(item => item.id === channelId)
+  return channel?.enabled
+    && channel.scope !== 'agent-only'
+    && channelSupportsEngine(channel, engineId)
+    ? channelId
+    : null
+}
+
 function cancelSubMenuClose() {
   clearTimeout(subMenuLeaveTimer)
 }
@@ -150,13 +165,15 @@ async function createForEngine(engine: EngineDescriptor, project: ProjectRef, cw
   if (usesNativeSessionSurface(engine.instance)) {
     createDraftSession(cwd)
   } else {
-    const created = await createSession(project, cwd)
+    const attachedChannel = defaultChannelForEngine(engine)
+    const created = await createSession(project, cwd, attachedChannel ? { channelId: attachedChannel } : {})
     const sessionId = sessionUiId(created.session)
     registerEngineDraft(sessionId, {
       reference: created.session,
       project,
       engineName: engine.displayName,
       cwd,
+      attachedChannel,
     })
   }
   notifyTransient(t('workbench.rail.newSessionReady'), t('workbench.rail.newSessionHint'))
@@ -214,6 +231,7 @@ async function pickFolder() {
 onMounted(async () => {
   document.addEventListener('mousedown', onDocumentClick)
   try {
+    await refreshChannels()
     const candidates = (await listEngines()).filter(item => item.enabled && item.capabilities.runtime?.create)
     const checks = await Promise.allSettled(candidates.map(item => engineHealth(item.instance)))
     engineChoices.value = candidates.filter((_, index) => {
@@ -265,7 +283,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
                  rounded border border-border shadow-paper-lifted bg-popover"
         >
           <label v-if="engineChoices.length > 1" class="mx-2.5 my-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            <span>{{ $t('engine.newSessionEngine') }}</span>
+            <span>{{ $t('common.newSessionEngine') }}</span>
             <select v-model="selectedEngineKey" class="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-1 text-[11px] text-foreground" @change="onEngineSelectionChanged">
               <option v-for="engine in engineChoices" :key="instanceKey(engine.instance)" :value="instanceKey(engine.instance)">{{ engine.displayName }}</option>
             </select>

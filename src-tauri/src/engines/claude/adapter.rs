@@ -32,7 +32,7 @@ impl ClaudeEngine {
                     create: true,
                     resume: true,
                     fork: true,
-                    steer: false,
+                    send_while_running: false,
                     interrupt: true,
                     streaming: StreamingCapabilities {
                         text: StreamGranularity::Delta,

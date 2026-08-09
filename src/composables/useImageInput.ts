@@ -202,9 +202,9 @@ export function useImageInput(opts: UseImageInputOptions = {}) {
    * 把暂存图片序列化为 Anthropic image content block 数组。
    * 供方案 a 使用:与 text block 一起拼到 user message.content。
    */
-  async function toImageBlocks(): Promise<ImageContentBlock[]> {
+  async function toImageBlocks(sourceImages: readonly PendingImage[] = images.value): Promise<ImageContentBlock[]> {
     const blocks: ImageContentBlock[] = []
-    for (const img of images.value) {
+    for (const img of sourceImages) {
       const data = await blobToBase64(img.blob)
       blocks.push({
         type: 'image',

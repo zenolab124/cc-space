@@ -150,7 +150,7 @@ async function openConfiguration(engine: EngineDescriptor) {
             <span v-if="engine.capabilities.history.search" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.search') }}</span>
             <span v-if="engine.capabilities.history.assets" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.assets') }}</span>
             <span v-if="engine.capabilities.runtime?.resume" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.runtime') }}</span>
-            <span v-if="engine.capabilities.runtime?.steer" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.steer') }}</span>
+            <span v-if="engine.capabilities.runtime?.sendWhileRunning" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.sendWhileRunning') }}</span>
             <span v-if="engine.capabilities.facets.quota" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.quota') }}</span>
             <span v-if="engine.capabilities.facets.configuration" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.configuration') }}</span>
             <span v-if="engine.capabilities.facets.runtimeCommands" class="rounded bg-secondary px-1.5 py-0.5 text-[10px]">{{ t('engineSettings.capability.runtimeCommands') }}</span>

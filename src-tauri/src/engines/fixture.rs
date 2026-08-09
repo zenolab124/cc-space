@@ -40,7 +40,7 @@ impl FixtureEngine {
                     create: true,
                     resume: true,
                     fork: false,
-                    steer: true,
+                    send_while_running: true,
                     interrupt: true,
                     streaming: StreamingCapabilities {
                         text: StreamGranularity::Delta,
@@ -330,7 +330,7 @@ impl SessionSource for FixtureEngine {
                 resume: ActionAvailability::available(),
                 fork: ActionAvailability::unavailable("fixture.noFork"),
                 send: ActionAvailability::available(),
-                steer: ActionAvailability::available(),
+                send_while_running: ActionAvailability::available(),
                 interrupt: ActionAvailability::available(),
                 open_cwd: ActionAvailability::available(),
             })
@@ -451,7 +451,11 @@ impl AgentRuntime for FixtureEngine {
         })
     }
 
-    fn steer_turn(&self, turn: TurnRef, _input: Vec<InputItem>) -> EngineFuture<'_, ()> {
+    fn send_input_while_running(
+        &self,
+        turn: TurnRef,
+        _input: Vec<InputItem>,
+    ) -> EngineFuture<'_, ()> {
         Box::pin(async move { self.owns_session(&turn.session) })
     }
 

@@ -191,7 +191,11 @@ pub trait AgentRuntime: Send + Sync {
     fn start_turn(&self, session: SessionRef, request: TurnRequest)
         -> EngineFuture<'_, TurnHandle>;
 
-    fn steer_turn(&self, turn: TurnRef, input: Vec<InputItem>) -> EngineFuture<'_, ()>;
+    fn send_input_while_running(
+        &self,
+        turn: TurnRef,
+        input: Vec<InputItem>,
+    ) -> EngineFuture<'_, ()>;
 
     fn interrupt_turn(&self, turn: TurnRef) -> EngineFuture<'_, ()>;
 

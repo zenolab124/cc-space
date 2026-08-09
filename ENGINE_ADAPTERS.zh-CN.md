@@ -9,7 +9,7 @@ Monet 的引擎层把 coding agent 的协议差异限制在 adapter 内。一个
 - `EngineInstanceId`：一个引擎的具体安装或数据源实例。
 - `ProjectRef` / `SessionRef`：`EngineInstanceId + nativeId` 组成的全局身份；`nativeId` 永远按不透明字符串处理。
 - `SessionSource`：项目、会话、时间线、搜索文档、附件、会话动作与变更通知。
-- `AgentRuntime`：新建/恢复会话、开始/追加/中断 turn、审批响应和关闭。
+- `AgentRuntime`：新建/恢复会话、开始 turn、在运行中接收输入、中断 turn、审批响应和关闭。
 - `EngineCapabilities` / `SessionActions`：决定 UI 展示什么，不允许共享 UI 根据引擎名猜能力。
 - Facet：资产、自动化、配置、配额、运行命令和模型目录等可选扩展。
 
@@ -48,6 +48,8 @@ ui: EngineUiIntegration {
 ```
 
 标准界面只消费 descriptor、`SessionActions`、中立时间线与统一 runtime 事件。仅当一个第一方引擎已有不可替代的专属界面时才使用 `SessionSurface::Native`；这不是给共享组件增加引擎名判断的出口。
+
+`sendWhileRunning` 只表示上层能否在运行中继续接收用户输入，不规定投递方式。adapter 可以把输入注入当前 turn，也可以排队到下一 turn；共享 UI 统一呈现为“发送”，不得暴露供应商协议术语。
 
 引擎启用状态存于 Monet 自身设置。关闭的 adapter 仍出现在引擎清单中，但不会被构造，也不会订阅 source、启动 watcher、轮询或拉起常驻进程；重新启用在应用重启后生效。若 adapter 的变化来自外部旧 watcher，通过 `EngineAdapter::notify_source_change` 送回 adapter 自身的 `subscribe_changes` 通道，不要从 watcher 直接发顶层 Tauri 事件。
 

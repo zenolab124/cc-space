@@ -9,6 +9,7 @@ import { useProjects } from '@/composables/useProjects'
 import { useConfirm } from '@/composables/useConfirm'
 import { shortModel, formatTokens, type TokenUsage, type SessionSummary } from '@/types'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
+import { shouldSubmitComposer } from '@/components/session/composerAction'
 
 const { activeTab, minColumnWidth, suppressColumnTransition } = useWorkbench()
 const { dragging, shiftDragging, onDividerMouseDown } = useColumnResize()
@@ -17,6 +18,7 @@ const { projects } = useProjects()
 const { confirm } = useConfirm()
 
 async function onResetRace() {
+  if (broadcasting.value || raceMutationLoading.value) return
   const ok = await confirm(t('workbench.race.resetConfirm'), t('workbench.race.reset'))
   if (!ok) return
   await resetAllLanes()
@@ -32,6 +34,7 @@ const {
   slashError,
   raceError,
   raceMutationLoading,
+  broadcasting,
   anyStreaming,
   streamingCount,
   broadcastSend,
@@ -91,7 +94,7 @@ function autoResize() {
 }
 
 function onInputKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (shouldSubmitComposer(e)) {
     e.preventDefault()
     broadcastSend()
   }
@@ -110,7 +113,12 @@ function onInputKeydown(e: KeyboardEvent) {
           :class="{ 'no-transition': dragging || suppressColumnTransition }"
           :style="{ width: `${activeTab.columnSizes[i] ?? minColumnWidth}px` }"
         >
-          <WorkbenchColumnView :column="col" :tab-id="activeTab.id" :index="i" />
+          <WorkbenchColumnView
+            :column="col"
+            :tab-id="activeTab.id"
+            :index="i"
+            :mutation-disabled="broadcasting || raceMutationLoading"
+          />
 
           <!-- 列右边缘 resize 手柄(与普通多列同款,Shift 调全局最小列宽) -->
           <div
@@ -180,7 +188,7 @@ function onInputKeydown(e: KeyboardEvent) {
       <!-- 右侧工具栏 -->
       <div class="shrink-0 w-10 flex flex-col items-center gap-2 py-2.5 border-l border-border bg-background">
         <button
-          :disabled="raceMutationLoading"
+          :disabled="raceMutationLoading || broadcasting"
           class="icon-btn icon-btn-lg"
           :class="showHud && 'icon-btn-active'"
           v-tooltip="$t('workbench.race.tokenHud')"
@@ -189,6 +197,7 @@ function onInputKeydown(e: KeyboardEvent) {
           <span class="i-carbon-dashboard w-3.5 h-3.5" />
         </button>
         <button
+          :disabled="raceMutationLoading || broadcasting"
           class="icon-btn icon-btn-lg"
           v-tooltip="$t('workbench.race.reset')"
           @click="onResetRace"
@@ -196,7 +205,7 @@ function onInputKeydown(e: KeyboardEvent) {
           <span class="i-carbon-reset w-3.5 h-3.5" />
         </button>
         <button
-          :disabled="raceMutationLoading"
+          :disabled="raceMutationLoading || broadcasting"
           class="icon-btn icon-btn-lg icon-btn-dashed flex-1"
           v-tooltip="t('workbench.race.addLane')"
           @click="forkNewLane"
@@ -244,13 +253,15 @@ function onInputKeydown(e: KeyboardEvent) {
           v-model="inputText"
           :placeholder="t('workbench.race.sharedInput')"
           rows="1"
-          class="flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border text-foreground placeholder-muted-foreground resize-none overflow-x-hidden placeholder:[white-space:pre-wrap] focus:outline-none focus:border-ring transition-colors"
+          :disabled="broadcasting || raceMutationLoading"
+          class="flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border text-foreground placeholder-muted-foreground resize-none overflow-x-hidden placeholder:[white-space:pre-wrap] focus:outline-none focus:border-ring transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           @keydown="onInputKeydown"
           @input="autoResize"
         />
 
         <button
           v-if="anyStreaming && !inputText.trim() && !imageInput.images.value.length"
+          :disabled="broadcasting || raceMutationLoading"
           class="px-3 py-2 text-xs rounded-md bg-accent text-accent-foreground hover:shadow-paper transition-shadow shrink-0"
           @click="stopAll"
         >
@@ -260,7 +271,7 @@ function onInputKeydown(e: KeyboardEvent) {
 
         <button
           v-else
-          :disabled="!inputText.trim() && !imageInput.images.value.length"
+          :disabled="broadcasting || raceMutationLoading || (!inputText.trim() && !imageInput.images.value.length)"
           class="px-3 py-2 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper transition-shadow shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
           @click="broadcastSend"
         >

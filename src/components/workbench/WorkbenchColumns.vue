@@ -10,7 +10,7 @@ import { useHorizontalWheelScroll } from '@/composables/useHorizontalWheelScroll
 import { useColumnResize } from '@/composables/useColumnResize'
 import { forkSession } from '@/engines/client'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
-import { engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
+import { engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
 import SortableColumn from './SortableColumn.vue'
 
@@ -60,6 +60,7 @@ async function onStartRace(sessionId: string) {
         notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
+      const attachedChannel = engineRuntimeChannel(sessionId)
       const created = await forkSession(reference, null, engineRuntimeOptions(sessionId))
       const forkedSessionId = sessionUiId(created.session)
       stageEngineDraft(forkedSessionId, {
@@ -67,6 +68,7 @@ async function onStartRace(sessionId: string) {
         project,
         engineName: session?.engine_name ?? draft?.engineName ?? reference.engine.engineId,
         cwd,
+        attachedChannel,
       })
       inheritEngineRunConfig(sessionId, forkedSessionId)
       createRaceTab(sessionId, cwd, forkedSessionId)

@@ -225,13 +225,18 @@ impl CodexSource {
         ))
     }
 
-    fn read_thread(&self, session: &SessionRef) -> EngineResult<CodexThread> {
-        self.owns_session(session)?;
-        let app_server_result = self
-            .supervisor
+    fn read_app_server_thread(
+        &self,
+        session: &SessionRef,
+        include_turns: bool,
+    ) -> EngineResult<CodexThread> {
+        self.supervisor
             .request(
                 "thread/read",
-                json!({ "threadId": session.native_id(), "includeTurns": true }),
+                json!({
+                    "threadId": session.native_id(),
+                    "includeTurns": include_turns
+                }),
             )
             .and_then(|value| {
                 serde_json::from_value::<ThreadReadResponse>(value)
@@ -242,7 +247,29 @@ impl CodexSource {
                             format!("Codex returned an invalid thread: {error}"),
                         )
                     })
-            });
+            })
+    }
+
+    fn read_thread_with_turns(&self, session: &SessionRef) -> EngineResult<CodexThread> {
+        self.owns_session(session)?;
+        let app_server_result = self.read_app_server_thread(session, true).or_else(|error| {
+            if turns_unavailable_before_first_message(&error) {
+                self.read_app_server_thread(session, false)
+            } else {
+                Err(error)
+            }
+        });
+        match app_server_result {
+            Ok(thread) => Ok(thread),
+            Err(app_server_error) => {
+                super::file_source::read_thread(session.native_id()).or(Err(app_server_error))
+            }
+        }
+    }
+
+    fn read_thread_metadata(&self, session: &SessionRef) -> EngineResult<CodexThread> {
+        self.owns_session(session)?;
+        let app_server_result = self.read_app_server_thread(session, false);
         match app_server_result {
             Ok(thread) => Ok(thread),
             Err(app_server_error) => {
@@ -297,7 +324,7 @@ impl CodexSource {
     }
 
     fn timeline(&self, session: &SessionRef) -> EngineResult<Vec<ConversationRecord>> {
-        let thread = self.read_thread(session)?;
+        let thread = self.read_thread_with_turns(session)?;
         let timeline_snapshot = read_timeline_snapshot(thread.path.as_deref());
         let mut records = Vec::new();
         for turn in thread.turns {
@@ -439,7 +466,7 @@ impl SessionSource for CodexSource {
 
     fn build_search_document(&self, session: SessionRef) -> EngineFuture<'_, SearchDocument> {
         Box::pin(async move {
-            let thread = self.read_thread(&session)?;
+            let thread = self.read_thread_with_turns(&session)?;
             let title = thread
                 .name
                 .or_else(|| (!thread.preview.is_empty()).then(|| thread.preview.clone()));
@@ -472,7 +499,7 @@ impl SessionSource for CodexSource {
 
     fn resolve_asset(&self, asset: AssetRef) -> EngineFuture<'_, ResolvedAsset> {
         Box::pin(async move {
-            let thread = self.read_thread(&asset.session)?;
+            let thread = self.read_thread_with_turns(&asset.session)?;
             for turn in thread.turns {
                 for item in turn.items {
                     if item.get("id").and_then(Value::as_str) == Some(&asset.native_id)
@@ -512,7 +539,7 @@ impl SessionSource for CodexSource {
 
     fn session_actions(&self, session: SessionRef) -> EngineFuture<'_, SessionActions> {
         Box::pin(async move {
-            let thread = self.read_thread(&session)?;
+            let thread = self.read_thread_metadata(&session)?;
             let cwd_available = !thread.cwd.is_empty() && Path::new(&thread.cwd).is_dir();
             let runtime = self.runtime_availability();
             let cwd_runtime = if !cwd_available {
@@ -524,7 +551,7 @@ impl SessionSource for CodexSource {
                 resume: cwd_runtime.clone(),
                 fork: runtime.clone(),
                 send: cwd_runtime,
-                steer: runtime.clone(),
+                send_while_running: runtime.clone(),
                 interrupt: runtime,
                 open_cwd: if thread.cwd.is_empty() {
                     ActionAvailability::unavailable("engine.session.noCwd")
@@ -1046,9 +1073,34 @@ fn media_type_for_path(path: &str) -> &'static str {
     }
 }
 
+fn turns_unavailable_before_first_message(error: &EngineError) -> bool {
+    error.kind == EngineErrorKind::Protocol
+        && error.message.contains("includeTurns")
+        && (error.message.contains("not materialized")
+            || error.message.contains("ephemeral thread"))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::task::{Context, Poll, Wake, Waker};
+
     use super::*;
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn resolve_ready<T>(mut future: EngineFuture<'_, T>) -> EngineResult<T> {
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(result) => result,
+            Poll::Pending => panic!("Codex adapter futures must resolve immediately"),
+        }
+    }
 
     #[test]
     fn maps_known_and_unknown_items() {
@@ -1089,6 +1141,23 @@ mod tests {
             CodexSource::project_native_id(&thread),
             UNCLASSIFIED_PROJECT
         );
+    }
+
+    #[test]
+    fn retries_thread_read_without_turns_for_pre_message_threads() {
+        for message in [
+            "Codex request failed: thread id is not materialized yet; includeTurns is unavailable before first user message",
+            "Codex request failed: ephemeral threads do not support includeTurns",
+        ] {
+            assert!(turns_unavailable_before_first_message(&EngineError::new(
+                EngineErrorKind::Protocol,
+                message,
+            )));
+        }
+        assert!(!turns_unavailable_before_first_message(&EngineError::new(
+            EngineErrorKind::Protocol,
+            "Codex request failed: thread not found",
+        )));
     }
 
     #[test]
@@ -1311,5 +1380,27 @@ mod tests {
             let session = SessionRef::new(default_instance().unwrap(), &thread.id).unwrap();
             let _records = source.timeline(&session).unwrap();
         }
+    }
+
+    #[test]
+    #[ignore = "requires an installed Codex CLI and explicit MONET_CODEX_EMPTY_THREAD_SMOKE=1"]
+    fn installed_source_reads_empty_runtime_thread_before_first_turn() {
+        assert_eq!(
+            std::env::var("MONET_CODEX_EMPTY_THREAD_SMOKE").as_deref(),
+            Ok("1"),
+            "set MONET_CODEX_EMPTY_THREAD_SMOKE=1 to run the empty-thread smoke test"
+        );
+        let supervisor = CodexSupervisor::new();
+        let source = CodexSource::new(Arc::clone(&supervisor)).unwrap();
+        let runtime = crate::engines::codex::CodexRuntime::new(supervisor).unwrap();
+        let session = resolve_ready(runtime.create_session(CreateSessionRequest {
+            project: ProjectRef::new(default_instance().unwrap(), "empty-thread-smoke").unwrap(),
+            cwd: Some(std::env::temp_dir().to_string_lossy().into_owned()),
+            options: BTreeMap::from([("ephemeral".into(), Value::Bool(true))]),
+        }))
+        .unwrap();
+
+        assert!(source.timeline(&session.session).unwrap().is_empty());
+        resolve_ready(runtime.close_session(session.session)).unwrap();
     }
 }

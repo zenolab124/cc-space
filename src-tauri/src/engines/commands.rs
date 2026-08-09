@@ -436,8 +436,14 @@ pub async fn engine_start_turn(
 }
 
 #[tauri::command]
-pub async fn engine_steer_turn(turn: TurnRef, input: Vec<InputItem>) -> EngineResult<()> {
-    system::get()?.coordinator().steer_turn(turn, input).await
+pub async fn engine_send_input_while_running(
+    turn: TurnRef,
+    input: Vec<InputItem>,
+) -> EngineResult<()> {
+    system::get()?
+        .coordinator()
+        .send_input_while_running(turn, input)
+        .await
 }
 
 #[tauri::command]

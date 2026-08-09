@@ -70,7 +70,7 @@ pub struct RuntimeCapabilities {
     pub create: bool,
     pub resume: bool,
     pub fork: bool,
-    pub steer: bool,
+    pub send_while_running: bool,
     pub interrupt: bool,
     pub streaming: StreamingCapabilities,
     pub model_catalog: ModelCatalogKind,
@@ -210,7 +210,7 @@ pub struct SessionActions {
     pub resume: ActionAvailability,
     pub fork: ActionAvailability,
     pub send: ActionAvailability,
-    pub steer: ActionAvailability,
+    pub send_while_running: ActionAvailability,
     pub interrupt: ActionAvailability,
     pub open_cwd: ActionAvailability,
 }
@@ -222,9 +222,51 @@ impl SessionActions {
             resume: ActionAvailability::unavailable(reason_code.clone()),
             fork: ActionAvailability::unavailable(reason_code.clone()),
             send: ActionAvailability::unavailable(reason_code.clone()),
-            steer: ActionAvailability::unavailable(reason_code.clone()),
+            send_while_running: ActionAvailability::unavailable(reason_code.clone()),
             interrupt: ActionAvailability::unavailable(reason_code),
             open_cwd: ActionAvailability::available(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_capability_serializes_with_neutral_busy_input_name() {
+        let value = serde_json::to_value(RuntimeCapabilities {
+            create: true,
+            resume: true,
+            fork: true,
+            send_while_running: true,
+            interrupt: true,
+            streaming: StreamingCapabilities {
+                text: StreamGranularity::Delta,
+                reasoning: StreamGranularity::Delta,
+                tool_progress: StreamGranularity::Item,
+            },
+            model_catalog: ModelCatalogKind::Dynamic,
+            interactions: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            value.get("sendWhileRunning"),
+            Some(&serde_json::json!(true))
+        );
+        assert!(value.get("steer").is_none());
+
+        let actions = serde_json::to_value(SessionActions {
+            resume: ActionAvailability::available(),
+            fork: ActionAvailability::available(),
+            send: ActionAvailability::available(),
+            send_while_running: ActionAvailability::available(),
+            interrupt: ActionAvailability::available(),
+            open_cwd: ActionAvailability::available(),
+        })
+        .unwrap();
+        assert!(actions.get("sendWhileRunning").is_some());
+        assert!(actions.get("steer").is_none());
     }
 }

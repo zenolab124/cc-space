@@ -349,7 +349,11 @@ impl RuntimeCoordinator {
         })
     }
 
-    pub fn steer_turn(&self, turn: TurnRef, input: Vec<super::InputItem>) -> EngineFuture<'_, ()> {
+    pub fn send_input_while_running(
+        &self,
+        turn: TurnRef,
+        input: Vec<super::InputItem>,
+    ) -> EngineFuture<'_, ()> {
         Box::pin(async move {
             let started = Instant::now();
             let observed = turn.session.clone();
@@ -357,7 +361,7 @@ impl RuntimeCoordinator {
             let result = async {
                 self.registry
                     .runtime_for(&turn.session)?
-                    .steer_turn(turn, input)
+                    .send_input_while_running(turn, input)
                     .await
             }
             .await;
@@ -365,7 +369,7 @@ impl RuntimeCoordinator {
                 observed.engine(),
                 &short_session_ref(&observed),
                 generation,
-                "steerTurn",
+                "sendInputWhileRunning",
                 started,
                 &result,
             );

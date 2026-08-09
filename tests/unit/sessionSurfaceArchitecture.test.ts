@@ -26,6 +26,18 @@ describe('unified session surface architecture', () => {
     const nativeTools = source('../../src/components/ToolProcessGroup.vue')
     const standardTools = source('../../src/components/engine/EngineSegmentBlock.vue')
     const sharedRunConfig = source('../../src/components/topbar/RunConfigCapsule.vue')
+    const sharedComposer = source('../../src/components/session/SessionComposer.vue')
+    const raceController = source('../../src/components/workbench/RaceColumns.vue')
+    const raceInput = source('../../src/composables/useRaceInput.ts')
+    const engineCenter = source('../../src/components/settings/EngineCenter.vue')
+    const zhLocale = source('../../src/locales/zh-CN.json')
+    const enLocale = source('../../src/locales/en-US.json')
+    const engineTypes = source('../../src/engines/types.ts')
+    const engineClient = source('../../src/engines/client.ts')
+    const coreRuntime = source('../../src-tauri/src/engines/core/runtime.rs')
+    const coordinator = source('../../src-tauri/src/engines/core/coordinator.rs')
+    const engineCommands = source('../../src-tauri/src/engines/commands.rs')
+    const tauriEntry = source('../../src-tauri/src/lib.rs')
 
     expect(nativeController).toContain('<SessionSurface')
     expect(standardController).toContain('<SessionSurface')
@@ -37,6 +49,9 @@ describe('unified session surface architecture', () => {
     expect(standardController).toContain('<RunConfigCapsule')
     expect(nativeController).toContain('<SessionComposer')
     expect(standardController).toContain('<SessionComposer')
+    expect(nativeController).toContain('can-send-while-busy')
+    expect(standardController).toContain(':can-send-while-busy="canSendWhileBusy"')
+    expect(sharedComposer).toContain('resolveComposerAction')
     expect(nativeController).toContain('<SessionComposerField')
     expect(standardController).toContain('<SessionComposerField')
     expect(nativeController).toContain('<SessionViewport')
@@ -55,5 +70,32 @@ describe('unified session surface architecture', () => {
     expect(sharedRunConfig).not.toContain('activeEngineChannel.value?.codex')
     expect(standardController).not.toContain('?.codex')
     expect(standardController).toContain('engineChannelBinding')
+    expect(engineTypes).toContain('sendWhileRunning')
+    expect(engineClient).toContain('sendInputWhileRunning')
+    expect(standardController).toContain('if (sendWhileRunning && !canSendWhileBusy.value)')
+    expect(standardController).toContain('if (!isBusy.value && !(await ensureAttached())) return')
+    expect(standardController).toContain('if (isBusy.value) return runtimeId.value !== null')
+    expect(standardController).toContain('void send()')
+    expect(coreRuntime).toContain('send_input_while_running')
+    expect(coordinator).toContain('send_input_while_running')
+    expect(engineCommands).toContain('engine_send_input_while_running')
+    expect(tauriEntry).toContain('engine_send_input_while_running')
+    for (const genericSurface of [
+      engineTypes,
+      engineClient,
+      standardController,
+      sharedComposer,
+      raceController,
+      raceInput,
+      engineCenter,
+      zhLocale,
+      enLocale,
+      coreRuntime,
+      coordinator,
+      engineCommands,
+      tauriEntry,
+    ]) {
+      expect(genericSurface).not.toMatch(/steer|追加指令/i)
+    }
   })
 })

@@ -1,9 +1,41 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
+import { computed } from 'vue'
+import { resolveComposerAction } from './composerAction'
+
+const props = withDefaults(defineProps<{
   dragging?: boolean
+  busy?: boolean
+  hasContent?: boolean
+  canSendWhileBusy?: boolean
+  sendDisabled?: boolean
+  stopDisabled?: boolean
+  stopLoading?: boolean
+  stopVariant?: 'accent' | 'danger'
+  sendLabel?: string
+  stopLabel?: string
 }>(), {
   dragging: false,
+  busy: false,
+  hasContent: false,
+  canSendWhileBusy: false,
+  sendDisabled: false,
+  stopDisabled: false,
+  stopLoading: false,
+  stopVariant: 'accent',
+  sendLabel: '',
+  stopLabel: '',
 })
+
+const emit = defineEmits<{
+  (event: 'send'): void
+  (event: 'stop'): void
+}>()
+
+const action = computed(() => resolveComposerAction({
+  busy: props.busy,
+  hasContent: props.hasContent,
+  canSendWhileBusy: props.canSendWhileBusy,
+}))
 
 const fieldClass = `min-h-9 flex-1 px-3 py-2 text-sm rounded-md bg-popover border border-border
   text-foreground placeholder-muted-foreground resize-none overflow-x-hidden
@@ -41,7 +73,30 @@ const dangerActionClass = `min-h-9 shrink-0 rounded-md border border-destructive
           :primary-action-class="primaryActionClass"
           :secondary-action-class="secondaryActionClass"
           :danger-action-class="dangerActionClass"
-        />
+        >
+          <button
+            v-if="action === 'send'"
+            type="button"
+            :class="primaryActionClass"
+            :disabled="!hasContent || sendDisabled"
+            @click="emit('send')"
+          >
+            {{ sendLabel || $t('common.send') }}
+          </button>
+          <button
+            v-else
+            type="button"
+            :class="['flex items-center gap-1.5', stopVariant === 'danger'
+              ? dangerActionClass
+              : [secondaryActionClass, 'border-accent bg-accent text-accent-foreground']]"
+            :disabled="stopDisabled"
+            :aria-busy="stopLoading"
+            @click="emit('stop')"
+          >
+            <span v-if="stopLoading" aria-hidden="true" class="i-carbon-circle-dash h-3 w-3 shrink-0 animate-spin" />
+            {{ stopLabel || $t('common.stop') }}
+          </button>
+        </slot>
       </div>
     </div>
   </div>

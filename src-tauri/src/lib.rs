@@ -395,7 +395,7 @@ pub fn run() {
             engines::commands::engine_fork_session,
             engines::commands::engine_attach_session,
             engines::commands::engine_start_turn,
-            engines::commands::engine_steer_turn,
+            engines::commands::engine_send_input_while_running,
             engines::commands::engine_interrupt_turn,
             engines::commands::engine_respond_interaction,
             engines::commands::engine_close_session,

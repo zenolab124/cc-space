@@ -65,7 +65,7 @@ Monet gathers Claude Code, Codex, and future engines onto one wall: every sessio
 ### Multi-engine system — Claude Code and Codex together
 
 - Archive, search, Workbench, and notifications can hold Claude Code and Codex sessions at the same time, with engine badges and filters throughout
-- Codex reads existing history directly from its local session files; when the CLI is installed, the local `codex app-server` adds create/resume, streaming, steering, interruption, command/file/permission approvals, and dynamic model/effort discovery
+- Codex reads existing history directly from its local session files; when the CLI is installed, the local `codex app-server` adds create/resume, streaming, sending while a turn is running, interruption, command/file/permission approvals, and dynamic model/effort discovery
 - Engine Center reports installation, authentication, version, capabilities, and diagnostics independently; one broken engine does not block another
 - The internal Engine Adapter contract unifies identity, history sources, timelines, runtimes, capabilities, and optional facets, so another engine needs no new top-level IPC or shared storage schema
 - Claude Code keeps its mature native Workbench, channels, Workshop, and automation features; every other surface is capability-driven and hides actions that cannot succeed

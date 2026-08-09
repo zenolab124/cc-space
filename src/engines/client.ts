@@ -145,10 +145,15 @@ export function startTurnWithInput(session: SessionRef, input: RuntimeInputItem[
   })
 }
 
-export function steerTurn(session: SessionRef, runtimeId: unknown, nativeTurnId: string, text: string) {
-  return invoke('engine_steer_turn', {
+export function sendInputWhileRunning(
+  session: SessionRef,
+  runtimeId: unknown,
+  nativeTurnId: string,
+  input: RuntimeInputItem[],
+) {
+  return invoke('engine_send_input_while_running', {
     turn: { session, runtimeId, nativeTurnId },
-    input: [{ kind: 'text', text }],
+    input,
   })
 }
 

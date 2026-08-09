@@ -22,7 +22,7 @@ import { createSession, forkSession } from '@/engines/client'
 import { sameInstance } from '@/engines/identity'
 import { useEngines } from '@/engines/useEngines'
 import { resolveWorkbenchEngineActions } from '@/engines/workbenchActions'
-import { engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
+import { engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import type { SessionSummary } from '@/types'
 
 const { getMeta } = useSessionMeta()
@@ -33,6 +33,7 @@ const props = defineProps<{
   tabId: string
   index: number
   handleRef?: (el: any) => void
+  mutationDisabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -194,6 +195,7 @@ async function onFork() {
         notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
+      const attachedChannel = engineRuntimeChannel(props.column.sessionId)
       const created = await forkSession(session.reference, null, engineRuntimeOptions(props.column.sessionId))
       const sessionId = sessionUiId(created.session)
       registerEngineDraft(sessionId, {
@@ -201,6 +203,7 @@ async function onFork() {
         project: session.project_reference,
         engineName: session.engine_name || engineName.value,
         cwd: session.cwd,
+        attachedChannel,
       })
       inheritEngineRunConfig(props.column.sessionId, sessionId)
       notifyTransient(t('workbench.column.forkCreated'))
@@ -232,6 +235,7 @@ async function onNewSession() {
         notifyTransient(t('common.newSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
+      const attachedChannel = engineRuntimeChannel(props.column.sessionId)
       const created = await createSession(session.project_reference, cwd, engineRuntimeOptions(props.column.sessionId))
       const sessionId = sessionUiId(created.session)
       registerEngineDraft(sessionId, {
@@ -239,6 +243,7 @@ async function onNewSession() {
         project: session.project_reference,
         engineName: session.engine_name || engineName.value,
         cwd,
+        attachedChannel,
       })
       inheritEngineRunConfig(props.column.sessionId, sessionId)
       notifyTransient(t('workbench.rail.newSessionReady'), t('workbench.rail.newSessionHint'))
@@ -267,6 +272,7 @@ async function onClose() {
 }
 
 async function onCloseLane() {
+  if (props.mutationDisabled) return
   if (stream.value.streaming) {
     const ok = await confirm(t('workbench.monitor.removeConfirm'), t('common.removeBrief'))
     if (!ok) return
@@ -388,6 +394,7 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         <!-- 赛马模式:关闭赛道 -->
         <button
           v-else
+          :disabled="mutationDisabled"
           class="workbench-column-close icon-btn icon-btn-sm icon-btn-danger"
           v-tooltip="$t('workbench.race.closeLane')"
           @pointerdown.stop

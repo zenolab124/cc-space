@@ -54,6 +54,10 @@ export interface EngineDraft {
   project: ProjectRef
   engineName: string
   cwd: string
+  /** thread/start / fork 时实际附着的渠道；避免空线程被重复 resume。 */
+  attachedChannel: string | null
+  /** 仅当前 WebView/后端运行期有效；空线程尚未落盘，跨重启无法 resume。 */
+  runtimeScope: string
 }
 
 interface WorkbenchState {
@@ -86,6 +90,10 @@ const LEGACY_STORAGE_KEY = 'cc-space-workbench' // 旧 key,一次性迁移读取
 const LEGACY_MIN_WIDTH_KEY = 'cc-space-min-column-width' // 旧 key,一次性迁移读取用
 const DEFAULT_MIN_COLUMN_WIDTH = 360
 const ABSOLUTE_MIN_COLUMN_WIDTH = 200
+
+// performance.timeOrigin 属于当前页面生命周期：同一窗口内稳定，App 重启后更新。
+// 不用 sessionStorage，WebKit 会跨 App 进程恢复它，无法识别已经失效的空线程。
+const engineDraftRuntimeScope = String(performance.timeOrigin)
 
 const minColumnWidth = ref(
   Math.max(ABSOLUTE_MIN_COLUMN_WIDTH, Number(readMigratedStorage(MIN_WIDTH_KEY, LEGACY_MIN_WIDTH_KEY)) || DEFAULT_MIN_COLUMN_WIDTH)
@@ -260,7 +268,12 @@ function loadState(): WorkbenchState | null {
           && draft.reference.engine && typeof draft.reference.engine.engineId === 'string'
           && typeof draft.reference.engine.instanceId === 'string'
           && draft.project && typeof draft.project.nativeId === 'string') {
-          engineDrafts[key] = { ...draft, cwd: sanitizeCwd(draft.cwd) } as EngineDraft
+          engineDrafts[key] = {
+            ...draft,
+            cwd: sanitizeCwd(draft.cwd),
+            attachedChannel: typeof draft.attachedChannel === 'string' ? draft.attachedChannel : null,
+            runtimeScope: typeof draft.runtimeScope === 'string' ? draft.runtimeScope : '',
+          } as EngineDraft
         }
       }
     }
@@ -562,14 +575,14 @@ function createDraftSession(cwd: string): string {
   return sessionId
 }
 
-function registerEngineDraft(sessionId: string, draft: EngineDraft) {
-  state.value.engineDrafts[sessionId] = draft
+function registerEngineDraft(sessionId: string, draft: Omit<EngineDraft, 'runtimeScope'>) {
+  state.value.engineDrafts[sessionId] = { ...draft, runtimeScope: engineDraftRuntimeScope }
   openSession(sessionId)
 }
 
 /** 登记通用引擎草稿但不改变 Tab；赛马在一次状态变更里自行接管列归属。 */
-function stageEngineDraft(sessionId: string, draft: EngineDraft) {
-  state.value.engineDrafts[sessionId] = draft
+function stageEngineDraft(sessionId: string, draft: Omit<EngineDraft, 'runtimeScope'>) {
+  state.value.engineDrafts[sessionId] = { ...draft, runtimeScope: engineDraftRuntimeScope }
 }
 
 function engineDraft(sessionId: string): EngineDraft | null {
@@ -605,9 +618,13 @@ function pruneDrafts(isPersisted: (sessionId: string) => boolean) {
       delete state.value.drafts[sid]
     }
   }
-  for (const sid of Object.keys(state.value.engineDrafts)) {
+  for (const [sid, draft] of Object.entries(state.value.engineDrafts)) {
     if (isPersisted(sid) || !findSession(sid)) {
       delete state.value.engineDrafts[sid]
+    } else if (draft.runtimeScope !== engineDraftRuntimeScope) {
+      // thread/start 后、首条消息前没有 rollout。后端重启后旧 native id
+      // 无法 thread/resume，继续保留只会形成永久禁用的工作台列。
+      removeSession(sid)
     }
   }
   for (const sid of Object.keys(state.value.forkIntents)) {

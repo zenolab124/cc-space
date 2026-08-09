@@ -1419,7 +1419,7 @@
       "search": "搜索",
       "assets": "附件",
       "runtime": "运行时",
-      "steer": "追加指令",
+      "sendWhileRunning": "运行中发送",
       "quota": "配额",
       "configuration": "配置",
       "runtimeCommands": "运行时命令",
@@ -1428,9 +1428,10 @@
   },
   "engine": {
     "disabled": "该引擎已被 Monet 忽略",
+    "draftChannelLocked": "这个新会话已按原渠道创建；如需切换渠道，请关闭后重新新建会话",
     "claude": {
       "cliUnavailable": "未找到 Claude Code CLI",
-      "steerUnavailable": "Claude Code 当前不支持在运行中追加指令"
+      "sendWhileRunningUnavailable": "Claude Code 通用运行时当前不支持运行中发送"
     },
     "codex": {
       "cliUnavailable": "未找到 Codex CLI",
@@ -1461,7 +1462,6 @@
     "approvalRequired": "需要你的批准",
     "inputPlaceholder": "发送消息给 Agent…",
     "interrupt": "停止",
-    "steer": "追加指令",
     "send": "发送",
     "segment": {
       "command": "运行",

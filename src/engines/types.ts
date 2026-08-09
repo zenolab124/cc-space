@@ -24,7 +24,7 @@ export interface EngineCapabilities {
     create: boolean
     resume: boolean
     fork: boolean
-    steer: boolean
+    sendWhileRunning: boolean
     interrupt: boolean
     streaming: {
       text: 'delta' | 'item' | 'final' | 'none'
@@ -108,7 +108,7 @@ export interface SessionActions {
   resume: { available: boolean; reasonCode: string | null }
   fork: { available: boolean; reasonCode: string | null }
   send: { available: boolean; reasonCode: string | null }
-  steer: { available: boolean; reasonCode: string | null }
+  sendWhileRunning: { available: boolean; reasonCode: string | null }
   interrupt: { available: boolean; reasonCode: string | null }
   openCwd: { available: boolean; reasonCode: string | null }
 }

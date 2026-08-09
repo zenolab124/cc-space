@@ -34,7 +34,7 @@ impl CodexEngine {
                     create: true,
                     resume: true,
                     fork: true,
-                    steer: true,
+                    send_while_running: true,
                     interrupt: true,
                     streaming: StreamingCapabilities {
                         text: StreamGranularity::Delta,

@@ -26,7 +26,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 ### 3.0 Multi-engine system
 
 - Claude Code and Codex projects, sessions, timelines, search results, Workbench columns, and notifications coexist with engine badges and filters
-- Codex uses the local official `codex app-server` for history, create/resume, native fork, streaming text and tool progress, steering, interruption, three approval classes, and model/effort discovery
+- Codex uses the local official `codex app-server` for history, create/resume, native fork, streaming text and tool progress, sending while a turn is running, interruption, three approval classes, and model/effort discovery
 - Engine Center reports installation, authentication, version, capabilities, and diagnostics per engine; one failure does not block another
 - The Engine Adapter contract unifies identity, source, runtime, capabilities, and facets, so a third engine needs no new top-level IPC or shared-storage branch
 - Both engines reuse the same session shell, composer, and channel/model/effort capsule; one channel entry is translated by each engine adapter into its native protocol

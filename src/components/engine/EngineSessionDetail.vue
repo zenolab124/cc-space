@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { relativeTime, type SessionSummary } from '@/types'
 import type { ConversationRecord, EngineSegment, ModelDescriptor, RuntimeEventEnvelope, RuntimeSnapshot, SessionActions } from '@/engines/types'
-import { attachSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurn, steerTurn } from '@/engines/client'
+import { attachSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sendInputWhileRunning, sessionActions, startTurn } from '@/engines/client'
 import { sameInstance } from '@/engines/identity'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
@@ -14,6 +14,7 @@ import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
 import SessionSurface from '@/components/session/SessionSurface.vue'
 import SessionComposer from '@/components/session/SessionComposer.vue'
 import SessionComposerField from '@/components/session/SessionComposerField.vue'
+import { shouldSubmitComposer } from '@/components/session/composerAction'
 import SessionViewport from '@/components/session/SessionViewport.vue'
 import SessionContentState from '@/components/session/SessionContentState.vue'
 import SessionBackToBottom from '@/components/session/SessionBackToBottom.vue'
@@ -45,6 +46,7 @@ const liveRecords = ref<ConversationRecord[]>([])
 const loading = ref(false)
 const attaching = ref(false)
 const sending = ref(false)
+const interrupting = ref(false)
 const error = ref<string | null>(null)
 const input = ref('')
 const editingMeta = ref(false)
@@ -64,9 +66,18 @@ const runConfigSyncing = ref(false)
 const asyncPanelOpen = ref(false)
 const menuOpen = ref(false)
 const viewportElement = ref<HTMLElement | null>(null)
+const timelineContentElement = ref<HTMLElement | null>(null)
 const followTimeline = ref(true)
+const TIMELINE_BOTTOM_THRESHOLD = 24
+const TIMELINE_SCROLL_INTENT_MS = 500
+let timelineFollowGeneration = 0
+let timelineScrollRequestId = 0
+let lastTimelineScrollTop = 0
+let timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
+let timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
+let timelineResizeObserver: ResizeObserver | null = null
 const { getMeta, updateMeta } = useSessionMeta()
-const { openSession, removeSession, findSession } = useWorkbench()
+const { openSession, removeSession, findSession, engineDraft } = useWorkbench()
 const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
@@ -216,6 +227,9 @@ const runtimeUnavailableReason = computed(() => {
 })
 const isBusy = computed(() => snapshot.value?.phase === 'running' || snapshot.value?.phase === 'awaitingInteraction' || sending.value)
 const activeTurnId = computed(() => snapshot.value?.activeTurnId ?? null)
+const canSendWhileBusy = computed(() => !!runtimeId.value
+  && !!activeTurnId.value
+  && actions.value?.sendWhileRunning.available === true)
 const pendingInteractions = computed(() => snapshot.value?.pendingInteractions ?? [])
 const starred = computed(() => !!getMeta(props.session.id)?.starred)
 const resolvedTitle = computed(() => getMeta(props.session.id)?.title
@@ -229,18 +243,130 @@ const resumeUnavailableReason = computed(() => {
   return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
 })
 
+function causeMessage(cause: unknown): string {
+  if (typeof cause === 'string') return cause
+  if (cause && typeof cause === 'object' && 'message' in cause) {
+    const message = (cause as { message?: unknown }).message
+    if (typeof message === 'string') return message
+  }
+  return String(cause)
+}
+
 function bindViewport(element: HTMLElement | null) {
+  if (viewportElement.value !== element) {
+    timelineFollowGeneration++
+    timelineScrollRequestId++
+    lastTimelineScrollTop = element?.scrollTop ?? 0
+  }
   viewportElement.value = element
+}
+
+function timelineDistanceFromBottom(element: HTMLElement): number {
+  return Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight)
+}
+
+function invalidateTimelineScrollRequests() {
+  timelineFollowGeneration++
+  timelineScrollRequestId++
+}
+
+function stopTimelineFollow() {
+  followTimeline.value = false
+  invalidateTimelineScrollRequests()
+}
+
+function onTimelineWheel(event: WheelEvent) {
+  if (event.deltaY < 0) {
+    timelineUpwardIntentAt = performance.now()
+    stopTimelineFollow()
+    return
+  }
+  if (event.deltaY <= 0) return
+  timelineDownwardIntentAt = performance.now()
+  const element = viewportElement.value
+  // 已在底部时向下滚不会再触发 scroll，直接恢复后续内容跟随。
+  if (
+    !followTimeline.value
+    && element
+    && timelineDistanceFromBottom(element) <= TIMELINE_BOTTOM_THRESHOLD
+  ) {
+    invalidateTimelineScrollRequests()
+    followTimeline.value = true
+  }
 }
 
 function onTimelineScroll(event: Event) {
   const element = event.currentTarget as HTMLElement
-  followTimeline.value = element.scrollHeight - element.scrollTop - element.clientHeight < 24
+  const nextScrollTop = element.scrollTop
+  const delta = nextScrollTop - lastTimelineScrollTop
+  const reachedBottom = timelineDistanceFromBottom(element) <= TIMELINE_BOTTOM_THRESHOLD
+  lastTimelineScrollTop = nextScrollTop
+
+  // 覆盖滚动条拖拽和键盘上滚；宁可停止跟随，也不能让排队请求覆盖阅读位置。
+  if (delta < -0.5 && !reachedBottom) {
+    timelineUpwardIntentAt = performance.now()
+    if (followTimeline.value) stopTimelineFollow()
+    return
+  }
+
+  // 布局变化也可能把 scrollTop 推到底，只有近期用户向下滚动才恢复跟随。
+  if (
+    !followTimeline.value
+    && reachedBottom
+    && delta > 0.5
+    && timelineDownwardIntentAt > timelineUpwardIntentAt
+    && performance.now() - timelineDownwardIntentAt <= TIMELINE_SCROLL_INTENT_MS
+  ) {
+    invalidateTimelineScrollRequests()
+    followTimeline.value = true
+  }
 }
 
 function resumeTimelineFollow() {
+  invalidateTimelineScrollRequests()
   followTimeline.value = true
-  viewportElement.value?.scrollTo({ top: viewportElement.value.scrollHeight, behavior: 'smooth' })
+  requestTimelineFollow()
+}
+
+function resetTimelineFollow() {
+  invalidateTimelineScrollRequests()
+  followTimeline.value = true
+  timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
+  timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
+  lastTimelineScrollTop = viewportElement.value?.scrollTop ?? 0
+}
+
+function requestTimelineFollow(allowLayoutReset = false) {
+  if (!followTimeline.value) return
+  const generation = timelineFollowGeneration
+  const requestId = ++timelineScrollRequestId
+  const scheduledElement = viewportElement.value
+  const scheduledScrollTop = scheduledElement?.scrollTop ?? 0
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      const element = viewportElement.value
+      if (
+        !followTimeline.value
+        || generation !== timelineFollowGeneration
+        || requestId !== timelineScrollRequestId
+        || !element
+        || (scheduledElement !== null && element !== scheduledElement)
+      ) return
+      // scroll 事件尚未分发时，也用位置变化识别已经开始的向上阅读。
+      if (
+        !allowLayoutReset
+        && element.scrollTop < scheduledScrollTop - 0.5
+        && timelineDistanceFromBottom(element) > TIMELINE_BOTTOM_THRESHOLD
+      ) {
+        timelineUpwardIntentAt = performance.now()
+        stopTimelineFollow()
+        return
+      }
+      const target = Math.max(0, element.scrollHeight - element.clientHeight)
+      if (target - element.scrollTop > 0.5) element.scrollTop = target
+      lastTimelineScrollTop = element.scrollTop
+    })
+  })
 }
 
 async function toggleStar() {
@@ -268,7 +394,7 @@ async function saveMeta() {
     }, reference.value)
     editingMeta.value = false
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
   }
 }
 
@@ -278,7 +404,7 @@ async function openCwd() {
   try {
     await invoke('open_in_finder', { path: props.session.cwd })
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
   }
 }
 
@@ -302,7 +428,7 @@ async function copySessionId() {
   try {
     await navigator.clipboard.writeText(nativeSessionId.value)
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
   }
 }
 
@@ -329,14 +455,16 @@ async function reload() {
     records.value = timeline.records
     actions.value = resolvedActions
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
   } finally {
     loading.value = false
   }
 }
 
-async function ensureAttached() {
-  if (!reference.value || attaching.value || actions.value?.resume.available !== true) return
+async function ensureAttached(): Promise<boolean> {
+  if (!reference.value || attaching.value) return false
+  // 已在运行的 runtime 不能 resume：重挂载会清掉 active turn，令后续事件失配。
+  if (isBusy.value) return runtimeId.value !== null
   attaching.value = true
   try {
     if (models.value.length === 0) {
@@ -364,6 +492,25 @@ async function ensureAttached() {
         models.value = []
       }
     }
+    if (runtimeId.value && attachedChannel.value === undefined) {
+      // create/fork 草稿记录的是实际附着渠道；空线程首条消息前尚无
+      // rollout，不能重复 resume。已落盘会话没有这份可靠记录，必须走
+      // attach 来应用当前渠道，不能把 UI 选择误当成 runtime 真实状态。
+      const draft = engineDraft(props.session.id)
+      if (draft) {
+        attachedChannel.value = draft.attachedChannel
+        if (draft.attachedChannel !== selectedChannel.value) {
+          error.value = t('engine.draftChannelLocked')
+          return false
+        }
+      }
+    }
+    if (runtimeId.value && attachedChannel.value === selectedChannel.value) return true
+    if (actions.value?.resume.available !== true) {
+      const reason = actions.value?.resume.reasonCode
+      error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
+      return false
+    }
     if (!runtimeId.value || attachedChannel.value !== selectedChannel.value) {
       const attached = await attachSession(reference.value, {
         ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
@@ -372,8 +519,10 @@ async function ensureAttached() {
       runtimeId.value = attached.runtimeId
       attachedChannel.value = selectedChannel.value
     }
+    return true
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
+    return false
   } finally {
     attaching.value = false
   }
@@ -398,13 +547,20 @@ async function recoverRuntimeSnapshot() {
 async function send() {
   const text = input.value.trim()
   if (!text || !reference.value || sending.value) return
-  if (!isBusy.value) await ensureAttached()
+  const sendWhileRunning = isBusy.value
+  if (sendWhileRunning && !canSendWhileBusy.value) {
+    const reason = actions.value?.sendWhileRunning.reasonCode
+    error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
+    return
+  }
+  if (!isBusy.value && !(await ensureAttached())) return
   if (!runtimeId.value) {
     error.value = runtimeUnavailableReason.value
     return
   }
   sending.value = true
   error.value = null
+  input.value = ''
   const optimisticId = `pending-user-${Date.now()}`
   liveRecords.value.push({
     id: optimisticId,
@@ -418,29 +574,37 @@ async function send() {
     sourceMeta: {},
   })
   try {
-    if (isBusy.value && runtimeId.value && activeTurnId.value && actions.value?.steer.available) {
-      await steerTurn(reference.value, runtimeId.value, activeTurnId.value, text)
+    if (sendWhileRunning && runtimeId.value && activeTurnId.value) {
+      await sendInputWhileRunning(
+        reference.value,
+        runtimeId.value,
+        activeTurnId.value,
+        [{ kind: 'text', text }],
+      )
     } else {
       await startTurn(reference.value, text, {
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
         ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
       })
     }
-    input.value = ''
   } catch (cause) {
     liveRecords.value = liveRecords.value.filter(record => record.id !== optimisticId)
-    error.value = String(cause)
+    input.value = input.value.trim() ? `${text}\n${input.value}` : text
+    error.value = causeMessage(cause)
   } finally {
     sending.value = false
   }
 }
 
 async function interrupt() {
-  if (!reference.value || !runtimeId.value || !activeTurnId.value) return
+  if (interrupting.value || !reference.value || !runtimeId.value || !activeTurnId.value) return
+  interrupting.value = true
   try {
     await interruptTurn(reference.value, runtimeId.value, activeTurnId.value)
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
+  } finally {
+    interrupting.value = false
   }
 }
 
@@ -485,7 +649,7 @@ async function decide(request: RuntimeSnapshot['pendingInteractions'][number], d
   try {
     await respondInteraction(request.reference, decision)
   } catch (cause) {
-    error.value = String(cause)
+    error.value = causeMessage(cause)
   }
 }
 
@@ -532,13 +696,14 @@ function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
 }
 
 function onInputKeydown(event: KeyboardEvent) {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (shouldSubmitComposer(event)) {
     event.preventDefault()
     void send()
   }
 }
 
 watch(() => props.session.id, async () => {
+  resetTimelineFollow()
   runConfigSyncing.value = true
   try {
     records.value = []
@@ -555,6 +720,8 @@ watch(() => props.session.id, async () => {
     asyncPanelOpen.value = false
     menuOpen.value = false
     await reload()
+    await nextTick()
+    requestTimelineFollow(true)
     if (interactive.value) await ensureAttached()
   } finally {
     runConfigSyncing.value = false
@@ -572,10 +739,18 @@ watch(() => asyncTasks.value.length, length => {
   if (length === 0) asyncPanelOpen.value = false
 })
 
-watch(() => allRecords.value.length, async () => {
-  if (!followTimeline.value) return
-  await nextTick()
-  viewportElement.value?.scrollTo({ top: viewportElement.value.scrollHeight })
+watch(() => allRecords.value.length, () => {
+  requestTimelineFollow()
+})
+
+watch(timelineContentElement, element => {
+  timelineResizeObserver?.disconnect()
+  if (!element) return
+  if (!timelineResizeObserver) {
+    // itemDelta 会原地增长同一条记录，数组 length 不变；以真实内容高度统一触发跟随。
+    timelineResizeObserver = new ResizeObserver(() => requestTimelineFollow())
+  }
+  timelineResizeObserver.observe(element)
 })
 
 watch(selectedModel, (model) => {
@@ -612,6 +787,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  invalidateTimelineScrollRequests()
+  timelineResizeObserver?.disconnect()
+  timelineResizeObserver = null
   unlistenSnapshot?.()
   unlistenEvent?.()
 })
@@ -709,10 +887,10 @@ onUnmounted(() => {
       </form>
     </template>
 
-    <SessionViewport :scroll-ref="bindViewport" @scroll="onTimelineScroll">
+    <SessionViewport :scroll-ref="bindViewport" @wheel="onTimelineWheel" @scroll="onTimelineScroll">
       <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
       <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
-      <div v-else class="space-y-4 pb-2">
+      <div v-else ref="timelineContentElement" class="space-y-4 pb-2">
         <EngineConversationGroup
           v-for="group in conversationGroups"
           :key="group.key"
@@ -759,7 +937,17 @@ onUnmounted(() => {
     </template>
 
     <template #input>
-      <SessionComposer v-if="canSend && !hideInput">
+      <SessionComposer
+        v-if="canSend && !hideInput"
+        :busy="isBusy"
+        :has-content="!!input.trim()"
+        :can-send-while-busy="canSendWhileBusy"
+        :send-disabled="attaching || sending"
+        :stop-disabled="interrupting || !activeTurnId || actions?.interrupt.available === false"
+        :stop-loading="interrupting"
+        @send="send"
+        @stop="interrupt"
+      >
         <template #field="{ fieldClass }">
           <SessionComposerField
             v-model="input"
@@ -768,34 +956,6 @@ onUnmounted(() => {
             :disabled="attaching"
             @keydown="onInputKeydown"
           />
-        </template>
-        <template #actions="{ primaryActionClass, dangerActionClass }">
-          <button
-            v-if="isBusy && activeTurnId && actions?.steer.available"
-            type="button"
-            :class="primaryActionClass"
-            :disabled="!input.trim() || sending"
-            @click="send"
-          >
-            {{ t('engine.steer') }}
-          </button>
-          <button
-            v-if="isBusy && activeTurnId && actions?.interrupt.available !== false"
-            type="button"
-            :class="dangerActionClass"
-            @click="interrupt"
-          >
-            {{ t('engine.interrupt') }}
-          </button>
-          <button
-            v-if="!isBusy"
-            type="button"
-            :class="primaryActionClass"
-            :disabled="!input.trim() || attaching || sending"
-            @click="send"
-          >
-            {{ t('engine.send') }}
-          </button>
         </template>
       </SessionComposer>
       <div v-else-if="interactive && !hideInput" class="shrink-0 border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground">{{ runtimeUnavailableReason }}</div>

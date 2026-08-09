@@ -1419,7 +1419,7 @@
       "search": "Search",
       "assets": "Attachments",
       "runtime": "Runtime",
-      "steer": "Steering",
+      "sendWhileRunning": "Send while running",
       "quota": "Quota",
       "configuration": "Configuration",
       "runtimeCommands": "Runtime commands",
@@ -1428,9 +1428,10 @@
   },
   "engine": {
     "disabled": "This engine is ignored by Monet",
+    "draftChannelLocked": "This new session was created with its original channel. Close it and create a new session to switch channels",
     "claude": {
       "cliUnavailable": "Claude Code CLI was not found",
-      "steerUnavailable": "Claude Code cannot steer an active turn"
+      "sendWhileRunningUnavailable": "The generic Claude Code runtime cannot accept input while a turn is running"
     },
     "codex": {
       "cliUnavailable": "Codex CLI was not found",
@@ -1461,7 +1462,6 @@
     "approvalRequired": "Approval required",
     "inputPlaceholder": "Send a message to the agent…",
     "interrupt": "Stop",
-    "steer": "Steer",
     "send": "Send",
     "segment": {
       "command": "Run",

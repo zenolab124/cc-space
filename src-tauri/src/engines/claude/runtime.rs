@@ -513,11 +513,15 @@ impl AgentRuntime for ClaudeRuntime {
         })
     }
 
-    fn steer_turn(&self, _turn: TurnRef, _input: Vec<InputItem>) -> EngineFuture<'_, ()> {
+    fn send_input_while_running(
+        &self,
+        _turn: TurnRef,
+        _input: Vec<InputItem>,
+    ) -> EngineFuture<'_, ()> {
         Box::pin(async move {
             Err(EngineError::new(
                 EngineErrorKind::Unsupported,
-                "Claude runtime does not expose turn steering",
+                "Claude runtime does not accept input while a turn is running",
             ))
         })
     }

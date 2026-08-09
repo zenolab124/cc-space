@@ -602,7 +602,11 @@ impl AgentRuntime for CodexRuntime {
         })
     }
 
-    fn steer_turn(&self, turn: TurnRef, input: Vec<InputItem>) -> EngineFuture<'_, ()> {
+    fn send_input_while_running(
+        &self,
+        turn: TurnRef,
+        input: Vec<InputItem>,
+    ) -> EngineFuture<'_, ()> {
         Box::pin(async move {
             self.owns_session(&turn.session)?;
             self.supervisor.request(
@@ -933,7 +937,8 @@ mod tests {
                 ("model".into(), Value::String("gpt-test".into())),
                 ("ignored".into(), Value::Bool(true)),
             ]),
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(params["threadId"], "source-thread");
         assert_eq!(params["lastTurnId"], "turn-2");
         assert_eq!(params["model"], "gpt-test");
@@ -1169,7 +1174,7 @@ mod tests {
         ))
         .unwrap();
         std::thread::sleep(Duration::from_millis(250));
-        resolve_ready(runtime.steer_turn(
+        resolve_ready(runtime.send_input_while_running(
             steered_turn.reference.clone(),
             vec![InputItem::Text {
                 text: "After the command ends, reply with exactly STEERED.".into(),

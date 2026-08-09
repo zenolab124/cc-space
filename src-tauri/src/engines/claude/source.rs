@@ -321,7 +321,9 @@ impl SessionSource for ClaudeSource {
                 resume: resume.clone(),
                 fork: resume.clone(),
                 send: resume,
-                steer: ActionAvailability::unavailable("engine.claude.steerUnavailable"),
+                send_while_running: ActionAvailability::unavailable(
+                    "engine.claude.sendWhileRunningUnavailable",
+                ),
                 interrupt: ActionAvailability::available(),
                 open_cwd: if summary.cwd.is_some() {
                     ActionAvailability::available()

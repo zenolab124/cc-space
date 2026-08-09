@@ -52,6 +52,10 @@ export function engineRuntimeOptions(sessionId: string): Record<string, unknown>
   }
 }
 
+export function engineRuntimeChannel(sessionId: string): string | null {
+  return configs.get(sessionId)?.channelId ?? null
+}
+
 export function inheritEngineRunConfig(sourceSessionId: string, targetSessionId: string) {
   const config = configs.get(sourceSessionId)
   if (config) configs.set(targetSessionId, { ...config })

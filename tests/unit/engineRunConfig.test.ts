@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearEngineRunConfig,
   engineRunConfig,
+  engineRuntimeChannel,
   engineRuntimeOptions,
   inheritEngineRunConfig,
   setEngineRunConfig,
@@ -21,6 +22,7 @@ describe('engine run config', () => {
       model: 'gpt-test', effort: 'high', channelId: null, modelOverridden: true, effortOverridden: true,
     })
     expect(engineRuntimeOptions(sessionId)).toEqual({ model: 'gpt-test' })
+    expect(engineRuntimeChannel(sessionId)).toBeNull()
     expect(engineRunConfig('codex:test:thread-2')).toBeNull()
   })
 
@@ -33,6 +35,7 @@ describe('engine run config', () => {
 
     expect(engineRunConfig(sessionId)?.effort).toBe('low')
     expect(engineRuntimeOptions(sessionId)).toEqual({ model: 'gpt-test', channelId: 'proxy' })
+    expect(engineRuntimeChannel(sessionId)).toBe('proxy')
   })
 
   it('inherits lane settings without sharing mutable state', () => {
