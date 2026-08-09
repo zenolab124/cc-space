@@ -440,6 +440,7 @@
       "name": "名称",
       "schedule": "时间计划",
       "command": "指令",
+      "engine": "默认引擎",
       "status": "状态",
       "lastRun": "上次执行",
       "actions": "操作"
@@ -448,6 +449,15 @@
     "enable": "启用",
     "runNow": "立即运行",
     "stop": "终止",
+    "bulkEngineMixed": "全部切换",
+    "bulkEngineOption": "全部 → {engine}",
+    "bulkEngineAria": "切换所有定时任务的默认引擎",
+    "rowEngineAria": "切换“{name}”的默认引擎",
+    "engineChangeHint": "当前运行不受影响，下次执行生效",
+    "engineSwitchFailed": "无法切换“{name}”的引擎，请重试",
+    "bulkEngineSwitchFailed": "无法切换全部任务的引擎，请重试",
+    "bulkEngineSwitchDone": "已切换全部任务",
+    "bulkEngineSwitchDoneHint": "{count} 个任务将使用 {engine}",
     "routineForm": {
       "newTitle": "新建定时任务",
       "editTitle": "编辑 · {name}",

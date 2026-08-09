@@ -332,6 +332,20 @@ fn validate_routine_engine(engine: &RoutineEngine) -> Result<(), String> {
     }
 }
 
+fn replace_routine_engines(
+    routines: &mut [RoutineDefinition],
+    engine: &RoutineEngine,
+) -> usize {
+    let mut changed = 0;
+    for routine in routines {
+        if routine.engine != *engine {
+            routine.engine = engine.clone();
+            changed += 1;
+        }
+    }
+    changed
+}
+
 // ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
@@ -729,6 +743,20 @@ pub async fn update_routine(
     Ok(result)
 }
 
+/// 一次落盘切换全部任务的默认引擎。引擎变更只影响后续执行，不需要重建
+/// OS 调度项，也不会干预已经启动并持有旧定义快照的运行中任务。
+#[tauri::command]
+pub async fn update_all_routine_engines(engine: RoutineEngine) -> Result<usize, String> {
+    validate_routine_engine(&engine)?;
+    Ok(with_routines(|routines| {
+        let changed = replace_routine_engines(routines, &engine);
+        if changed > 0 {
+            save_routines(routines);
+        }
+        changed
+    }))
+}
+
 #[tauri::command]
 pub async fn delete_routine(id: String) -> Result<(), String> {
     if let Err(e) = scheduler::unregister_routine(&id) {
@@ -881,4 +909,43 @@ pub async fn remove_wake_authorization() -> Result<(), String> {
     let snapshot: Vec<RoutineDefinition> = with_routines(|r| r.clone());
     let _ = scheduler::sync_wake_schedule(&snapshot, "passive");
     crate::wake::remove_authorization()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn routine(id: &str, engine: RoutineEngine) -> RoutineDefinition {
+        RoutineDefinition {
+            id: id.to_string(),
+            name: id.to_string(),
+            cron_expression: "0 9 * * *".to_string(),
+            original_text: String::new(),
+            prompt: "Summarize".to_string(),
+            engine,
+            enabled: true,
+            created_at: "2026-08-10T00:00:00Z".to_string(),
+            last_run: None,
+            next_run: None,
+            source: Some(RoutineSource::ui()),
+        }
+    }
+
+    #[test]
+    fn replaces_all_routine_engines_and_counts_only_changes() {
+        let mut routines = vec![
+            routine("claude", RoutineEngine::claude_code()),
+            routine("codex", RoutineEngine::codex()),
+        ];
+
+        assert_eq!(
+            replace_routine_engines(&mut routines, &RoutineEngine::codex()),
+            1
+        );
+        assert!(routines.iter().all(|routine| routine.engine.is_codex()));
+        assert_eq!(
+            replace_routine_engines(&mut routines, &RoutineEngine::codex()),
+            0
+        );
+    }
 }

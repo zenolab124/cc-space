@@ -440,6 +440,7 @@
       "name": "Name",
       "schedule": "Schedule",
       "command": "Command",
+      "engine": "Default Engine",
       "status": "Status",
       "lastRun": "Last Run",
       "actions": "Actions"
@@ -448,6 +449,15 @@
     "enable": "Enable",
     "runNow": "Run now",
     "stop": "Stop",
+    "bulkEngineMixed": "Switch all",
+    "bulkEngineOption": "All → {engine}",
+    "bulkEngineAria": "Switch the default engine for all scheduled tasks",
+    "rowEngineAria": "Switch the default engine for “{name}”",
+    "engineChangeHint": "The current run is unaffected; the change applies next time",
+    "engineSwitchFailed": "Could not switch the engine for “{name}”. Try again.",
+    "bulkEngineSwitchFailed": "Could not switch the engine for all tasks. Try again.",
+    "bulkEngineSwitchDone": "All tasks switched",
+    "bulkEngineSwitchDoneHint": "{count} tasks will use {engine}",
     "routineForm": {
       "newTitle": "New Scheduled Task",
       "editTitle": "Edit · {name}",

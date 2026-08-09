@@ -146,6 +146,13 @@ async function updateRoutine(
   return result
 }
 
+async function updateAllRoutineEngines(engine: EngineInstanceId): Promise<number> {
+  const changed = await invoke<number>('update_all_routine_engines', { engine })
+  routines.value = routines.value.map(routine => ({ ...routine, engine }))
+  await loadRoutines()
+  return changed
+}
+
 async function deleteRoutine(id: string): Promise<void> {
   await invoke('delete_routine', { id })
   await loadRoutines()
@@ -181,6 +188,7 @@ export function useRoutines() {
     initRoutineListener,
     createRoutine,
     updateRoutine,
+    updateAllRoutineEngines,
     deleteRoutine,
     runNow,
     stopRoutine,

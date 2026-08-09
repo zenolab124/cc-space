@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useUiState } from '@/composables/useUiState'
 import { useAutomation, buildRows } from '@/composables/useAutomation'
 import { useRoutines, type RoutineDefinition, type RoutineRow, type RoutineExecutionLog } from '@/composables/useRoutines'
+import { useNotifications } from '@/composables/useNotifications'
 import { renderMarkdownCached } from '@/composables/useMarkdown'
 import { stripAnsi } from '@/utils/ansi'
 import RoutineForm from '@/components/automation/RoutineForm.vue'
@@ -13,7 +14,8 @@ import { useEngines } from '@/engines/useEngines'
 import { instanceKey } from '@/engines/identity'
 
 const { t } = useI18n()
-const { engines } = useEngines()
+const { notifyTransient } = useNotifications()
+const { engines, health: engineHealth, loading: enginesLoading } = useEngines()
 const { activeSection } = useUiState()
 const {
   config, stats, loadingConfig, loadingStats,
@@ -28,6 +30,7 @@ const {
   refresh: refreshRoutines,
   deleteRoutine,
   updateRoutine,
+  updateAllRoutineEngines,
   runNow,
   stopRoutine,
   getRoutineLogs,
@@ -93,6 +96,95 @@ const detailPopup = ref<{ title: string; content: string } | null>(null)
 // --- Routines UI ---
 const showRoutineForm = ref<'new' | RoutineDefinition | null>(null)
 const deletingId = ref<string | null>(null)
+const switchingEngineIds = ref(new Set<string>())
+const bulkEngineSwitching = ref(false)
+const engineSwitchError = ref<{ routineId: string | null; message: string } | null>(null)
+
+const routineEngineOptions = computed(() => engines.value
+  .filter(engine => engine.capabilities.facets.automation)
+  .map(engine => ({
+    descriptor: engine,
+    key: instanceKey(engine.instance),
+    available: engine.enabled && engineHealth.value[instanceKey(engine.instance)]?.runtime.available === true,
+  })))
+const availableRoutineEngineOptions = computed(() => routineEngineOptions.value
+  .filter(option => option.available))
+const bulkEngineKey = computed(() => {
+  const keys = new Set(routineRows.value.map(routine => instanceKey(routine.engine)))
+  return keys.size === 1 ? [...keys][0] : ''
+})
+
+function engineOption(key: string) {
+  return routineEngineOptions.value.find(option => option.key === key)
+}
+
+function markEngineSwitching(id: string, switching: boolean) {
+  const next = new Set(switchingEngineIds.value)
+  if (switching) next.add(id)
+  else next.delete(id)
+  switchingEngineIds.value = next
+}
+
+async function onRoutineEngineChange(routine: RoutineRow, event: Event) {
+  const select = event.currentTarget as HTMLSelectElement
+  const previousKey = instanceKey(routine.engine)
+  const option = engineOption(select.value)
+  if (!option?.available) {
+    select.value = previousKey
+    engineSwitchError.value = {
+      routineId: routine.id,
+      message: t('automation.engineSwitchFailed', { name: routine.name }),
+    }
+    return
+  }
+  if (option.key === previousKey) return
+
+  engineSwitchError.value = null
+  markEngineSwitching(routine.id, true)
+  try {
+    await updateRoutine(routine.id, { engine: option.descriptor.instance })
+  } catch {
+    select.value = previousKey
+    engineSwitchError.value = {
+      routineId: routine.id,
+      message: t('automation.engineSwitchFailed', { name: routine.name }),
+    }
+  } finally {
+    markEngineSwitching(routine.id, false)
+  }
+}
+
+async function onAllRoutineEnginesChange(event: Event) {
+  const select = event.currentTarget as HTMLSelectElement
+  const previousKey = bulkEngineKey.value
+  const option = engineOption(select.value)
+  if (!option?.available) {
+    select.value = previousKey
+    return
+  }
+  if (option.key === previousKey) return
+
+  engineSwitchError.value = null
+  bulkEngineSwitching.value = true
+  try {
+    const count = await updateAllRoutineEngines(option.descriptor.instance)
+    notifyTransient(
+      t('automation.bulkEngineSwitchDone'),
+      t('automation.bulkEngineSwitchDoneHint', {
+        count,
+        engine: option.descriptor.displayName,
+      }),
+    )
+  } catch {
+    select.value = previousKey
+    engineSwitchError.value = {
+      routineId: null,
+      message: t('automation.bulkEngineSwitchFailed'),
+    }
+  } finally {
+    bulkEngineSwitching.value = false
+  }
+}
 
 function onRoutineFormSaved() {
   showRoutineForm.value = null
@@ -165,11 +257,6 @@ function sourceProjectName(r: RoutineRow): string {
   const p = r.source?.project
   if (!p) return ''
   return p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? ''
-}
-
-function routineEngineName(r: RoutineRow): string {
-  return engines.value.find(engine => instanceKey(engine.instance) === instanceKey(r.engine))?.displayName
-    ?? r.engine.engineId
 }
 
 // --- 日志弹窗 ---
@@ -406,6 +493,32 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
                 <th>{{ $t('automation.routineColumns.name') }}</th>
                 <th>{{ $t('automation.routineColumns.schedule') }}</th>
                 <th>{{ $t('automation.routineColumns.command') }}</th>
+                <th>
+                  <div class="flex flex-col items-start gap-1">
+                    <span>{{ $t('automation.routineColumns.engine') }}</span>
+                    <div class="inline-flex items-center gap-1.5">
+                      <select
+                        class="routine-engine-select routine-engine-select-all"
+                        :value="bulkEngineKey"
+                        :aria-label="$t('automation.bulkEngineAria')"
+                        v-tooltip="$t('automation.engineChangeHint')"
+                        :disabled="enginesLoading || bulkEngineSwitching || switchingEngineIds.size > 0 || availableRoutineEngineOptions.length === 0"
+                        @change="onAllRoutineEnginesChange"
+                      >
+                        <option v-if="!bulkEngineKey" value="" disabled>{{ $t('automation.bulkEngineMixed') }}</option>
+                        <option
+                          v-for="option in routineEngineOptions"
+                          :key="option.key"
+                          :value="option.key"
+                          :disabled="!option.available"
+                        >
+                          {{ $t('automation.bulkEngineOption', { engine: option.descriptor.displayName }) }}{{ option.available ? '' : ` · ${$t('automation.routineForm.engineUnavailableSuffix')}` }}
+                        </option>
+                      </select>
+                      <span v-if="bulkEngineSwitching" class="i-carbon-circle-dash w-3 h-3 animate-spin text-muted-foreground" />
+                    </div>
+                  </div>
+                </th>
                 <th>{{ $t('automation.routineColumns.status') }}</th>
                 <th>{{ $t('automation.routineColumns.lastRun') }}</th>
                 <th>{{ $t('automation.routineColumns.actions') }}</th>
@@ -416,15 +529,14 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
                 <td class="text-xs font-medium">
                   {{ r.name }}
                   <div
+                    v-if="r.source"
                     v-tooltip="r.source?.kind === 'mcp' ? [r.source.project, r.source.client].filter(Boolean).join(' · ') : undefined"
                     class="text-[10px] text-muted-foreground font-normal mt-0.5"
                   >
-                    <span>{{ routineEngineName(r) }}</span>
                     <template v-if="r.source?.kind === 'mcp'">
-                      <span> · </span>
                       MCP<span v-if="sourceProjectName(r)"> · {{ sourceProjectName(r) }}</span>
                     </template>
-                    <template v-else-if="r.source"><span> · </span>{{ $t('automation.sourceUi') }}</template>
+                    <template v-else>{{ $t('automation.sourceUi') }}</template>
                   </div>
                 </td>
                 <td>
@@ -433,6 +545,33 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
                 </td>
                 <td>
                   <span class="truncate-cmd cursor-pointer" @click="detailPopup = { title: r.name, content: r.prompt }">{{ r.prompt }}</span>
+                </td>
+                <td class="text-xs">
+                  <div class="inline-flex items-center gap-1.5">
+                    <select
+                      class="routine-engine-select"
+                      :value="instanceKey(r.engine)"
+                      :aria-label="$t('automation.rowEngineAria', { name: r.name })"
+                      v-tooltip="$t('automation.engineChangeHint')"
+                      :disabled="enginesLoading || bulkEngineSwitching || switchingEngineIds.has(r.id) || availableRoutineEngineOptions.length === 0"
+                      @change="onRoutineEngineChange(r, $event)"
+                    >
+                      <option
+                        v-for="option in routineEngineOptions"
+                        :key="option.key"
+                        :value="option.key"
+                        :disabled="!option.available"
+                      >
+                        {{ option.descriptor.displayName }}{{ option.available ? '' : ` · ${$t('automation.routineForm.engineUnavailableSuffix')}` }}
+                      </option>
+                    </select>
+                    <span v-if="switchingEngineIds.has(r.id)" class="i-carbon-circle-dash w-3 h-3 animate-spin text-muted-foreground" />
+                  </div>
+                  <p
+                    v-if="engineSwitchError?.routineId === r.id"
+                    class="mt-1 max-w-40 text-[10px] leading-tight text-destructive whitespace-normal"
+                    role="alert"
+                  >{{ engineSwitchError.message }}</p>
                 </td>
                 <td class="text-xs whitespace-nowrap">
                   <div class="inline-flex items-center gap-2">
@@ -483,6 +622,11 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
             </tbody>
           </table>
         </div>
+        <p
+          v-if="engineSwitchError?.routineId === null"
+          class="mt-2 text-xs text-destructive"
+          role="alert"
+        >{{ engineSwitchError.message }}</p>
 
         <!-- 新建/编辑表单 -->
         <div v-if="showRoutineForm" class="mt-3">
@@ -715,7 +859,7 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
 
 .routine-table {
   display: grid;
-  grid-template-columns: minmax(72px, 1fr) minmax(72px, 1fr) minmax(0, 3fr) auto auto auto;
+  grid-template-columns: minmax(72px, 1fr) minmax(72px, 1fr) minmax(0, 3fr) minmax(112px, auto) auto auto auto;
   min-width: 0;
 }
 
@@ -737,8 +881,30 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
 
 .routine-table td:nth-child(4),
 .routine-table td:nth-child(5),
+.routine-table td:nth-child(6),
 .routine-table td:last-child {
   white-space: nowrap;
+}
+
+.routine-engine-select {
+  max-width: 144px;
+  height: 24px;
+  border: 1px solid var(--input);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 20px 0 6px;
+  font-size: 11px;
+}
+
+.routine-engine-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.routine-engine-select-all {
+  max-width: 128px;
+  color: var(--muted-foreground);
 }
 
 .routine-table td:last-child {

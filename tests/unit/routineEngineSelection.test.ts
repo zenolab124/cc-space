@@ -35,4 +35,19 @@ describe('定时任务默认引擎', () => {
     expect(mcp).toContain('"enum": ["claude-code", "codex"]')
     expect(mcp).toContain('RoutineEngine::codex()')
   })
+
+  it('任务表格支持逐条切换与单次原子切换全部任务', () => {
+    const view = source('../../src/views/AutomationView.vue')
+    const composable = source('../../src/composables/useRoutines.ts')
+    const backend = source('../../src-tauri/src/routines.rs')
+    const bridge = source('../../src-tauri/src/lib.rs')
+
+    expect(view).toContain('@change="onRoutineEngineChange(r, $event)"')
+    expect(view).toContain('@change="onAllRoutineEnginesChange"')
+    expect(view).toContain('bulkEngineSwitching')
+    expect(view).toContain('role="alert"')
+    expect(composable).toContain("invoke<number>('update_all_routine_engines', { engine })")
+    expect(backend).toContain('replace_routine_engines(routines, &engine)')
+    expect(bridge).toContain('routines::update_all_routine_engines')
+  })
 })

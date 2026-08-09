@@ -329,6 +329,7 @@ pub fn run() {
             routines::get_routines,
             routines::create_routine,
             routines::update_routine,
+            routines::update_all_routine_engines,
             routines::delete_routine,
             routines::get_routine_logs,
             routines::run_routine_now,
