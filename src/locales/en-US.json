@@ -1027,6 +1027,7 @@
   },
   "notification": {
     "claudeAsking": "Claude is asking",
+    "questionPending": "Question pending",
     "planApproval": "Plan pending approval",
     "enterPlanMode": "Requesting plan mode",
     "permissionRequest": "Permission request",

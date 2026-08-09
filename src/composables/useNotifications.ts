@@ -148,6 +148,29 @@ export function requestKindLabel(toolName: string): string {
   }
 }
 
+/**
+ * 引擎交互事件（InteractionKind）的类型标签。
+ * 引擎通道是跨引擎通用的，措辞不绑定具体引擎名。
+ */
+export function interactionKindLabel(kind: string): string {
+  switch (kind) {
+    case 'question': return i18n.global.t('notification.questionPending')
+    case 'plan': return i18n.global.t('notification.planApproval')
+    default: return i18n.global.t('notification.permissionRequest')
+  }
+}
+
+/**
+ * 该交互是否「向用户收集输入」而非「申请授权」。
+ *
+ * 提问与计划批准必须在会话内的专用卡片作答——那里才能把答案/修改意见经
+ * updatedInput 回传。通知条上的就地「允许」只会送出一个空答放行，
+ * 模型侧表现为「用户没有回答问题」。
+ */
+export function isInteractiveKind(kind: string): boolean {
+  return kind === 'question' || kind === 'plan'
+}
+
 function permissionSub(req: PermissionRequest): string {
   const input = req.input
   // 交互工具:摘要取内容本身,比工具名更有信息量
@@ -381,7 +404,7 @@ export async function initNotificationLayer(): Promise<void> {
       next.set(engineInteractionKey(request.reference), { request, sessionId, at: Date.now() })
       engineInteractions.value = next
       void maybeNotifySystem(
-        i18n.global.t('notification.permissionRequest'),
+        interactionKindLabel(request.kind),
         `${sessionTitle(sessionId)} · ${request.title || request.kind}`,
       )
       } else if (runtimeEvent.kind === 'interactionResolved') {
@@ -440,10 +463,15 @@ export async function respondEngineToast(
       ? options.find(item => !item.dangerous && /session/i.test(item.id)) ?? options.find(item => !item.dangerous)
       : options.find(item => !item.dangerous && !/session/i.test(item.id)) ?? options.find(item => !item.dangerous)
   if (!option) return
-  await respondEngineInteraction(toast.interaction.reference, option.id)
-  const next = new Map(engineInteractions.value)
-  next.delete(engineInteractionKey(toast.interaction.reference))
-  engineInteractions.value = next
+  try {
+    await respondEngineInteraction(toast.interaction.reference, option.id)
+  } finally {
+    // 无论成败都清本地条目:请求可能已被另一入口(会话内卡片/legacy 通道)处理,
+    // 此时 Rust 端找不到 pending 会抛错——不清就会留下一条永远点不动的通知
+    const next = new Map(engineInteractions.value)
+    next.delete(engineInteractionKey(toast.interaction.reference))
+    engineInteractions.value = next
+  }
 }
 
 // ---- 操作:toast 上的按钮 ----

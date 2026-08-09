@@ -26,6 +26,10 @@ pub struct ClaudeRuntime {
     event_sinks: Mutex<Vec<RuntimeEventSink>>,
     observer: Mutex<Option<StreamingObserverHandle>>,
     permission_observer: Mutex<Option<PermissionObserverHandle>>,
+    /// requestId → 发出 InteractionRequested 时构造的 reference。
+    /// Resolved 时原样取回，保证与 coordinator 里 pending_interactions 的条目按值相等
+    /// （turn_id 期间可能变化，现算会匹配不上导致 pending 永不出队）。
+    interaction_refs: Mutex<HashMap<String, InteractionRef>>,
 }
 
 impl ClaudeRuntime {
@@ -37,6 +41,7 @@ impl ClaudeRuntime {
             event_sinks: Mutex::new(Vec::new()),
             observer: Mutex::new(None),
             permission_observer: Mutex::new(None),
+            interaction_refs: Mutex::new(HashMap::new()),
         });
         let weak = Arc::downgrade(&runtime);
         let handle = crate::streaming::subscribe_observer(Arc::new(move |event| {
@@ -308,12 +313,27 @@ impl ClaudeRuntime {
     }
 
     fn handle_permission_event(&self, event: PermissionObserverEvent) {
-        let PermissionObserverEvent::Requested {
-            request_id,
-            session_id,
-            tool_name,
-            input,
-        } = event;
+        match event {
+            PermissionObserverEvent::Requested {
+                request_id,
+                session_id,
+                tool_name,
+                input,
+            } => self.handle_permission_requested(request_id, session_id, tool_name, input),
+            PermissionObserverEvent::Resolved {
+                request_id,
+                session_id,
+            } => self.handle_permission_resolved(&request_id, &session_id),
+        }
+    }
+
+    fn handle_permission_requested(
+        &self,
+        request_id: String,
+        session_id: String,
+        tool_name: String,
+        input: Value,
+    ) {
         let runtime = self.runtime_session(
             match SessionRef::new(self.instance.clone(), &session_id) {
                 Ok(session) => session,
@@ -324,19 +344,24 @@ impl ClaudeRuntime {
         let kind = match tool_name.as_str() {
             "Bash" => InteractionKind::Command,
             "AskUserQuestion" => InteractionKind::Question,
-            "ExitPlanMode" => InteractionKind::Plan,
+            "ExitPlanMode" | "EnterPlanMode" => InteractionKind::Plan,
             _ => InteractionKind::Unknown,
         };
+        let reference = InteractionRef {
+            session: runtime.session,
+            runtime_id: runtime.runtime_id,
+            request_id: request_id.clone(),
+            turn_id: Some(self.active_turn(&session_id)),
+        };
+        self.interaction_refs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(request_id, reference.clone());
         self.emit(
             &session_id,
             NormalizedRuntimeEvent::InteractionRequested {
                 request: InteractionRequest {
-                    reference: InteractionRef {
-                        session: runtime.session,
-                        runtime_id: runtime.runtime_id,
-                        request_id,
-                        turn_id: Some(self.active_turn(&session_id)),
-                    },
+                    reference,
                     kind,
                     title: Some(tool_name),
                     payload: bounded_permission_payload(input),
@@ -353,6 +378,27 @@ impl ClaudeRuntime {
                         },
                     ],
                 },
+            },
+        );
+    }
+
+    /// 权限请求终结（无论经 legacy `respond_permission` 还是引擎 `respond`）：
+    /// 补发 InteractionResolved，让 coordinator 出队并退出 AwaitingInteraction。
+    /// 不做这一步，legacy 通道处理过的请求会在引擎侧永久残留。
+    fn handle_permission_resolved(&self, request_id: &str, session_id: &str) {
+        let reference = self
+            .interaction_refs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(request_id);
+        let Some(reference) = reference else {
+            return;
+        };
+        self.emit(
+            session_id,
+            NormalizedRuntimeEvent::InteractionResolved {
+                reference,
+                decision: "resolved".into(),
             },
         );
     }
@@ -531,13 +577,23 @@ impl AgentRuntime for ClaudeRuntime {
                 ));
             }
             let session_id = request.session.native_id().to_string();
-            self.emit(
-                &session_id,
-                NormalizedRuntimeEvent::InteractionResolved {
-                    reference: request,
-                    decision: response.decision,
-                },
-            );
+            // 与 observer 的 Resolved 路径互斥：谁先取到 reference 谁负责发事件。
+            // PermissionService::respond 会唤醒 handle_connection 线程走 Resolved 通知，
+            // 两边都无条件 emit 就会双发；用 remove 的返回值裁定，恰好一次。
+            let reference = self
+                .interaction_refs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&request.request_id);
+            if let Some(reference) = reference {
+                self.emit(
+                    &session_id,
+                    NormalizedRuntimeEvent::InteractionResolved {
+                        reference,
+                        decision: response.decision,
+                    },
+                );
+            }
             Ok(())
         })
     }

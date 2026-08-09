@@ -1027,6 +1027,7 @@
   },
   "notification": {
     "claudeAsking": "Claude 在提问",
+    "questionPending": "有问题待回答",
     "planApproval": "计划待批准",
     "enterPlanMode": "请求进入计划模式",
     "permissionRequest": "权限请求",

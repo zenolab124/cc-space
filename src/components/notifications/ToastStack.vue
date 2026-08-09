@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useNotifications, requestKindLabel, respondEngineToast, type PersistentToast } from '@/composables/useNotifications'
+import { useNotifications, requestKindLabel, interactionKindLabel, isInteractiveKind, respondEngineToast, type PersistentToast } from '@/composables/useNotifications'
 import { usePermissionRequests, isInteractiveTool } from '@/composables/usePermissionRequests'
 
 /**
@@ -38,19 +38,28 @@ async function onDeny(toast: PersistentToast) {
   else if (toast.kind === 'engine-interaction') await respondEngineToast(toast, 'deny')
 }
 
-/** 交互工具(提问/计划)不提供就地允许/拒绝——必须去会话里作答 */
+/** 交互类(提问/计划)不提供就地允许/拒绝——必须去会话里作答,否则只会送出空答 */
 function needsSession(toast: PersistentToast): boolean {
-  return toast.kind === 'permission' && isInteractiveTool(toast.request.toolName)
+  if (toast.kind === 'permission') return isInteractiveTool(toast.request.toolName)
+  return toast.kind === 'engine-interaction' && isInteractiveKind(toast.interaction.kind)
 }
 
 function toastLabel(toast: PersistentToast): string {
   if (toast.kind === 'permission') return requestKindLabel(toast.request.toolName)
-  return toast.kind === 'engine-interaction' ? t('notification.permissionRequest') : t('notification.errorStopped')
+  return toast.kind === 'engine-interaction'
+    ? interactionKindLabel(toast.interaction.kind)
+    : t('notification.errorStopped')
 }
 
 function toastIcon(toast: PersistentToast): string {
   if (toast.kind === 'error') return 'i-carbon-warning text-destructive'
-  if (toast.kind === 'engine-interaction') return 'i-carbon-locked text-accent'
+  if (toast.kind === 'engine-interaction') {
+    switch (toast.interaction.kind) {
+      case 'question': return 'i-carbon-help text-accent'
+      case 'plan': return 'i-carbon-task-approved text-accent'
+      default: return 'i-carbon-locked text-accent'
+    }
+  }
   switch (toast.request.toolName) {
     case 'AskUserQuestion': return 'i-carbon-help text-accent'
     case 'ExitPlanMode':

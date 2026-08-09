@@ -71,6 +71,12 @@ pub enum PermissionObserverEvent {
         tool_name: String,
         input: Value,
     },
+    /// 请求已终结（用户决策 / 流式中断自动拒绝 / 服务停止），观察者据此清理镜像状态。
+    /// 由 handle_connection 单点发出：所有终结路径都汇聚在那里，且此时不持任何锁。
+    Resolved {
+        request_id: String,
+        session_id: String,
+    },
 }
 
 type PermissionObserver = Arc<dyn Fn(PermissionObserverEvent) + Send + Sync>;
@@ -386,7 +392,7 @@ fn handle_connection(
     let _ = app.emit("permission-request", &payload);
     notify_observers(PermissionObserverEvent::Requested {
         request_id: request_id.clone(),
-        session_id,
+        session_id: session_id.clone(),
         tool_name,
         input,
     });
@@ -396,6 +402,12 @@ fn handle_connection(
 
     // 移除 pending
     pending.lock().unwrap().remove(&request_id);
+
+    // 终结通知:用户决策、中断自动拒绝、服务停止三条路径都经此处,不持锁
+    notify_observers(PermissionObserverEvent::Resolved {
+        request_id: request_id.clone(),
+        session_id,
+    });
 
     // 写回响应
     let resp = match final_decision {

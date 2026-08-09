@@ -7,7 +7,7 @@ import { useWorkbench } from '@/composables/useWorkbench'
 import { useSessionStream, useStreaming } from '@/composables/useStreaming'
 import { useSessionStatus } from '@/composables/useSessionStatus'
 import { queueForSession, usePermissionRequests, isInteractiveTool } from '@/composables/usePermissionRequests'
-import { useNotifications } from '@/composables/useNotifications'
+import { useNotifications, isInteractiveKind } from '@/composables/useNotifications'
 import { useConfirm } from '@/composables/useConfirm'
 import { displayTitle, formatTokens, relativeTime } from '@/types'
 import { fileName } from '@/utils/path'
@@ -117,6 +117,11 @@ const permSummary = computed(() => {
 /** 交互工具(提问/计划)无法就地允许/拒绝,决策条改为引导去会话作答 */
 const headPermInteractive = computed(
   () => !!headPerm.value && isInteractiveTool(headPerm.value.toolName),
+)
+
+/** 引擎交互同理:提问/计划类要去会话内作答,就地放行只会送出空答 */
+const engineInteractionInteractive = computed(
+  () => !!engineInteraction.value && isInteractiveKind(engineInteraction.value.kind),
 )
 
 /** 出错重试条(stream 源且有可重发消息) */
@@ -316,22 +321,31 @@ const { isDropTarget } = useDroppable({
       @click.stop
     >
       <span class="flex-1 min-w-0 truncate text-muted-foreground">{{ engineInteraction.title || engineInteraction.kind }}</span>
+      <!-- 提问/计划类:就地无法作答,引导展开会话 -->
       <button
-        class="w-5 h-5 grid place-items-center rounded bg-primary/15 text-primary shrink-0 hover:bg-primary/25"
-        :title="$t('common.allow')"
+        v-if="engineInteractionInteractive"
+        class="px-2 py-0.5 text-[10.5px] rounded bg-primary text-primary-foreground shrink-0"
         @pointerdown.stop
-        @click.stop="decideEngineInteraction(true)"
-      >
-        <span class="i-carbon-arrow-right w-3.5 h-3.5" />
-      </button>
-      <button
-        class="w-5 h-5 grid place-items-center rounded bg-destructive/15 text-destructive shrink-0 hover:bg-destructive/25"
-        :title="$t('common.deny')"
-        @pointerdown.stop
-        @click.stop="decideEngineInteraction(false)"
-      >
-        <span class="i-carbon-close w-3.5 h-3.5" />
-      </button>
+        @click.stop="onCardClick"
+      >{{ $t('workbench.monitor.goAnswer') }}</button>
+      <template v-else>
+        <button
+          class="w-5 h-5 grid place-items-center rounded bg-primary/15 text-primary shrink-0 hover:bg-primary/25"
+          :title="$t('common.allow')"
+          @pointerdown.stop
+          @click.stop="decideEngineInteraction(true)"
+        >
+          <span class="i-carbon-arrow-right w-3.5 h-3.5" />
+        </button>
+        <button
+          class="w-5 h-5 grid place-items-center rounded bg-destructive/15 text-destructive shrink-0 hover:bg-destructive/25"
+          :title="$t('common.deny')"
+          @pointerdown.stop
+          @click.stop="decideEngineInteraction(false)"
+        >
+          <span class="i-carbon-close w-3.5 h-3.5" />
+        </button>
+      </template>
     </div>
 
     <!-- 就地决策条:出错重试 -->
