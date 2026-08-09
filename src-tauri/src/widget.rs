@@ -1,7 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use chrono::Local;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
@@ -51,6 +54,101 @@ pub fn set_widget_config(day_start_hour: i8, month_mode: String) -> Result<(), S
 }
 
 const LAUNCH_AGENT_LABEL: &str = "io.github.zenolab124.monet.widget-updater";
+const SNAPSHOT_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
+static SNAPSHOT_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn widget_updater_path() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|dir| dir.join("widget-updater")))
+}
+
+fn snapshot_needs_refresh_at(modified: Option<SystemTime>, now: SystemTime) -> bool {
+    let Some(modified) = modified else {
+        return true;
+    };
+    now.duration_since(modified)
+        .map(|age| age >= SNAPSHOT_REFRESH_INTERVAL)
+        // 未来时间戳通常来自时钟校准；此时不应反复刷新。
+        .unwrap_or(false)
+}
+
+fn valid_widget_snapshot(contents: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.get("todaySessions").is_some_and(|value| value.is_u64())
+        && object.get("todayTokens").is_some_and(|value| value.is_u64())
+        && object.get("models").is_some_and(|value| value.is_array())
+        && object.get("updatedAt").is_some_and(|value| value.is_string())
+}
+
+fn snapshot_needs_refresh() -> bool {
+    let Some(path) = widget_container_path() else {
+        return true;
+    };
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return true;
+    };
+    if !valid_widget_snapshot(&contents) {
+        return true;
+    }
+    let modified = std::fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    snapshot_needs_refresh_at(modified, SystemTime::now())
+}
+
+fn refresh_snapshot_once() -> Result<(), String> {
+    let updater = widget_updater_path()
+        .ok_or_else(|| "widget snapshot refresh skipped: updater path unavailable".to_string())?;
+    if !updater.exists() {
+        return Err("widget snapshot refresh skipped: bundled updater missing".into());
+    }
+
+    match Command::new(&updater).output() {
+        Ok(output) if output.status.success() => {
+            log::info!("widget snapshot refreshed during startup");
+            Ok(())
+        }
+        Ok(output) => {
+            let stderr: String = String::from_utf8_lossy(&output.stderr)
+                .trim()
+                .chars()
+                .take(512)
+                .collect();
+            Err(format!(
+                "widget snapshot startup refresh failed (status={}): {}",
+                output.status,
+                stderr
+            ))
+        }
+        Err(error) => Err(format!("widget snapshot startup refresh failed: {error}")),
+    }
+}
+
+pub(crate) fn refresh_snapshot_if_needed() -> Result<(), String> {
+    if snapshot_needs_refresh() {
+        refresh_snapshot_once()
+    } else {
+        Ok(())
+    }
+}
+
+/// release 启动时先在后台补齐首份快照，再注册周期刷新服务。
+/// 即使系统后台项尚待批准，Widget 也能读取主应用本次启动生成的数据。
+pub fn startup_sync() {
+    if cfg!(debug_assertions) || !crate::scheduler::owns_machine_schedule() {
+        return;
+    }
+    if let Err(error) = refresh_snapshot_if_needed() {
+        log::warn!("{error}");
+    }
+    ensure_launch_agent();
+}
 
 pub fn ensure_launch_agent() {
     // dev 构建不触碰 launchd 注册面：cargo target 目录恰好有同名 updater 二进制，
@@ -85,9 +183,7 @@ pub fn ensure_launch_agent() {
 
     let plist_path = home.join("Library/LaunchAgents").join(format!("{LAUNCH_AGENT_LABEL}.plist"));
 
-    let updater = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("widget-updater")));
+    let updater = widget_updater_path();
     let Some(updater) = updater else { return };
     if !updater.exists() {
         return;
@@ -141,8 +237,55 @@ pub fn ensure_launch_agent() {
     }
 }
 
+fn write_snapshot(path: &Path, json: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("snapshot path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+
+    let mut temporary_name = path.as_os_str().to_os_string();
+    let sequence = SNAPSHOT_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    temporary_name.push(format!(".tmp-{}-{sequence}", std::process::id()));
+    let temporary_path = PathBuf::from(temporary_name);
+    std::fs::write(&temporary_path, json)
+        .map_err(|error| format!("write {}: {error}", temporary_path.display()))?;
+    if let Err(error) = std::fs::rename(&temporary_path, path) {
+        let _ = std::fs::remove_file(&temporary_path);
+        return Err(format!("replace {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+fn with_snapshot_lock<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let lock_path = config::data_dir().join("widget-data.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| format!("open widget snapshot lock: {error}"))?;
+    FileExt::lock_exclusive(&lock)
+        .map_err(|error| format!("lock widget snapshot: {error}"))?;
+    let result = operation();
+    let _ = FileExt::unlock(&lock);
+    result
+}
+
 #[tauri::command]
 pub fn update_widget(
+    today_sessions: u32,
+    today_tokens: u64,
+    models: Vec<String>,
+) -> Result<(), String> {
+    with_snapshot_lock(|| update_widget_locked(today_sessions, today_tokens, models))
+}
+
+fn update_widget_locked(
     today_sessions: u32,
     today_tokens: u64,
     models: Vec<String>,
@@ -164,19 +307,10 @@ pub fn update_widget(
 
     let container_result: Result<(), String> = (|| {
         let path = widget_container_path().ok_or("widget container path unavailable")?;
-        let parent = path.parent().ok_or("widget container parent unavailable")?;
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create widget container directory: {e}"))?;
-        std::fs::write(&path, &json)
-            .map_err(|e| format!("write widget container data: {e}"))
+        write_snapshot(&path, &json)
     })();
 
-    let backup_result: Result<(), String> = (|| {
-        if let Some(parent) = backup_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&backup_path, &json).map_err(|e| e.to_string())
-    })();
+    let backup_result = write_snapshot(&backup_path, &json);
 
     match (container_result, backup_result) {
         (Ok(()), Ok(())) => Ok(()),
@@ -187,5 +321,42 @@ pub fn update_widget(
         (Err(container), Err(backup)) => Err(format!(
             "widget container write failed: {container}; backup write failed: {backup}"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_stale_snapshot_requires_startup_refresh() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        assert!(snapshot_needs_refresh_at(None, now));
+        assert!(snapshot_needs_refresh_at(
+            Some(now - SNAPSHOT_REFRESH_INTERVAL),
+            now
+        ));
+        assert!(!snapshot_needs_refresh_at(
+            Some(now - Duration::from_secs(60)),
+            now
+        ));
+    }
+
+    #[test]
+    fn future_snapshot_timestamp_does_not_loop_refreshes() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        assert!(!snapshot_needs_refresh_at(
+            Some(now + Duration::from_secs(60)),
+            now
+        ));
+    }
+
+    #[test]
+    fn invalid_or_incomplete_snapshot_requires_refresh() {
+        assert!(!valid_widget_snapshot(""));
+        assert!(!valid_widget_snapshot(r#"{"todaySessions": 1}"#));
+        assert!(valid_widget_snapshot(
+            r#"{"todaySessions":1,"todayTokens":2,"models":[],"updatedAt":"now"}"#
+        ));
     }
 }

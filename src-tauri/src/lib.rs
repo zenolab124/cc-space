@@ -171,7 +171,7 @@ pub fn run() {
             cli_settings::startup_sync_mcp();
             // macOS 13+ 用 SMAppService 管理 Widget updater 与菜单栏 Helper；
             // macOS 11–12 由各模块保留旧 LaunchAgent 兼容路径。
-            widget::ensure_launch_agent();
+            tauri::async_runtime::spawn_blocking(widget::startup_sync);
             tauri::async_runtime::spawn_blocking(tray_agent::ensure_launch_agent);
             // 搜索缓存预热：延迟避开启动高峰，后台建/对账文本缓存
             std::thread::spawn(|| {
@@ -350,6 +350,7 @@ pub fn run() {
             widget::get_widget_config,
             widget::set_widget_config,
             background_services::get_background_service_status,
+            background_services::retry_background_services,
             background_services::open_background_item_settings,
             updater::get_update_channel,
             updater::set_update_channel,

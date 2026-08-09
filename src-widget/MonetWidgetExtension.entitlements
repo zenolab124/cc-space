@@ -4,10 +4,5 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
-	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
-	<array>
-		<string>/tmp/monet-widget-data.json</string>
-		<string>/private/tmp/monet-widget-data.json</string>
-	</array>
 </dict>
 </plist>

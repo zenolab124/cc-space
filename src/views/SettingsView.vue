@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { useI18n } from 'vue-i18n'
@@ -347,11 +347,17 @@ const backgroundServiceStatus = ref<BackgroundServiceStatus>({
   tray: 'unknown',
   widgetUpdater: 'unknown',
 })
+const backgroundServiceRetrying = ref(false)
+
+function backgroundServiceNeedsRegistration(status: string): boolean {
+  return status === 'notRegistered' || status === 'notFound'
+}
 
 const trayStatusHint = computed(() => {
   switch (backgroundServiceStatus.value.tray) {
     case 'enabled': return t('settings.trayStatusEnabled')
     case 'requiresApproval': return t('settings.trayStatusNeedsApproval')
+    case 'notRegistered':
     case 'notFound': return t('settings.trayStatusNotFound')
     case 'unavailable': return t('settings.trayStatusUnavailable')
     default: return ''
@@ -362,6 +368,7 @@ const widgetUpdaterStatusHint = computed(() => {
   switch (backgroundServiceStatus.value.widgetUpdater) {
     case 'enabled': return t('settings.widgetUpdaterStatusEnabled')
     case 'requiresApproval': return t('settings.widgetUpdaterStatusNeedsApproval')
+    case 'notRegistered':
     case 'notFound': return t('settings.widgetUpdaterStatusNotFound')
     case 'unavailable': return t('settings.widgetUpdaterStatusUnavailable')
     default: return ''
@@ -370,6 +377,26 @@ const widgetUpdaterStatusHint = computed(() => {
 
 async function openBackgroundItemSettings() {
   await invoke('open_background_item_settings').catch(() => {})
+}
+
+async function loadBackgroundServiceStatus() {
+  try {
+    backgroundServiceStatus.value = await invoke<BackgroundServiceStatus>('get_background_service_status')
+  } catch {}
+}
+
+async function retryBackgroundServices() {
+  if (backgroundServiceRetrying.value) return
+  backgroundServiceRetrying.value = true
+  try {
+    backgroundServiceStatus.value = await invoke<BackgroundServiceStatus>('retry_background_services')
+    notifyTransient(t('settings.backgroundServiceRetrySuccess'))
+  } catch (error) {
+    await loadBackgroundServiceStatus()
+    notifyTransient(t('settings.backgroundServiceRetryFailed'), String(error))
+  } finally {
+    backgroundServiceRetrying.value = false
+  }
 }
 
 async function toggleTrayEnabled() {
@@ -383,6 +410,8 @@ async function toggleTrayEnabled() {
     trayEnabled.value = !next
     trayToggleFailed.value = true
     setTimeout(() => { trayToggleFailed.value = false }, 2500)
+  } finally {
+    await loadBackgroundServiceStatus()
   }
 }
 
@@ -390,9 +419,7 @@ async function loadTrayTitleConfig() {
   try {
     trayEnabled.value = await invoke<boolean>('get_tray_enabled')
   } catch {}
-  try {
-    backgroundServiceStatus.value = await invoke<BackgroundServiceStatus>('get_background_service_status')
-  } catch {}
+  await loadBackgroundServiceStatus()
   try {
     const cfg = await invoke<TrayTitleConfig>('get_tray_title_config_v2')
     traySlots.value = cfg.slots
@@ -458,7 +485,27 @@ async function removeWakeAuthorization() {
 
 
 
-onMounted(() => { refreshChannels(); refreshCliEnvTarget(); loadAgentToggles(); loadAgentSessionPersist(); loadAgentPreferences(); loadWakePolicy(); loadWidgetConfig(); loadTrayTitleConfig(); loadMcpStatus(); getVersion().then(v => appVersion.value = v) })
+function refreshBackgroundServicesOnFocus() {
+  void loadBackgroundServiceStatus()
+}
+
+onMounted(() => {
+  refreshChannels()
+  refreshCliEnvTarget()
+  loadAgentToggles()
+  loadAgentSessionPersist()
+  loadAgentPreferences()
+  loadWakePolicy()
+  loadWidgetConfig()
+  loadTrayTitleConfig()
+  loadMcpStatus()
+  getVersion().then(v => appVersion.value = v)
+  window.addEventListener('focus', refreshBackgroundServicesOnFocus)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('focus', refreshBackgroundServicesOnFocus)
+})
 
 watch(activeSection, (s) => {
   if (s === 'settings') {
@@ -1333,7 +1380,7 @@ function onSaved() {
               <div class="setting-row">
                 <div class="setting-row-main">
                   <div class="setting-label">{{ $t('settings.trayAutostart') }}</div>
-                  <div class="setting-hint" :class="{ 'text-red-500': trayToggleFailed || backgroundServiceStatus.tray === 'notFound' }">
+                  <div class="setting-hint" :class="{ 'text-red-500': trayToggleFailed || backgroundServiceNeedsRegistration(backgroundServiceStatus.tray) }">
                     {{ trayToggleFailed ? $t('settings.trayLaunchFail') : $t('settings.trayAutostartHint') }}
                     <span v-if="trayStatusHint"> · {{ trayStatusHint }}</span>
                     <button
@@ -1343,6 +1390,12 @@ function onSaved() {
                     >{{ $t('settings.openBackgroundItemSettings') }}</button>
                   </div>
                 </div>
+                <button
+                  v-if="trayEnabled && backgroundServiceNeedsRegistration(backgroundServiceStatus.tray)"
+                  class="px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50"
+                  :disabled="backgroundServiceRetrying"
+                  @click="retryBackgroundServices"
+                >{{ $t('settings.retryBackgroundService') }}</button>
                 <button :class="['form-toggle', { on: trayEnabled }]" @click="toggleTrayEnabled">
                   <span class="form-toggle-knob" />
                 </button>
@@ -1379,6 +1432,12 @@ function onSaved() {
                   class="px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted"
                   @click="openBackgroundItemSettings"
                 >{{ $t('settings.openBackgroundItemSettings') }}</button>
+                <button
+                  v-else-if="backgroundServiceNeedsRegistration(backgroundServiceStatus.widgetUpdater)"
+                  class="px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-50"
+                  :disabled="backgroundServiceRetrying"
+                  @click="retryBackgroundServices"
+                >{{ $t('settings.retryBackgroundService') }}</button>
               </div>
               <div class="setting-row">
                 <div class="setting-row-main">

@@ -1,14 +1,18 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 #[path = "../config.rs"]
 #[allow(dead_code)]
 mod config;
+
+static SNAPSHOT_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,9 +82,37 @@ fn write_snapshot(path: &std::path::Path, json: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("snapshot path has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
-    fs::write(path, json).map_err(|error| format!("write {}: {error}", path.display()))
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let mut temporary_name = path.as_os_str().to_os_string();
+    let sequence = SNAPSHOT_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    temporary_name.push(format!(".tmp-{}-{sequence}", std::process::id()));
+    let temporary_path = PathBuf::from(temporary_name);
+    fs::write(&temporary_path, json)
+        .map_err(|error| format!("write {}: {error}", temporary_path.display()))?;
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        let _ = fs::remove_file(&temporary_path);
+        return Err(format!("replace {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+fn with_snapshot_lock<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let lock_path = config::data_dir().join("widget-data.lock");
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| format!("open widget snapshot lock: {error}"))?;
+    FileExt::lock_exclusive(&lock)
+        .map_err(|error| format!("lock widget snapshot: {error}"))?;
+    let result = operation();
+    let _ = FileExt::unlock(&lock);
+    result
 }
 
 fn read_config() -> WidgetConfig {
@@ -455,17 +487,24 @@ fn main() {
 
     let json = serde_json::to_string_pretty(&snap).unwrap_or_default();
 
-    let wp = widget_path();
-    let bp = config::data_dir().join("widget-data.json");
-    let mut failures = Vec::new();
-    if let Err(error) = write_snapshot(&wp, &json) {
-        failures.push(error);
-    }
-    if let Err(error) = write_snapshot(&bp, &json) {
-        failures.push(error);
-    }
-    if !failures.is_empty() {
-        eprintln!("widget snapshot update failed:\n{}", failures.join("\n"));
+    let result = with_snapshot_lock(|| {
+        let wp = widget_path();
+        let bp = config::data_dir().join("widget-data.json");
+        let mut failures = Vec::new();
+        if let Err(error) = write_snapshot(&wp, &json) {
+            failures.push(error);
+        }
+        if let Err(error) = write_snapshot(&bp, &json) {
+            failures.push(error);
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("\n"))
+        }
+    });
+    if let Err(error) = result {
+        eprintln!("widget snapshot update failed:\n{error}");
         std::process::exit(1);
     }
 }
