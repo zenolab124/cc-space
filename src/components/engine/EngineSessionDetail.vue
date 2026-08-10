@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, shallowRef, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
@@ -19,6 +19,7 @@ import SessionComposer from '@/components/session/SessionComposer.vue'
 import SessionComposerField from '@/components/session/SessionComposerField.vue'
 import SessionComposerAttachments from '@/components/session/SessionComposerAttachments.vue'
 import SessionComposerQueue, { type ComposerQueueItem } from '@/components/session/SessionComposerQueue.vue'
+import SessionSidePanel from '@/components/session/SessionSidePanel.vue'
 import { shouldSubmitComposer } from '@/components/session/composerAction'
 import SessionViewport from '@/components/session/SessionViewport.vue'
 import SessionContentState from '@/components/session/SessionContentState.vue'
@@ -39,10 +40,15 @@ import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
 import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
 import { useImageInput, type PendingImage } from '@/composables/useImageInput'
+import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
+import { groupConversationRecords } from '@/engines/conversationGroups'
+import { measureElement as measureVirtualElement, useVirtualizer, type Virtualizer } from '@tanstack/vue-virtual'
+import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
+import { shouldCompensateVirtualItemSizeChange } from '@/lib/sessionScrollPolicy'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -130,6 +136,15 @@ const reference = computed(() => props.session.reference)
 const nativeSessionId = computed(() => props.session.native_id || props.session.id)
 const allRecords = computed(() => [...records.value, ...liveRecords.value])
 const asyncTasks = computed(() => buildEngineAsyncTasks(allRecords.value))
+const asyncPanelVisible = computed(() => asyncPanelOpen.value && asyncTasks.value.length > 0 && !!reference.value)
+const {
+  mounted: sidePanelDom,
+  expanded: sidePanelExpanded,
+  targetWidth: sidePanelWidth,
+} = useSessionSidePanelHost(asyncPanelVisible, {
+  rootRef: detailRootRef,
+  close: () => { asyncPanelOpen.value = false },
+})
 const latestUsage = computed(() => [...allRecords.value]
   .reverse()
   .find(record => record.usage)?.usage ?? null)
@@ -220,28 +235,7 @@ const capsuleConfig = computed<EngineCapsuleConfig>(() => ({
   models: capsuleModels.value,
 }))
 const conversationGroups = computed(() => {
-  const groups: Array<{
-    key: string
-    turnId: string | null
-    records: ConversationRecord[]
-    dayLabel: string | null
-  }> = []
-  for (const record of allRecords.value) {
-    const current = groups[groups.length - 1]
-    const startsNewTurn = !current
-      || (!!record.turnId && record.turnId !== current.turnId)
-      || (record.role === 'user' && current.records.some(item => item.role === 'user'))
-    if (startsNewTurn) {
-      groups.push({
-        key: record.turnId || record.id,
-        turnId: record.turnId,
-        records: [record],
-        dayLabel: null,
-      })
-    } else {
-      current.records.push(record)
-    }
-  }
+  const groups = groupConversationRecords(allRecords.value).map(group => ({ ...group, dayLabel: null as string | null }))
   let previousDay: string | null = null
   const thisYear = new Date().getFullYear()
   for (const group of groups) {
@@ -257,6 +251,82 @@ const conversationGroups = computed(() => {
     group.dayLabel = date.toLocaleDateString(locale.value, options)
   }
   return groups
+})
+const historicalGroups = computed(() => conversationGroups.value.length > 1
+  ? conversationGroups.value.slice(0, -1)
+  : [])
+const lastConversationGroup = computed(() => {
+  const groups = conversationGroups.value
+  return groups.length ? groups[groups.length - 1] : null
+})
+const historicalGroupKeys = computed(() => historicalGroups.value.map(group =>
+  `${props.session.id}:${group.key}`,
+))
+const historicalKeySnapshot = shallowRef<readonly string[]>([])
+const historicalKeyExtractor = shallowRef<(index: number) => string>(index => `missing:${index}`)
+const historicalGroupHeights = new Map<string, number>()
+const lastGroupElement = ref<HTMLElement>()
+let lastGroupResizeObserver: ResizeObserver | null = null
+
+watch(historicalGroupKeys, (keys) => {
+  const previous = historicalKeySnapshot.value
+  if (keys.length === previous.length && keys.every((key, index) => key === previous[index])) return
+  const snapshot = [...keys]
+  historicalKeySnapshot.value = snapshot
+  historicalKeyExtractor.value = index => snapshot[index] ?? `${props.session.id}:missing:${index}`
+}, { immediate: true, flush: 'sync' })
+
+function measureConversationGroup(
+  element: Element,
+  entry: ResizeObserverEntry | undefined,
+  instance: Virtualizer<HTMLElement, Element>,
+): number {
+  const size = measureVirtualElement(element, entry, instance)
+  const key = instance.options.getItemKey(instance.indexFromElement(element))
+  if (size > 0) historicalGroupHeights.set(String(key), size)
+  return size
+}
+
+const { threshold: virtualizationThreshold } = useVirtualizationSettings()
+const shouldVirtualize = computed(() => historicalGroups.value.length > virtualizationThreshold.value)
+const conversationVirtualizer = useVirtualizer(computed(() => ({
+  count: historicalGroups.value.length,
+  getScrollElement: () => viewportElement.value,
+  getItemKey: historicalKeyExtractor.value,
+  estimateSize: (index: number) =>
+    historicalGroupHeights.get(historicalKeyExtractor.value(index)) ?? 200,
+  measureElement: measureConversationGroup,
+  gap: 16,
+  overscan: 5,
+})))
+
+conversationVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item, delta, instance) =>
+  shouldCompensateVirtualItemSizeChange({
+    scrollDirection: instance.scrollDirection,
+    upwardGestureActive: performance.now() - timelineUpwardIntentAt < 220,
+    itemStart: item.start,
+    itemSize: item.size,
+    scrollOffset: instance.scrollOffset ?? 0,
+    delta,
+  })
+
+watch(shouldVirtualize, () => void nextTick(() => conversationVirtualizer.value.measure()))
+watch(lastGroupElement, (element) => {
+  lastGroupResizeObserver?.disconnect()
+  lastGroupResizeObserver = null
+  if (!element) return
+  const rememberHeight = () => {
+    const key = element.dataset.groupKey
+    const height = element.getBoundingClientRect().height
+    if (key && height > 0) historicalGroupHeights.set(key, height)
+  }
+  rememberHeight()
+  lastGroupResizeObserver = new ResizeObserver(rememberHeight)
+  lastGroupResizeObserver.observe(element)
+})
+watch(() => props.session.id, () => {
+  historicalGroupHeights.clear()
+  void nextTick(() => conversationVirtualizer.value.measure())
 })
 const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
@@ -1088,6 +1158,8 @@ onUnmounted(() => {
   invalidateTimelineScrollRequests()
   timelineResizeObserver?.disconnect()
   timelineResizeObserver = null
+  lastGroupResizeObserver?.disconnect()
+  lastGroupResizeObserver = null
   unlistenSnapshot?.()
   unlistenEvent?.()
   unlistenSourceChange?.()
@@ -1189,18 +1261,65 @@ onUnmounted(() => {
     <SessionViewport :scroll-ref="bindViewport" @wheel="onTimelineWheel" @scroll="onTimelineScroll">
       <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
       <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
-      <div v-else ref="timelineContentElement" class="space-y-4 pb-2">
-        <EngineConversationGroup
-          v-for="group in conversationGroups"
-          :key="group.key"
-          :records="group.records"
-          :engine-name="enginePresentation.displayName"
-          :model="timelineModel"
-          :accent="engineAccent"
-          :show-thought-process="enginePresentation.showThoughtProcess"
-          :day-label="group.dayLabel"
-          :streaming="isTurnStreaming(group.turnId)"
-        />
+      <div v-else ref="timelineContentElement" class="pb-2">
+        <div
+          v-if="shouldVirtualize"
+          :style="{ height: `${conversationVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }"
+        >
+          <div
+            v-for="virtualItem in conversationVirtualizer.getVirtualItems()"
+            :key="String(virtualItem.key)"
+            :ref="element => element && conversationVirtualizer.measureElement(element as Element)"
+            :data-index="virtualItem.index"
+            :style="{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItem.start}px)`,
+            }"
+          >
+            <EngineConversationGroup
+              :records="historicalGroups[virtualItem.index].records"
+              :engine-name="enginePresentation.displayName"
+              :model="timelineModel"
+              :accent="engineAccent"
+              :show-thought-process="enginePresentation.showThoughtProcess"
+              :day-label="historicalGroups[virtualItem.index].dayLabel"
+              :streaming="isTurnStreaming(historicalGroups[virtualItem.index].turnId)"
+            />
+          </div>
+        </div>
+        <div v-else class="space-y-4">
+          <EngineConversationGroup
+            v-for="group in historicalGroups"
+            :key="`${session.id}:${group.key}`"
+            :records="group.records"
+            :engine-name="enginePresentation.displayName"
+            :model="timelineModel"
+            :accent="engineAccent"
+            :show-thought-process="enginePresentation.showThoughtProcess"
+            :day-label="group.dayLabel"
+            :streaming="isTurnStreaming(group.turnId)"
+          />
+        </div>
+        <div
+          v-if="lastConversationGroup"
+          :key="`${session.id}:${lastConversationGroup.key}`"
+          :class="historicalGroups.length > 0 ? 'mt-4' : ''"
+          :data-group-key="`${session.id}:${lastConversationGroup.key}`"
+          ref="lastGroupElement"
+        >
+          <EngineConversationGroup
+            :records="lastConversationGroup.records"
+            :engine-name="enginePresentation.displayName"
+            :model="timelineModel"
+            :accent="engineAccent"
+            :show-thought-process="enginePresentation.showThoughtProcess"
+            :day-label="lastConversationGroup.dayLabel"
+            :streaming="isTurnStreaming(lastConversationGroup.turnId)"
+          />
+        </div>
       </div>
       <SessionContentState v-if="error" tone="danger">{{ error }}</SessionContentState>
       <SessionTypingIndicator :active="typingActive" />
@@ -1285,15 +1404,20 @@ onUnmounted(() => {
     </template>
 
     <template #side-panel>
-      <section v-if="asyncPanelOpen && asyncTasks.length && reference" class="h-full min-w-72 w-[38%] max-w-md shrink-0 border-l border-border">
+      <SessionSidePanel
+        :mounted="sidePanelDom"
+        :expanded="sidePanelExpanded"
+        :width="sidePanelWidth"
+      >
         <EngineAsyncTaskPanel
+          v-if="asyncPanelVisible && reference"
           :session="reference"
           :engine-name="enginePresentation.displayName"
           :tasks="asyncTasks"
           :accent="engineAccent"
           @close="asyncPanelOpen = false"
         />
-      </section>
+      </SessionSidePanel>
     </template>
   </SessionSurface>
 </template>

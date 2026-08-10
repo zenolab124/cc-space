@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef, computed, watch, nextTick, onMounted, onUnmounted, provide, inject, type ComputedRef } from 'vue'
+import { ref, shallowRef, computed, watch, nextTick, onMounted, onUnmounted, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useConfirm } from '@/composables/useConfirm'
 import { invoke } from '@tauri-apps/api/core'
@@ -67,6 +67,7 @@ import SessionComposer from './session/SessionComposer.vue'
 import SessionComposerField from './session/SessionComposerField.vue'
 import SessionComposerAttachments from './session/SessionComposerAttachments.vue'
 import SessionComposerQueue, { type ComposerQueueItem } from './session/SessionComposerQueue.vue'
+import SessionSidePanel from './session/SessionSidePanel.vue'
 import { shouldSubmitComposer } from './session/composerAction'
 import SessionViewport from './session/SessionViewport.vue'
 import SessionContentState from './session/SessionContentState.vue'
@@ -77,6 +78,7 @@ import SessionReadonlyBar from './session/SessionReadonlyBar.vue'
 import SessionIdentityBar from './session/SessionIdentityBar.vue'
 import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
+import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { useHtmlVisual } from '@/features'
 import SessionBanner from './SessionBanner.vue'
 import SessionAnchorNav, { type AnchorItem } from './SessionAnchorNav.vue'
@@ -362,6 +364,7 @@ const ownProcessBusy = computed(() =>
 )
 const asyncPanelVisible = computed(() => asyncSidebarOpen.value && asyncTasks.value.length > 0)
 const asyncPanelRef = ref<InstanceType<typeof AsyncTaskPanel> | null>(null)
+const detailRootRef = ref<HTMLElement>()
 
 // ---- 文件账本(v2.6.0):纯前端推导,与异步面板互斥占用右侧手风琴 ----
 const { entries: ledgerEntries, modifiedEntries: ledgerModified, readOnlyEntries: ledgerReadOnly } =
@@ -561,60 +564,19 @@ watch(runnerFloatOpen, (open) => {
 })
 onUnmounted(() => document.removeEventListener('keydown', onRunnerEscape))
 
-// --- 侧栏面板（异步/账本/runner 三方互斥共用）手风琴展开：列宽 + 侧边栏 width 同步 transition ---
-// 互斥切换时 sidePanelVisible 保持 true 不触发 watch,列宽维持翻倍,无竞态
-const columnIndex = inject<ComputedRef<number>>('columnIndex', undefined as any)
-const columnTabId = inject<ComputedRef<string>>('tabId', undefined as any)
-const { activeTab: wbActiveTab } = useWorkbench()
+// --- 侧栏面板（异步/账本/runner 三方互斥共用）---
 const sidePanelVisible = computed(() => asyncPanelVisible.value || ledgerPanelOpen.value || runnerDockOpen.value)
-const sidePanelDom = ref(false)
-const sidePanelExpanded = ref(false)
-const sidebarTargetWidth = ref(0)
-
-watch(sidePanelVisible, async (open) => {
-  const tab = wbActiveTab.value
-  const idx = columnIndex?.value
-  const hasCol = tab && idx != null && idx >= 0 && idx < tab.columnSizes.length
-  if (open) {
-    const colW = hasCol ? tab!.columnSizes[idx!] : 400
-    sidebarTargetWidth.value = colW
-    sidePanelDom.value = true
-    await nextTick()
-    requestAnimationFrame(() => {
-      sidePanelExpanded.value = true
-      if (hasCol) tab!.columnSizes[idx!] = colW * 2
-      setTimeout(() => {
-        const root = detailRootRef.value
-        if (!root) return
-        root.querySelector('.side-panel-accordion')
-          ?.scrollIntoView({ inline: 'nearest', behavior: 'smooth' })
-      }, 260)
-    })
-  } else {
-    sidePanelExpanded.value = false
-    const doubled = sidebarTargetWidth.value * 2
-    if (hasCol && Math.abs(tab!.columnSizes[idx!] - doubled) < 20) {
-      tab!.columnSizes[idx!] = sidebarTargetWidth.value
-    }
-    setTimeout(() => {
-      sidePanelDom.value = false
-    }, 260)
-  }
-})
-
-// 外部列宽变化（新增列均分等）致列宽不足：自动收起面板防溢出
-watch(() => {
-  const tab = wbActiveTab.value
-  const idx = columnIndex?.value
-  if (!tab || idx == null || idx < 0 || idx >= tab.columnSizes.length) return undefined
-  return tab.columnSizes[idx]
-}, (colW) => {
-  if (!sidePanelExpanded.value || colW == null) return
-  if (colW < sidebarTargetWidth.value * 2 - 20) {
+const {
+  mounted: sidePanelDom,
+  expanded: sidePanelExpanded,
+  targetWidth: sidebarTargetWidth,
+} = useSessionSidePanelHost(sidePanelVisible, {
+  rootRef: detailRootRef,
+  close: () => {
     closeAsyncPanel()
     ledgerPanelOpen.value = false
     runnerDockOpen.value = false
-  }
+  },
 })
 
 // 流式结束补扫转录清单：晚落盘的 agent meta / workflow children 兜底
@@ -935,7 +897,6 @@ const forkBadgeSource = computed(() => {
 })
 
 // 图片输入:粘贴绑 textarea;拖拽收图区放大到整个详情面板(多列并排时拖到哪列进哪列),仅可输入时生效
-const detailRootRef = ref<HTMLElement>()
 function bindDetailRoot(element: HTMLElement | null) {
   detailRootRef.value = element ?? undefined
 }
@@ -3513,15 +3474,13 @@ async function onReload() {
       <div class="runner-float-resize" @mousedown="onRunnerResizeStart" />
     </div>
     <template #side-panel>
-    <!-- 异步任务面板：width transition 手风琴展开,列宽同步翻倍,主栏宽度恒定 -->
-    <div
-      v-if="sidePanelDom"
-      class="side-panel-accordion shrink-0 overflow-hidden"
-      :class="asyncPanelVisible && sidePanelExpanded ? 'border-l border-border' : ''"
-      :style="{ width: asyncPanelVisible && sidePanelExpanded ? sidebarTargetWidth + 'px' : '0', transition: 'width 250ms cubic-bezier(0.32, 0.72, 0, 1)' }"
+    <SessionSidePanel
+      :mounted="sidePanelDom"
+      :expanded="sidePanelExpanded"
+      :width="sidebarTargetWidth"
     >
       <AsyncTaskPanel
-        v-if="asyncPanelVisible || !ledgerPanelOpen"
+        v-if="asyncPanelVisible"
         ref="asyncPanelRef"
         :tasks="asyncTasks"
         :open-tabs="subAgentTabs"
@@ -3535,13 +3494,6 @@ async function onReload() {
         @locate="locateToolUse"
         @stop="onStopAsyncTask"
       />
-    </div>
-    <!-- 文件账本面板:与异步面板互斥,同款手风琴 -->
-    <div
-      class="side-panel-accordion shrink-0 overflow-hidden"
-      :class="ledgerPanelOpen && sidePanelExpanded ? 'border-l border-border' : ''"
-      :style="{ width: ledgerPanelOpen && sidePanelExpanded ? sidebarTargetWidth + 'px' : '0', transition: 'width 250ms cubic-bezier(0.32, 0.72, 0, 1)' }"
-    >
       <FileLedgerPanel
         v-if="ledgerPanelOpen"
         ref="ledgerPanelRef"
@@ -3552,13 +3504,6 @@ async function onReload() {
         @close="ledgerPanelOpen = false"
         @locate="locateToolUse"
       />
-    </div>
-    <!-- Runner 停靠面板:与异步/账本互斥,同款手风琴 -->
-    <div
-      class="side-panel-accordion shrink-0 overflow-hidden"
-      :class="runnerDockOpen && sidePanelExpanded ? 'border-l border-border' : ''"
-      :style="{ width: runnerDockOpen && sidePanelExpanded ? sidebarTargetWidth + 'px' : '0', transition: 'width 250ms cubic-bezier(0.32, 0.72, 0, 1)' }"
-    >
       <RunnerPanel
         v-if="runnerDockOpen"
         mode="dock"
@@ -3569,7 +3514,7 @@ async function onReload() {
         @toggle-pin="toggleRunnerPin"
         @toggle-dock="toggleRunnerDock"
       />
-    </div>
+    </SessionSidePanel>
     </template>
   </SessionSurface>
 

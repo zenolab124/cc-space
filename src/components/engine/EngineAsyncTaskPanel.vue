@@ -6,6 +6,7 @@ import type { EngineAsyncTask, EngineAsyncTaskState } from '@/engines/asyncTasks
 import type { EngineAccent } from '@/engines/presentation'
 import { loadTimeline } from '@/engines/client'
 import EngineConversationGroup from './EngineConversationGroup.vue'
+import { groupConversationRecords } from '@/engines/conversationGroups'
 
 const props = defineProps<{
   session: SessionRef
@@ -23,21 +24,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const accentColor = computed(() => `var(--${props.accent ?? 'primary'})`)
 
-const groups = computed(() => {
-  const result: Array<{ key: string; turnId: string | null; records: ConversationRecord[] }> = []
-  for (const record of records.value) {
-    const current = result[result.length - 1]
-    const startsNewTurn = !current
-      || (!!record.turnId && record.turnId !== current.turnId)
-      || (record.role === 'user' && current.records.some(item => item.role === 'user'))
-    if (startsNewTurn) {
-      result.push({ key: record.turnId || record.id, turnId: record.turnId, records: [record] })
-    } else {
-      current.records.push(record)
-    }
-  }
-  return result
-})
+const groups = computed(() => groupConversationRecords(records.value))
 
 const stateClass: Record<EngineAsyncTaskState, string> = {
   running: '',
