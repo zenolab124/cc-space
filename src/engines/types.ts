@@ -116,12 +116,18 @@ export interface SessionActions {
 export type EngineSegment =
   | { kind: 'text'; text: string; phase?: 'progress' | 'final' }
   | { kind: 'reasoning'; text: string; visibility: 'visible' | 'summary' | 'redacted' }
-  | { kind: 'toolCall'; id: string; name: string; input: unknown }
-  | { kind: 'toolResult'; callId: string; content: unknown; isError: boolean }
+  | { kind: 'toolCall'; id: string; name: string; input: unknown; presentation?: 'orchestration' }
+  | { kind: 'toolResult'; callId: string; content: unknown; isError: boolean; attachments?: ToolResultAttachment[] }
   | { kind: 'commandExecution'; id: string; command: string; cwd: string | null; output: string | null; status: string }
   | { kind: 'fileChange'; id: string; changes: Array<{ path: string; kind: string; diff: string | null }>; status: string }
   | { kind: 'attachment'; asset: { session: SessionRef; nativeId: string }; mediaType: string; title: string | null }
   | { kind: 'unknown'; typeName: string; summary: string | null }
+
+export interface ToolResultAttachment {
+  asset: { session: SessionRef; nativeId: string }
+  mediaType: string
+  title: string | null
+}
 
 export interface ConversationRecord {
   id: string

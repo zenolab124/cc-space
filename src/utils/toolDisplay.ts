@@ -2,7 +2,7 @@ import type { ContentBlock } from '@/types'
 
 export type ToolUseBlock = Extract<ContentBlock, { type: 'tool_use' }>
 
-export type ToolActionKind = 'read' | 'change' | 'search' | 'run' | 'web' | 'delegate' | 'skill' | 'other'
+export type ToolActionKind = 'read' | 'change' | 'search' | 'run' | 'web' | 'delegate' | 'skill' | 'orchestration' | 'other'
 
 export interface ToolProcessSummaryItem {
   kind: ToolActionKind
@@ -103,8 +103,13 @@ export function toolSummary(tool: ToolUseBlock): string {
   return candidate.replace(/\s+/g, ' ').trim()
 }
 
-function toolActionKind(name: string): ToolActionKind {
-  switch (name.toLowerCase()) {
+export function isOrchestrationTool(tool: ToolUseBlock): boolean {
+  return tool._presentation === 'orchestration'
+}
+
+function toolActionKind(tool: ToolUseBlock): ToolActionKind {
+  if (isOrchestrationTool(tool)) return 'orchestration'
+  switch (tool.name.toLowerCase()) {
     case 'read': return 'read'
     case 'edit':
     case 'write':
@@ -172,7 +177,7 @@ function readableToolName(name: string): string {
 export function summarizeToolProcess(tools: readonly ToolUseBlock[]): ToolProcessSummaryItem[] {
   const groups = new Map<string, ToolProcessSummaryItem>()
   for (const tool of tools) {
-    const kind = toolActionKind(tool.name)
+    const kind = toolActionKind(tool)
     const name = readableToolName(tool.name)
     const key = kind === 'other' ? `${kind}:${name}` : kind
     const existing = groups.get(key)

@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, inject, watch, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { ContentBlock } from '@/types'
 import type { ToolResultData } from '@/utils/toolPair'
 import type { ToolUseBlock } from '@/utils/toolDisplay'
-import { toolSummary } from '@/utils/toolDisplay'
+import { isOrchestrationTool, toolSummary } from '@/utils/toolDisplay'
 import MessageBlock from './MessageBlock.vue'
+import BlockImage from './blocks/BlockImage.vue'
+import EngineAssetImage from './engine/EngineAssetImage.vue'
 import {
   TOOL_EXECUTION_CONTEXT,
   TOOL_FOLD_INTERACTION,
@@ -29,6 +32,12 @@ const context = inject(TOOL_EXECUTION_CONTEXT, null)
 const legacyResults = inject<ComputedRef<Map<string, ToolResultData>>>('toolResultMap')
 
 const result = computed(() => context?.results.value.get(props.tool.id) ?? legacyResults?.value.get(props.tool.id))
+const orchestration = computed(() => isOrchestrationTool(props.tool))
+const resultImages = computed(() => {
+  const content = result.value?.content
+  if (!content || typeof content === 'string') return []
+  return content.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image')
+})
 const asyncState = computed<AsyncToolState | null>(() => context?.asyncStates?.value.get(props.tool.id) ?? null)
 const waitingPermission = computed(() => {
   const request = context?.permissionRequest?.value
@@ -95,7 +104,7 @@ watch(() => foldState.requestedToolId.value, requested => {
 <template>
   <div class="tool-fold-item" :data-tool-use-id="tool.id">
     <button
-      v-if="foldable"
+      v-if="foldable && !orchestration"
       type="button"
       class="tool-fold-line"
       :aria-expanded="expanded"
@@ -136,8 +145,26 @@ watch(() => foldState.requestedToolId.value, requested => {
         <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
       </span>
     </div>
-    <div v-if="!foldable || expanded" class="tool-fold-card">
+    <div v-if="!orchestration && (!foldable || expanded)" class="tool-fold-card">
       <MessageBlock :block="tool" />
+    </div>
+    <div
+      v-if="(orchestration && resultImages.length) || result?.attachments?.length"
+      class="tool-fold-assets"
+    >
+      <BlockImage
+        v-for="(image, index) in orchestration ? resultImages : []"
+        :key="`inline:${index}`"
+        :block="image"
+        :record-uuid="result?.recordUuid"
+      />
+      <EngineAssetImage
+        v-for="attachment in result?.attachments"
+        :key="attachment.asset.nativeId"
+        :attachment="attachment"
+        auto-load
+        compact
+      />
     </div>
   </div>
 </template>
@@ -183,6 +210,7 @@ watch(() => foldState.requestedToolId.value, requested => {
 .tool-fold-state.is-background { color: var(--primary); }
 .tool-fold-card { margin: 2px 0 6px 18px; }
 .tool-fold-card > :deep(*) { margin-top: 0; }
+.tool-fold-assets { margin: 2px 0 6px 32px; }
 .tool-fold-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-fold-dots i {
   width: 3px;

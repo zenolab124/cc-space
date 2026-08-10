@@ -21,6 +21,7 @@ const TOKEN_USAGE_TAIL_BYTES: u64 = 1024 * 1024;
 const USAGE_CACHE_LIMIT: usize = 2048;
 const ASSET_MAX_BYTES: usize = 32 * 1024 * 1024;
 const USER_INPUT_ASSET_MARKER: &str = ":user-input:";
+const TOOL_RESULT_ASSET_MARKER: &str = ":tool-result:";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -536,6 +537,7 @@ impl SessionSource for CodexSource {
         Box::pin(async move {
             let thread = self.read_thread_with_turns(&asset.session)?;
             let user_input = parse_user_input_asset_id(&asset.native_id);
+            let tool_result = parse_tool_result_asset_id(&asset.native_id);
             for turn in thread.turns {
                 for item in turn.items {
                     if item.get("id").and_then(Value::as_str) == Some(&asset.native_id)
@@ -584,6 +586,25 @@ impl SessionSource for CodexSource {
                                 EngineError::new(
                                     EngineErrorKind::Protocol,
                                     "Codex image input has no data URL",
+                                )
+                            })?;
+                        return decode_data_url_asset(url);
+                    }
+                    if let Some((item_id, input_index)) = &tool_result {
+                        if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
+                            || item.get("type").and_then(Value::as_str) != Some("toolResult")
+                        {
+                            continue;
+                        }
+                        let url = item
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .and_then(|content| content.get(*input_index))
+                            .and_then(tool_result_image_url)
+                            .ok_or_else(|| {
+                                EngineError::new(
+                                    EngineErrorKind::Protocol,
+                                    "Codex tool result has no image data URL",
                                 )
                             })?;
                         return decode_data_url_asset(url);
@@ -762,29 +783,43 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .collect(),
             status: map_status(item.get("status").and_then(Value::as_str)),
         }],
-        "mcpToolCall" | "dynamicToolCall" => vec![Segment::ToolCall {
-            id,
-            name: item
+        "mcpToolCall" | "dynamicToolCall" => {
+            let name = item
                 .get("tool")
                 .and_then(Value::as_str)
                 .unwrap_or(type_name)
-                .to_string(),
-            input: bounded_segment_value(item.get("arguments").cloned().unwrap_or(Value::Null)),
-        }],
-        "toolResult" => vec![Segment::ToolResult {
-            call_id: item
-                .get("callId")
-                .or_else(|| item.get("call_id"))
-                .and_then(Value::as_str)
-                .unwrap_or(&id)
-                .to_string(),
-            content: bounded_segment_value(item.get("content").cloned().unwrap_or(Value::Null)),
-            is_error: item
-                .get("isError")
-                .or_else(|| item.get("is_error"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        }],
+                .to_string();
+            let presentation = matches!(name.to_ascii_lowercase().as_str(), "exec" | "js")
+                .then_some(ToolCallPresentation::Orchestration);
+            vec![Segment::ToolCall {
+                id,
+                name,
+                input: bounded_segment_value(item.get("arguments").cloned().unwrap_or(Value::Null)),
+                presentation,
+            }]
+        }
+        "toolResult" => {
+            let (content, attachments) = split_tool_result_content(
+                session,
+                &id,
+                item.get("content").cloned().unwrap_or(Value::Null),
+            );
+            vec![Segment::ToolResult {
+                call_id: item
+                    .get("callId")
+                    .or_else(|| item.get("call_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_string(),
+                content: bounded_segment_value(content),
+                is_error: item
+                    .get("isError")
+                    .or_else(|| item.get("is_error"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                attachments,
+            }]
+        }
         "collabAgentToolCall" => vec![Segment::ToolCall {
             id,
             name: item
@@ -793,6 +828,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .unwrap_or("collaboration")
                 .to_string(),
             input: bounded_segment_value(item.clone()),
+            presentation: None,
         }],
         "imageView" => vec![Segment::Attachment {
             asset: AssetRef {
@@ -859,6 +895,57 @@ fn user_input_asset_id(item_id: &str, input_index: usize) -> String {
 fn parse_user_input_asset_id(asset_id: &str) -> Option<(String, usize)> {
     let (item_id, input_index) = asset_id.rsplit_once(USER_INPUT_ASSET_MARKER)?;
     Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
+fn tool_result_asset_id(item_id: &str, input_index: usize) -> String {
+    format!("{item_id}{TOOL_RESULT_ASSET_MARKER}{input_index}")
+}
+
+fn parse_tool_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
+    let (item_id, input_index) = asset_id.rsplit_once(TOOL_RESULT_ASSET_MARKER)?;
+    Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
+fn tool_result_image_url(value: &Value) -> Option<&str> {
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("image" | "input_image" | "output_image")
+    )
+    .then(|| {
+        value
+            .get("url")
+            .or_else(|| value.get("image_url"))
+            .and_then(Value::as_str)
+    })
+    .flatten()
+    .filter(|url| url.starts_with("data:image/"))
+}
+
+fn split_tool_result_content(
+    session: &SessionRef,
+    item_id: &str,
+    content: Value,
+) -> (Value, Vec<ToolResultAttachment>) {
+    let Value::Array(items) = content else {
+        return (content, Vec::new());
+    };
+    let mut visible = Vec::with_capacity(items.len());
+    let mut attachments = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let Some(url) = tool_result_image_url(&item) else {
+            visible.push(item);
+            continue;
+        };
+        attachments.push(ToolResultAttachment {
+            asset: AssetRef {
+                session: session.clone(),
+                native_id: tool_result_asset_id(item_id, index),
+            },
+            media_type: data_url_media_type(url).unwrap_or("image/*").to_string(),
+            title: None,
+        });
+    }
+    (Value::Array(visible), attachments)
 }
 
 fn data_url_media_type(url: &str) -> Option<&str> {
@@ -1584,6 +1671,56 @@ mod tests {
             [Segment::ToolCall { name, input, .. }]
                 if name == "spawnAgent"
                     && input.get("receiverThreadIds").and_then(Value::as_array).is_some()
+        ));
+    }
+
+    #[test]
+    fn maps_programmatic_calls_to_compact_tool_presentation() {
+        let session = SessionRef::new(default_instance().unwrap(), "parent").unwrap();
+        let segments = map_item_segments(
+            &session,
+            &json!({
+                "id": "program-1",
+                "type": "mcpToolCall",
+                "tool": "js",
+                "arguments": { "value": "const result = await tools.run()" }
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            segments.as_slice(),
+            [Segment::ToolCall {
+                presentation: Some(ToolCallPresentation::Orchestration),
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn extracts_programmatic_result_images_before_bounding_content() {
+        let session = SessionRef::new(default_instance().unwrap(), "parent").unwrap();
+        let segments = map_item_segments(
+            &session,
+            &json!({
+                "id": "result-1",
+                "type": "toolResult",
+                "callId": "program-1",
+                "content": [
+                    { "type": "input_text", "text": "done" },
+                    { "type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U=" }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            segments.as_slice(),
+            [Segment::ToolResult { content, attachments, .. }]
+                if content.as_array().is_some_and(|items| items.len() == 1)
+                    && attachments.len() == 1
+                    && attachments[0].media_type == "image/png"
+                    && attachments[0].asset.native_id == "result-1:tool-result:1"
         ));
     }
 

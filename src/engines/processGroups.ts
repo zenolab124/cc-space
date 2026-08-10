@@ -152,6 +152,12 @@ export function projectEngineProcessEntries(
     if (segment.kind === 'commandExecution') return [[segment.id, 'Bash'] as const]
     return []
   }))
+  const orchestrationCallIds = new Set(entries.flatMap(entry => {
+    const segment = entry.segment
+    return segment.kind === 'toolCall' && segment.presentation === 'orchestration'
+      ? [segment.id]
+      : []
+  }))
 
   for (const entry of entries) {
     const segment = entry.segment
@@ -162,14 +168,20 @@ export function projectEngineProcessEntries(
         id: segment.id,
         name,
         input: sharedToolInput(name, segment.input),
+        ...(segment.presentation ? { _presentation: segment.presentation } : {}),
       })
       continue
     }
     if (segment.kind === 'toolResult') {
       const content = resultContent(segment.content)
-      results.set(segment.callId, { content, is_error: segment.isError, recordUuid: null })
+      results.set(segment.callId, {
+        content,
+        is_error: segment.isError,
+        attachments: segment.attachments,
+        recordUuid: null,
+      })
       const pairedName = pairedCallNames.get(segment.callId)
-      if (!pairedName || !usesInlineToolResult(pairedName)) {
+      if (!orchestrationCallIds.has(segment.callId) && (!pairedName || !usesInlineToolResult(pairedName))) {
         blocks.push({
           type: 'tool_result',
           tool_use_id: segment.callId,

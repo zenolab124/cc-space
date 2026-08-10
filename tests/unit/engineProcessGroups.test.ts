@@ -171,4 +171,42 @@ describe('engine process groups', () => {
       input: { value: ['a', 'b'] },
     })
   })
+
+  it('preserves orchestration presentation and result image attachments', () => {
+    const attachment = {
+      asset: { session: { engine: 'codex' } as never, nativeId: 'result:tool-result:1' },
+      mediaType: 'image/png',
+      title: null,
+    }
+    const projection = projectEngineProcessEntries([
+      {
+        key: 'call',
+        segment: {
+          kind: 'toolCall',
+          id: 'tool-1',
+          name: 'js',
+          input: { value: 'program' },
+          presentation: 'orchestration',
+        },
+      },
+      {
+        key: 'result',
+        segment: {
+          kind: 'toolResult',
+          callId: 'tool-1',
+          content: [],
+          isError: false,
+          attachments: [attachment],
+        },
+      },
+    ])
+
+    expect(projection.blocks[0]).toMatchObject({
+      type: 'tool_use',
+      name: 'js',
+      _presentation: 'orchestration',
+    })
+    expect(projection.blocks).toHaveLength(1)
+    expect(projection.results.get('tool-1')?.attachments).toEqual([attachment])
+  })
 })

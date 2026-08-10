@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { computed } from 'vue'
 import type { ContentBlock } from '@/types'
-import { resolveAsset } from '@/engines/client'
 import type { EngineSegment } from '@/engines/types'
 import MessageBlock from '@/components/MessageBlock.vue'
+import EngineAssetImage from './EngineAssetImage.vue'
 
 const props = withDefaults(defineProps<{
   segment: EngineSegment
@@ -13,11 +12,6 @@ const props = withDefaults(defineProps<{
 }>(), {
   compact: false,
 })
-const { t } = useI18n()
-const assetUrl = ref<string | null>(null)
-const assetError = ref<string | null>(null)
-const loadingAsset = ref(false)
-
 const contentBlock = computed<ContentBlock | null>(() => {
   const segment = props.segment
   if (segment.kind === 'text') return { type: 'text', text: segment.text }
@@ -32,22 +26,7 @@ const contentBlock = computed<ContentBlock | null>(() => {
   return null
 })
 
-async function loadAsset() {
-  if (props.segment.kind !== 'attachment' || assetUrl.value || loadingAsset.value) return
-  loadingAsset.value = true
-  try {
-    const result = await resolveAsset(props.segment.asset.session, props.segment.asset.nativeId)
-    assetUrl.value = URL.createObjectURL(new Blob([new Uint8Array(result.bytes)], { type: result.mediaType }))
-  } catch (error) {
-    assetError.value = String(error)
-  } finally {
-    loadingAsset.value = false
-  }
-}
-
-onUnmounted(() => {
-  if (assetUrl.value) URL.revokeObjectURL(assetUrl.value)
-})
+const attachment = computed(() => props.segment.kind === 'attachment' ? props.segment : null)
 </script>
 
 <template>
@@ -55,25 +34,7 @@ onUnmounted(() => {
     <MessageBlock :block="contentBlock" :streaming="streaming" />
   </div>
 
-  <div v-else-if="segment.kind === 'attachment'" class="my-1.5">
-    <img
-      v-if="assetUrl"
-      :src="assetUrl"
-      :alt="segment.title || t('engine.attachment')"
-      class="max-h-96 max-w-full rounded border border-border shadow-paper"
-    />
-    <button
-      v-else
-      type="button"
-      class="inline-flex items-center gap-1 text-xs text-primary hover:underline disabled:opacity-50"
-      :disabled="loadingAsset"
-      @click="loadAsset"
-    >
-      <span :class="loadingAsset ? 'i-carbon-renew animate-spin' : 'i-carbon-image'" class="h-3 w-3" />
-      {{ loadingAsset ? t('common.loading') : (segment.title || t('engine.loadAttachment')) }}
-    </button>
-    <p v-if="assetError" role="alert" class="mt-1 text-xs text-destructive">{{ assetError }}</p>
-  </div>
+  <EngineAssetImage v-else-if="attachment" :attachment="attachment" />
 
 </template>
 

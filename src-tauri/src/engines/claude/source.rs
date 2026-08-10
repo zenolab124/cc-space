@@ -446,6 +446,7 @@ pub(crate) fn map_block(
             id,
             name,
             input: bounded_segment_value(input),
+            presentation: None,
         },
         ContentBlock::ToolResult {
             tool_use_id,
@@ -460,6 +461,7 @@ pub(crate) fn map_block(
                 }
             },
             is_error,
+            attachments: Vec::new(),
         },
         ContentBlock::Image { source } => Segment::Attachment {
             asset: AssetRef {

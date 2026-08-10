@@ -135,6 +135,17 @@ describe('tool display projection', () => {
     expect(summary[0].detail.endsWith('…')).toBe(true)
     expect(summary[1]).toMatchObject({ kind: 'other', name: 'browser/navigate' })
   })
+
+  it('summarizes programmatic orchestration as tool calls instead of JavaScript', () => {
+    const tools = [
+      { type: 'tool_use' as const, id: 'a', name: 'js', input: { value: 'code' }, _presentation: 'orchestration' as const },
+      { type: 'tool_use' as const, id: 'b', name: 'js', input: { value: 'code' }, _presentation: 'orchestration' as const },
+    ]
+
+    expect(summarizeToolProcess(tools)).toEqual([
+      { kind: 'orchestration', name: 'js', count: 2, detail: '' },
+    ])
+  })
 })
 
 describe('tool visual state', () => {

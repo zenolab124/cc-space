@@ -89,11 +89,15 @@ pub enum Segment {
         id: String,
         name: String,
         input: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        presentation: Option<ToolCallPresentation>,
     },
     ToolResult {
         call_id: String,
         content: Value,
         is_error: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<ToolResultAttachment>,
     },
     CommandExecution {
         id: String,
@@ -116,6 +120,20 @@ pub enum Segment {
         type_name: String,
         summary: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolCallPresentation {
+    Orchestration,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolResultAttachment {
+    pub asset: AssetRef,
+    pub media_type: String,
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

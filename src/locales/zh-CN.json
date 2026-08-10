@@ -1322,7 +1322,8 @@
         "run": "运行",
         "web": "查询",
         "delegate": "委派",
-        "skill": "调用"
+        "skill": "调用",
+        "orchestration": "工具调用"
       },
       "running": "运行中",
       "runningProgress": "{current}/{total} · 运行中",

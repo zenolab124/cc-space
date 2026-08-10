@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ContentBlock } from '@/types'
-import { isToolUseBlock, segmentToolBlocks } from '@/utils/toolDisplay'
+import { isOrchestrationTool, isToolUseBlock, segmentToolBlocks } from '@/utils/toolDisplay'
 import { useToolDisplayMode } from '@/composables/useToolDisplay'
 import MessageBlock from './MessageBlock.vue'
 import ToolProcessGroup from './ToolProcessGroup.vue'
@@ -45,7 +45,19 @@ const segments = computed(() => {
           :key="isToolUseBlock(block) ? block.id : `${block.type}:${index}`"
         >
           <div
-            v-if="isToolUseBlock(block)"
+            v-if="isToolUseBlock(block) && isOrchestrationTool(block)"
+            class="content-tool-card"
+            :data-tool-use-id="block.id"
+          >
+            <ToolProcessItems
+              :blocks="[block]"
+              :block-record-uuids="[segment.recordUuids[index]]"
+              :streaming="streaming"
+              nested
+            />
+          </div>
+          <div
+            v-else-if="isToolUseBlock(block)"
             class="content-tool-card"
             :data-tool-use-id="block.id"
           >
