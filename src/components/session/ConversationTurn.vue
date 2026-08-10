@@ -19,10 +19,7 @@ const { stickyUserPromptEnabled } = useStickyUserPrompt()
 
     <div
       v-if="turn.user.visible"
-      :class="[
-        turn.user.sticky && stickyUserPromptEnabled ? 'conversation-user-sticky' : '',
-        turn.user.hidden ? 'conversation-user-ghost' : '',
-      ]"
+      :class="turn.user.sticky && stickyUserPromptEnabled ? 'conversation-user-sticky' : ''"
     >
       <ConversationUserMessage :time-label="turn.timeLabel">
         <slot name="user" />
@@ -54,8 +51,5 @@ const { stickyUserPromptEnabled } = useStickyUserPrompt()
   position: sticky;
   top: 0;
   z-index: 10;
-}
-.conversation-user-ghost {
-  visibility: hidden;
 }
 </style>

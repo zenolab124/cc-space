@@ -29,8 +29,6 @@ const props = defineProps<{
   gi: number
   dayLabel?: string | null
   timeLabel?: string | null
-  /** 自绘吸顶层正在展示本组用户消息:文档流原件隐形但占位,避免临界滚动区双显 */
-  hideUser?: boolean
   /** 仅历史轮次允许吸顶；当前最后一轮必须留在普通文档流。 */
   stickyUser?: boolean
   responseMeta?: AssistantResponseMeta | null
@@ -63,7 +61,6 @@ const turnView = computed<ConversationTurnView>(() => ({
   user: {
     visible: normalUserVisible.value,
     sticky: props.stickyUser === true && hasAssistantResponses.value,
-    hidden: props.hideUser ?? false,
   },
   response: {
     visible: hasAssistantResponses.value,

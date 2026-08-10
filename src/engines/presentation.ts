@@ -10,7 +10,6 @@ export interface ConversationTurnView {
   user: {
     visible: boolean
     sticky: boolean
-    hidden: boolean
   }
   response: {
     visible: boolean

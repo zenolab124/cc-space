@@ -29,7 +29,6 @@ const props = defineProps<{
   showThoughtProcess?: boolean
   dayLabel?: string | null
   streaming?: boolean
-  hideUser?: boolean
   stickyUser?: boolean
 }>()
 
@@ -142,7 +141,6 @@ const turnView = computed<ConversationTurnView>(() => ({
   user: {
     visible: userSegments.value.length > 0 || optimisticImages.value.length > 0,
     sticky: props.stickyUser === true && responseRecords.value.length > 0,
-    hidden: props.hideUser === true,
   },
   response: {
     visible: responseRecords.value.length > 0,

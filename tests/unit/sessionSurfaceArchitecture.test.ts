@@ -81,8 +81,8 @@ describe('unified session surface architecture', () => {
       standardController.indexOf('<SessionContentState v-if="error"'),
     )
     expect(standardTimeline).toContain('<SessionTypingIndicator')
-    expect(nativeController).not.toContain(':hide-user="shouldVirtualize && stickyDisplay?.index === lastGroupIndex"')
-    expect(standardController).not.toContain(':hide-user="shouldVirtualize && stickyDisplay?.index === conversationGroups.length - 1"')
+    expect(nativeController).not.toContain(':hide-user=')
+    expect(standardController).not.toContain(':hide-user=')
     expect(sharedRunConfig).not.toContain('engineConfig?.inheritedChannelLabel')
     expect(sharedRunConfig).toContain("t(props.engineConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial'")
     const nativeActiveTail = nativeController.slice(
@@ -221,8 +221,12 @@ describe('unified session surface architecture', () => {
     expect(controller).toContain('conversationVirtualizer.getVirtualItems()')
     expect(controller).toContain('v-if="lastConversationGroup"')
     expect(controller).toContain('class="engine-sticky-user-overlay"')
-    expect(controller).toContain(':hide-user="stickyDisplay?.index === virtualItem.index"')
-    expect(controller).toContain(':hide-user="stickyDisplay?.index === virtualItem.index"\n              sticky-user')
+    expect(controller).not.toContain(':hide-user=')
+    const virtualHistory = controller.slice(
+      controller.indexOf('v-for="virtualItem in conversationVirtualizer.getVirtualItems()"'),
+      controller.indexOf('<div v-else class="space-y-4">'),
+    )
+    expect(virtualHistory).not.toContain('sticky-user')
     const activeTail = controller.slice(
       controller.indexOf('v-if="lastConversationGroup"'),
       controller.indexOf('<SessionTypingIndicator'),

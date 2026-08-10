@@ -3208,8 +3208,6 @@ async function onReload() {
               :gi="vitem.index"
               :day-label="dayDividers[vitem.index]"
               :time-label="groupTimeLabels[vitem.index]"
-              :hide-user="vitem.index === stickyDisplay?.index"
-              sticky-user
               :response-meta="groupResponseMetas[vitem.index]"
               :channel-marks-by-uuid="channelMarksByUuid"
               :model-switch-name="modelSwitchName"

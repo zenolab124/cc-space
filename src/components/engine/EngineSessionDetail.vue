@@ -1506,8 +1506,6 @@ onUnmounted(() => {
               :show-thought-process="enginePresentation.showThoughtProcess"
               :day-label="historicalGroups[virtualItem.index].dayLabel"
               :streaming="isTurnStreaming(historicalGroups[virtualItem.index].turnId)"
-              :hide-user="stickyDisplay?.index === virtualItem.index"
-              sticky-user
             />
           </div>
         </div>
