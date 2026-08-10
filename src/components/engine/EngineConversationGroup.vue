@@ -30,6 +30,7 @@ const props = defineProps<{
   dayLabel?: string | null
   streaming?: boolean
   hideUser?: boolean
+  stickyUser?: boolean
 }>()
 
 const { locale } = useI18n()
@@ -140,7 +141,7 @@ const turnView = computed<ConversationTurnView>(() => ({
   timeLabel: timeLabel.value || null,
   user: {
     visible: userSegments.value.length > 0 || optimisticImages.value.length > 0,
-    sticky: responseRecords.value.length > 0,
+    sticky: props.stickyUser === true && responseRecords.value.length > 0,
     hidden: props.hideUser === true,
   },
   response: {

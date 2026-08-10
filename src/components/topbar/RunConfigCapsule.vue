@@ -303,10 +303,9 @@ function pickEffort(value: NonNullable<EffortSetting>) {
 const channelSegLabel = computed(() => {
   const id = props.engineConfig?.channelId ?? props.defaultConfig?.channelId ?? props.runConfig?.channelId
   if (!id) {
-    return props.engineConfig?.inheritedChannelLabel
-      || t(props.engineConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
-        engine: props.engineConfig?.engineName,
-      })
+    return t(props.engineConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
+      engine: props.engineConfig?.engineName,
+    })
   }
   return channels.value.find(c => c.id === id)?.name ?? id
 })

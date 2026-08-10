@@ -151,6 +151,59 @@ describe('standard runtime timeline reducer', () => {
 })
 
 describe('live history reconciliation', () => {
+  it('hands landed text records to history even when the source normalizes item ids', () => {
+    const pendingUser = record({
+      id: 'pending-user-1',
+      role: 'user',
+      segments: [{ kind: 'text', text: 'hello' }],
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+    const liveAssistant = record({
+      id: 'runtime-agent-message',
+      segments: [{ kind: 'text', text: 'world', phase: 'final' }],
+    })
+    const persisted = [
+      record({ id: 'item-1', role: 'user', segments: [{ kind: 'text', text: 'hello' }] }),
+      record({ id: 'item-2', segments: [{ kind: 'text', text: 'world' }] }),
+    ]
+
+    expect(reconcileLiveRecords(persisted, [pendingUser, liveAssistant])).toEqual([])
+  })
+
+  it('keeps unmatched and duplicate live text until each copy has landed', () => {
+    const persisted = [record({ id: 'item-1', segments: [{ kind: 'text', text: 'same' }] })]
+    const first = record({ id: 'runtime-1', segments: [{ kind: 'text', text: 'same', phase: 'final' }] })
+    const second = record({ id: 'runtime-2', segments: [{ kind: 'text', text: 'same', phase: 'final' }] })
+    const unmatched = record({ id: 'runtime-3', segments: [{ kind: 'text', text: 'new', phase: 'final' }] })
+
+    expect(reconcileLiveRecords(persisted, [first, second, unmatched]))
+      .toEqual([second, unmatched])
+  })
+
+  it('hands an optimistic image-only message to its landed attachment record', () => {
+    const pendingImage = record({
+      id: 'pending-image',
+      role: 'user',
+      segments: [],
+      sourceMeta: {
+        ...optimisticUserSourceMeta(),
+        optimisticImages: [{ id: 'image-1' }],
+      },
+    })
+    const persisted = [record({
+      id: 'item-1',
+      role: 'user',
+      segments: [{
+        kind: 'attachment',
+        asset: { session, nativeId: 'image-1' },
+        mediaType: 'image/png',
+        title: null,
+      }],
+    })]
+
+    expect(reconcileLiveRecords(persisted, [pendingImage])).toEqual([])
+  })
+
   it('keeps unflushed records and removes them only after history confirms landing', () => {
     const pendingUser = record({
       id: 'pending-user-1',
@@ -162,15 +215,13 @@ describe('live history reconciliation', () => {
       id: 'assistant-1',
       segments: [{ kind: 'text', text: 'world', phase: 'final' }],
     })
-    const completedTurns = new Set(['turn-1'])
-
-    expect(reconcileLiveRecords([], [pendingUser, liveAssistant], completedTurns)).toHaveLength(2)
+    expect(reconcileLiveRecords([], [pendingUser, liveAssistant])).toHaveLength(2)
 
     const persisted = [
       record({ id: 'user-1', role: 'user', segments: [{ kind: 'text', text: 'hello' }] }),
       record({ id: 'assistant-1', segments: [{ kind: 'text', text: 'world', phase: 'final' }] }),
     ]
-    const reconciled = reconcileLiveRecords(persisted, [pendingUser, liveAssistant], completedTurns)
+    const reconciled = reconcileLiveRecords(persisted, [pendingUser, liveAssistant])
     expect(reconciled).toEqual([])
     expect(hasLiveTurn(reconciled, 'turn-1')).toBe(false)
   })
@@ -187,6 +238,6 @@ describe('live history reconciliation', () => {
       segments: [{ kind: 'text', text: 'old', phase: 'final' }],
     })]
 
-    expect(reconcileLiveRecords(persisted, [live], new Set(['turn-2']))).toEqual([live])
+    expect(reconcileLiveRecords(persisted, [live])).toEqual([live])
   })
 })

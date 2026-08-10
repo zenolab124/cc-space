@@ -230,7 +230,6 @@ const capsuleConfig = computed<EngineCapsuleConfig>(() => ({
   engineId: sessionEngineId.value,
   engineName: enginePresentation.value.displayName,
   channelId: selectedChannel.value,
-  inheritedChannelLabel: providerChannel.value?.name ?? timelineProvider.value,
   model: selectedModel.value,
   effort: selectedEffort.value,
   modelOverridden: modelOverridden.value,
@@ -715,7 +714,6 @@ function reconcileLoadedRecords(timelineRecords: ConversationRecord[]) {
   liveRecords.value = reconcileLiveRecords(
     timelineRecords,
     liveRecords.value,
-    completedTurnIds,
   )
   for (const turnId of [...completedTurnIds]) {
     if (!hasLiveTurn(liveRecords.value, turnId)) {
@@ -1462,6 +1460,7 @@ onUnmounted(() => {
               :day-label="historicalGroups[virtualItem.index].dayLabel"
               :streaming="isTurnStreaming(historicalGroups[virtualItem.index].turnId)"
               :hide-user="stickyDisplay?.index === virtualItem.index"
+              sticky-user
             />
           </div>
         </div>
@@ -1476,6 +1475,7 @@ onUnmounted(() => {
             :show-thought-process="enginePresentation.showThoughtProcess"
             :day-label="group.dayLabel"
             :streaming="isTurnStreaming(group.turnId)"
+            sticky-user
           />
         </div>
         <div

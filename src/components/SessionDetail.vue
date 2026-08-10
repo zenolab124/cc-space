@@ -3217,6 +3217,7 @@ async function onReload() {
               :day-label="dayDividers[vitem.index]"
               :time-label="groupTimeLabels[vitem.index]"
               :hide-user="vitem.index === stickyDisplay?.index"
+              sticky-user
               :response-meta="groupResponseMetas[vitem.index]"
               :channel-marks-by-uuid="channelMarksByUuid"
               :model-switch-name="modelSwitchName"
@@ -3243,6 +3244,7 @@ async function onReload() {
               :day-label="dayDividers[gi]"
               :time-label="groupTimeLabels[gi]"
               :response-meta="groupResponseMetas[gi]"
+              sticky-user
               :channel-marks-by-uuid="channelMarksByUuid"
               :model-switch-name="modelSwitchName"
               :is-model-command-record="isModelCommandRecord"

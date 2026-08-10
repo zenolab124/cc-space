@@ -18,7 +18,6 @@ export interface EngineCapsuleConfig {
   engineId: string
   engineName: string
   channelId: string | null
-  inheritedChannelLabel: string | null
   model: string | null
   effort: string | null
   modelOverridden: boolean

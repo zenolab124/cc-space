@@ -177,26 +177,68 @@ function textOf(record: ConversationRecord): string {
     .trim()
 }
 
+function textualFingerprint(record: ConversationRecord): string | null {
+  if (record.segments.length === 0) return null
+  const values: string[] = []
+  for (const segment of record.segments) {
+    if (segment.kind !== 'text' && segment.kind !== 'reasoning') return null
+    values.push(`${segment.kind}\u001f${segment.text}`)
+  }
+  return `${record.role}\u001e${values.join('\u001d')}`
+}
+
+function userInputFingerprint(record: ConversationRecord): string | null {
+  if (record.role !== 'user') return null
+  const optimisticImages = Array.isArray(record.sourceMeta.optimisticImages)
+    ? record.sourceMeta.optimisticImages.length
+    : 0
+  const landedAttachments = record.segments.filter(segment => segment.kind === 'attachment').length
+  const attachmentCount = optimisticImages || landedAttachments
+  const text = textOf(record)
+  return text || attachmentCount > 0
+    ? `${text}\u001f${attachmentCount}`
+    : null
+}
+
+function landedRecordIndex(
+  persisted: readonly ConversationRecord[],
+  live: ConversationRecord,
+): number {
+  if (!live.turnId) return -1
+  const exact = persisted.findIndex(record =>
+    record.turnId === live.turnId && record.id === live.id,
+  )
+  if (exact >= 0) return exact
+
+  const fingerprint = textualFingerprint(live)
+  if (fingerprint) {
+    const semantic = persisted.findIndex(record =>
+      record.turnId === live.turnId
+      && textualFingerprint(record) === fingerprint,
+    )
+    if (semantic >= 0) return semantic
+  }
+
+  if (live.sourceMeta[OPTIMISTIC_RECORD] !== true) return -1
+  const userInput = userInputFingerprint(live)
+  if (!userInput) return -1
+  return persisted.findIndex(record =>
+    record.turnId === live.turnId
+    && userInputFingerprint(record) === userInput,
+  )
+}
+
 /** 只摘除已经被历史时间线确认落账的直播记录；未落盘内容始终保留。 */
 export function reconcileLiveRecords(
   persisted: ConversationRecord[],
   live: ConversationRecord[],
-  completedTurnIds: ReadonlySet<string>,
 ): ConversationRecord[] {
-  const persistedIds = new Set(persisted.map(record => `${record.turnId ?? ''}\u001f${record.id}`))
-  const persistedUsers = new Map<string, Set<string>>()
-  for (const record of persisted) {
-    if (record.role !== 'user' || !record.turnId) continue
-    const values = persistedUsers.get(record.turnId) ?? new Set<string>()
-    values.add(textOf(record))
-    persistedUsers.set(record.turnId, values)
-  }
-
+  const unclaimedPersisted = [...persisted]
   return live.filter(record => {
-    if (!record.turnId || !completedTurnIds.has(record.turnId)) return true
-    if (persistedIds.has(`${record.turnId}\u001f${record.id}`)) return false
-    if (record.role !== 'user' || record.sourceMeta[OPTIMISTIC_RECORD] !== true) return true
-    return !persistedUsers.get(record.turnId)?.has(textOf(record))
+    const index = landedRecordIndex(unclaimedPersisted, record)
+    if (index < 0) return true
+    unclaimedPersisted.splice(index, 1)
+    return false
   })
 }
 
