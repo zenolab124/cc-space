@@ -5,6 +5,7 @@ import {
   engineRuntimeChannel,
   engineRuntimeOptions,
   inheritEngineRunConfig,
+  resolveInitialEngineChannel,
   setEngineRunConfig,
 } from '../../src/engines/runConfig'
 
@@ -13,6 +14,15 @@ const sessionId = 'codex:test:thread-1'
 afterEach(() => clearEngineRunConfig(sessionId))
 
 describe('engine run config', () => {
+  it('preserves an explicit official channel instead of falling back to the global default', () => {
+    const stored = {
+      model: null, effort: null, channelId: null, modelOverridden: false, effortOverridden: false,
+    }
+
+    expect(resolveInitialEngineChannel(stored, 'plus')).toBeNull()
+    expect(resolveInitialEngineChannel(null, 'plus')).toBe('plus')
+  })
+
   it('keeps model and effort scoped to a standard-engine session', () => {
     setEngineRunConfig(sessionId, {
       model: 'gpt-test', effort: 'high', channelId: null, modelOverridden: true, effortOverridden: true,

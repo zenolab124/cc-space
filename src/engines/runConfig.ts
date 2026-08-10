@@ -35,6 +35,13 @@ export function engineRunConfig(sessionId: string): EngineRunConfig | null {
   return config ? { ...config } : null
 }
 
+export function resolveInitialEngineChannel(
+  stored: EngineRunConfig | null,
+  defaultChannelId: string | null,
+): string | null {
+  return stored ? stored.channelId : defaultChannelId
+}
+
 export function setEngineRunConfig(sessionId: string, config: EngineRunConfig) {
   configs.set(sessionId, { ...config })
 }

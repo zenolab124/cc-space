@@ -46,7 +46,7 @@ import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
-import { engineRunConfig, inheritEngineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
+import { engineRunConfig, inheritEngineRunConfig, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
 import { groupConversationRecords } from '@/engines/conversationGroups'
@@ -767,8 +767,7 @@ async function loadRuntimeConfiguration() {
     if (!isCurrentTarget(target, generation) || props.session.id !== sessionId) return
     models.value = loadedModels
     const stored = engineRunConfig(sessionId)
-    selectedChannel.value = stored?.channelId
-      ?? configuredDefaultChannelId()
+    selectedChannel.value = resolveInitialEngineChannel(stored, configuredDefaultChannelId())
     const defaultModel = models.value.find(model => model.model === stored?.model)
       ?? models.value.find(model => model.model === activeChannelBinding.value?.defaultModel)
       ?? models.value.find(model => model.model === timelineModel.value)
