@@ -65,6 +65,8 @@ import UserMsgContent from './UserMsgContent.vue'
 import SessionSurface from './session/SessionSurface.vue'
 import SessionComposer from './session/SessionComposer.vue'
 import SessionComposerField from './session/SessionComposerField.vue'
+import SessionComposerAttachments from './session/SessionComposerAttachments.vue'
+import SessionComposerQueue, { type ComposerQueueItem } from './session/SessionComposerQueue.vue'
 import { shouldSubmitComposer } from './session/composerAction'
 import SessionViewport from './session/SessionViewport.vue'
 import SessionContentState from './session/SessionContentState.vue'
@@ -1032,6 +1034,16 @@ const imageDropArea = computed<HTMLElement | null | undefined>(() =>
 )
 const imageInput = useImageInput({ pasteTarget: textareaRef, dropTarget: imageDropArea })
 onMounted(() => imageInput.attach())
+const composerQueueItems = computed<ComposerQueueItem[]>(() => stream.value.pendingQueue.map((item, index) => ({
+  id: String(index),
+  text: item.message,
+  imageCount: item.opts.images?.length ?? 0,
+})))
+
+function removeComposerQueueItem(id: string) {
+  if (!effectiveSessionId.value) return
+  removePendingQueueItem(effectiveSessionId.value, Number(id))
+}
 
 // 会话级图片定位上下文(主会话,无 agentId);历史区图片按此拼 ccimg 协议 URL
 const imageLocator = computed<ImageLocator | null>(() => {
@@ -3432,56 +3444,16 @@ async function onReload() {
       </template>
 
       <template #queue>
-        <div v-if="stream.pendingQueue.length" class="mb-2 flex flex-col gap-1">
-          <div
-            v-for="(item, i) in stream.pendingQueue"
-            :key="i"
-            class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-muted/60 border border-border/50 text-xs group"
-          >
-            <span class="i-carbon-time w-3 h-3 text-muted-foreground shrink-0" />
-            <span class="truncate text-muted-foreground flex-1">{{ item.message }}</span>
-            <button
-              type="button"
-              class="i-carbon-close w-3 h-3 text-muted-foreground/50 hover:text-destructive shrink-0
-                     opacity-0 group-hover:opacity-100 transition-opacity"
-              :title="$t('common.delete')"
-              @click="removePendingQueueItem(effectiveSessionId!, i)"
-            />
-          </div>
-        </div>
+        <SessionComposerQueue :items="composerQueueItems" @remove="removeComposerQueueItem" />
       </template>
 
       <template #attachments>
-        <!-- 拖拽指引(pointer-events-none:避免提示自身触发 dragleave 抖动) -->
-        <div
-          v-if="imageInput.isDragging.value"
-          class="mb-1 text-xs text-primary flex items-center gap-1.5 pointer-events-none"
-        >
-          <span class="i-carbon-image w-3.5 h-3.5" />
-          {{ $t('image.dropHint') }}
-        </div>
-
-        <div v-if="imageInput.images.value.length" class="mb-2 flex gap-2 flex-wrap">
-          <div
-            v-for="img in imageInput.images.value"
-            :key="img.id"
-            class="relative w-14 h-14 rounded border border-border overflow-hidden group"
-          >
-            <img :src="img.dataUrl" class="w-full h-full object-cover" />
-            <button
-              type="button"
-              class="absolute top-0 right-0 w-4 h-4 rounded-bl bg-destructive/80 text-destructive-foreground
-                     flex items-center justify-center text-2.5 leading-none opacity-0 group-hover:opacity-100 transition-opacity"
-              @click="imageInput.removeImage(img.id)"
-            >
-              &times;
-            </button>
-          </div>
-        </div>
-
-        <div v-if="imageInput.lastError.value" class="mb-1 text-xs text-destructive">
-          {{ imageInput.lastError.value.message }}
-        </div>
+        <SessionComposerAttachments
+          :images="imageInput.images.value"
+          :dragging="imageInput.isDragging.value"
+          :error="imageInput.lastError.value?.message"
+          @remove="imageInput.removeImage"
+        />
       </template>
 
       <template #field="{ fieldClass }">

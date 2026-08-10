@@ -4,8 +4,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { relativeTime, type SessionSummary } from '@/types'
-import type { ConversationRecord, ModelDescriptor, RuntimeEventEnvelope, RuntimeSnapshot, SessionActions, SessionRef } from '@/engines/types'
-import { attachSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sendInputWhileRunning, sessionActions, startTurn } from '@/engines/client'
+import type { ConversationRecord, InteractionRequest, ModelDescriptor, RuntimeEventEnvelope, RuntimeInputItem, RuntimeSnapshot, SessionActions, SessionRef } from '@/engines/types'
+import { attachSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurnWithInput } from '@/engines/client'
 import type { SourceChangeEnvelope } from '@/engines/events'
 import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
@@ -17,13 +17,15 @@ import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
 import SessionSurface from '@/components/session/SessionSurface.vue'
 import SessionComposer from '@/components/session/SessionComposer.vue'
 import SessionComposerField from '@/components/session/SessionComposerField.vue'
+import SessionComposerAttachments from '@/components/session/SessionComposerAttachments.vue'
+import SessionComposerQueue, { type ComposerQueueItem } from '@/components/session/SessionComposerQueue.vue'
 import { shouldSubmitComposer } from '@/components/session/composerAction'
 import SessionViewport from '@/components/session/SessionViewport.vue'
 import SessionContentState from '@/components/session/SessionContentState.vue'
 import SessionBackToBottom from '@/components/session/SessionBackToBottom.vue'
 import SessionTypingIndicator from '@/components/session/SessionTypingIndicator.vue'
 import SessionInteractionPanel from '@/components/session/SessionInteractionPanel.vue'
-import SessionInteractionCard from '@/components/session/SessionInteractionCard.vue'
+import SessionApprovalCard, { type SessionApprovalOption } from '@/components/session/SessionApprovalCard.vue'
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
 import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
@@ -36,9 +38,11 @@ import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
 import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
+import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
+import { resolveTool } from '@/components/blocks/tools'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -53,9 +57,13 @@ const loading = ref(false)
 const attaching = ref(false)
 const resolvingWriterConflict = ref(false)
 const sending = ref(false)
+const preparingInput = ref(false)
 const interrupting = ref(false)
 const error = ref<string | null>(null)
 const input = ref('')
+const detailRootRef = ref<HTMLElement>()
+const composerFieldRef = ref<InstanceType<typeof SessionComposerField>>()
+const textareaRef = computed(() => composerFieldRef.value?.element ?? null)
 const editingMeta = ref(false)
 const titleDraft = ref('')
 const tagsDraft = ref('')
@@ -103,6 +111,20 @@ let foregroundRequestId = 0
 const completedTurnIds = new Set<string>()
 const settlementTimers = new Map<string, number>()
 const TURN_SETTLEMENT_DELAYS = [0, 100, 250, 600, 1_200, 2_000] as const
+let queuedInputSequence = 0
+
+interface QueuedRuntimeInput {
+  id: string
+  text: string
+  imageCount: number
+  input: RuntimeInputItem[]
+}
+
+const queuedInputs = ref<QueuedRuntimeInput[]>([])
+
+function bindDetailRoot(element: HTMLElement | null) {
+  detailRootRef.value = element ?? undefined
+}
 
 const reference = computed(() => props.session.reference)
 const nativeSessionId = computed(() => props.session.native_id || props.session.id)
@@ -238,15 +260,23 @@ const conversationGroups = computed(() => {
 })
 const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
+const imageDropArea = computed<HTMLElement | null | undefined>(() =>
+  interactive.value && !props.hideInput ? detailRootRef.value : null,
+)
+const imageInput = useImageInput({ pasteTarget: textareaRef, dropTarget: imageDropArea })
 const runtimeUnavailableReason = computed(() => {
   const reason = actions.value?.send.reasonCode ?? actions.value?.resume.reasonCode
   return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
 })
-const isBusy = computed(() => snapshot.value?.phase === 'running' || snapshot.value?.phase === 'awaitingInteraction' || sending.value)
+const runtimeActive = computed(() => snapshot.value?.phase === 'running' || snapshot.value?.phase === 'awaitingInteraction')
+const isBusy = computed(() => runtimeActive.value || sending.value)
 const activeTurnId = computed(() => snapshot.value?.activeTurnId ?? null)
-const canSendWhileBusy = computed(() => !!runtimeId.value
-  && !!activeTurnId.value
-  && actions.value?.sendWhileRunning.available === true)
+const canSendWhileBusy = computed(() => canSend.value)
+const composerQueueItems = computed<ComposerQueueItem[]>(() => queuedInputs.value.map(item => ({
+  id: item.id,
+  text: item.text,
+  imageCount: item.imageCount,
+})))
 const pendingInteractions = computed(() => snapshot.value?.pendingInteractions ?? [])
 const starred = computed(() => !!getMeta(props.session.id)?.starred)
 const resolvedTitle = computed(() => getMeta(props.session.id)?.title
@@ -619,7 +649,7 @@ async function recoverRuntimeSnapshot() {
   }
 }
 
-async function forkAndSend(text: string): Promise<boolean> {
+async function forkAndSend(inputItems: RuntimeInputItem[]): Promise<boolean> {
   const source = reference.value
   const draft = engineDraft(props.session.id)
   const project = props.session.project_reference ?? draft?.project
@@ -642,7 +672,7 @@ async function forkAndSend(text: string): Promise<boolean> {
       cwd,
       attachedChannel: selectedChannel.value,
     })
-    await startTurn(created.session, text, {
+    await startTurnWithInput(created.session, inputItems, {
       ...(selectedModel.value ? { model: selectedModel.value } : {}),
       ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
     })
@@ -656,7 +686,7 @@ async function forkAndSend(text: string): Promise<boolean> {
 
 type SendPreparation = 'attached' | 'forked' | 'cancelled'
 
-async function prepareSessionForSend(text: string): Promise<SendPreparation> {
+async function prepareSessionForSend(inputItems: RuntimeInputItem[]): Promise<SendPreparation> {
   resolvingWriterConflict.value = true
   error.value = null
   try {
@@ -677,7 +707,7 @@ async function prepareSessionForSend(text: string): Promise<SendPreparation> {
         },
       ])
       if (choice === 'retry') continue
-      if (choice === 'fork') return await forkAndSend(text) ? 'forked' : 'cancelled'
+      if (choice === 'fork') return await forkAndSend(inputItems) ? 'forked' : 'cancelled'
       return 'cancelled'
     }
   } finally {
@@ -685,26 +715,22 @@ async function prepareSessionForSend(text: string): Promise<SendPreparation> {
   }
 }
 
-async function send() {
-  const text = input.value.trim()
-  if (!text || !reference.value || sending.value || resolvingWriterConflict.value) return
-  const sendWhileRunning = isBusy.value
-  if (sendWhileRunning && !canSendWhileBusy.value) {
-    const reason = actions.value?.sendWhileRunning.reasonCode
-    error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
-    return
-  }
-  if (!isBusy.value) {
-    const preparation = await prepareSessionForSend(text)
-    if (preparation !== 'attached') return
-  }
-  if (!runtimeId.value) {
-    error.value = runtimeUnavailableReason.value
-    return
-  }
+async function serializeRuntimeInput(text: string, images: readonly PendingImage[]): Promise<RuntimeInputItem[]> {
+  const imageBlocks = images.length ? await imageInput.toImageBlocks(images) : []
+  return [
+    ...(text ? [{ kind: 'text' as const, text }] : []),
+    ...imageBlocks.map(block => ({
+      kind: 'image' as const,
+      mediaType: block.source.media_type,
+      data: block.source.data,
+    })),
+  ]
+}
+
+async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolean): Promise<boolean> {
+  if (!reference.value || sending.value) return false
   sending.value = true
   error.value = null
-  input.value = ''
   const optimisticId = `pending-user-${Date.now()}`
   liveRecords.value.push({
     id: optimisticId,
@@ -713,30 +739,85 @@ async function send() {
     parentId: null,
     role: 'user',
     timestamp: new Date().toISOString(),
-    segments: [{ kind: 'text', text }],
+    segments: item.text ? [{ kind: 'text', text: item.text }] : [],
     usage: null,
     sourceMeta: optimisticUserSourceMeta(),
   })
   try {
-    if (sendWhileRunning && runtimeId.value && activeTurnId.value) {
-      await sendInputWhileRunning(
-        reference.value,
-        runtimeId.value,
-        activeTurnId.value,
-        [{ kind: 'text', text }],
-      )
-    } else {
-      await startTurn(reference.value, text, {
-        ...(selectedModel.value ? { model: selectedModel.value } : {}),
-        ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
-      })
-    }
+    await startTurnWithInput(reference.value, item.input, {
+      ...(selectedModel.value ? { model: selectedModel.value } : {}),
+      ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
+    })
+    return true
   } catch (cause) {
     liveRecords.value = liveRecords.value.filter(record => record.id !== optimisticId)
-    input.value = input.value.trim() ? `${text}\n${input.value}` : text
+    if (restoreDraft && item.text) {
+      input.value = input.value.trim() ? `${item.text}\n${input.value}` : item.text
+    }
     error.value = causeMessage(cause)
+    return false
   } finally {
     sending.value = false
+  }
+}
+
+async function consumeQueuedInput() {
+  if (runtimeActive.value || sending.value || preparingInput.value || queuedInputs.value.length === 0) return
+  const next = queuedInputs.value.shift()!
+  const sent = await submitRuntimeInput(next, false)
+  if (!sent) queuedInputs.value.unshift(next)
+}
+
+function removeQueuedInput(id: string) {
+  queuedInputs.value = queuedInputs.value.filter(item => item.id !== id)
+}
+
+async function send() {
+  const text = input.value.trim()
+  const draftImages = [...imageInput.images.value]
+  if ((!text && draftImages.length === 0) || !reference.value || preparingInput.value || sending.value || resolvingWriterConflict.value) return
+  const queueForNextTurn = runtimeActive.value
+  let consumeAfterPreparation = false
+  preparingInput.value = true
+  try {
+    const inputItems = await serializeRuntimeInput(text, draftImages)
+    const queuedItem: QueuedRuntimeInput = {
+      id: `queued-input-${++queuedInputSequence}`,
+      text,
+      imageCount: draftImages.length,
+      input: inputItems,
+    }
+
+    if (queueForNextTurn) {
+      input.value = ''
+      imageInput.clearImages()
+      queuedInputs.value.push(queuedItem)
+      consumeAfterPreparation = !runtimeActive.value
+      return
+    }
+
+    const preparation = await prepareSessionForSend(inputItems)
+    if (preparation === 'forked') {
+      input.value = ''
+      imageInput.clearImages()
+      return
+    }
+    if (preparation !== 'attached' || !runtimeId.value) {
+      if (preparation === 'attached') error.value = runtimeUnavailableReason.value
+      return
+    }
+
+    input.value = ''
+    imageInput.clearImages()
+    const sent = await submitRuntimeInput(queuedItem, true)
+    if (!sent && draftImages.length) {
+      imageInput.images.value = [...draftImages, ...imageInput.images.value]
+    }
+  } catch (cause) {
+    error.value = causeMessage(cause)
+  } finally {
+    preparingInput.value = false
+    if (consumeAfterPreparation) void consumeQueuedInput()
   }
 }
 
@@ -795,6 +876,43 @@ async function decide(request: RuntimeSnapshot['pendingInteractions'][number], d
   } catch (cause) {
     error.value = causeMessage(cause)
   }
+}
+
+function interactionSubject(request: InteractionRequest): string {
+  if (request.title) return request.title
+  if (request.kind === 'command') return t('engine.segment.command')
+  if (request.kind === 'fileChange') return t('engine.segment.fileChange', { count: 1 })
+  return t('engine.approvalRequired')
+}
+
+function interactionToolName(request: InteractionRequest): string {
+  if (request.kind === 'command') return 'Bash'
+  return `Approval:${request.kind}`
+}
+
+function interactionOptions(request: InteractionRequest): SessionApprovalOption[] {
+  let safeOptionIndex = 0
+  return request.options.map(option => {
+    const tone = option.dangerous ? 'ghost' : safeOptionIndex++ === 0 ? 'primary' : 'warn'
+    return {
+      id: option.id,
+      label: t(`engine.decision.${option.id}`, option.label),
+      tone,
+      icon: option.dangerous
+        ? 'i-carbon-close'
+        : tone === 'primary' ? 'i-carbon-checkmark' : 'i-carbon-time',
+    }
+  })
+}
+
+function interactionDefaultOption(request: InteractionRequest): string | null {
+  return request.options.find(option => !option.dangerous)?.id ?? null
+}
+
+function interactionDenyOption(request: InteractionRequest): string | null {
+  return request.options.find(option => option.id === 'decline' || option.id === 'deny')?.id
+    ?? request.options.find(option => option.dangerous)?.id
+    ?? null
 }
 
 async function refreshSessionActions() {
@@ -873,6 +991,8 @@ watch(() => props.session.id, async () => {
   try {
     records.value = []
     liveRecords.value = []
+    queuedInputs.value = []
+    imageInput.clearImages()
     snapshot.value = null
     runtimeId.value = null
     models.value = []
@@ -938,12 +1058,14 @@ watch([selectedModel, selectedEffort, selectedChannel, modelOverridden, effortOv
 })
 
 onMounted(async () => {
+  imageInput.attach()
   unlistenSnapshot = await listen<RuntimeSnapshot>('engine-runtime-snapshot', event => {
     if (ownsSession(event.payload.session)) {
       snapshot.value = event.payload
       runtimeId.value = event.payload.runtimeId
       if (event.payload.lastError) error.value = event.payload.lastError
       if (!event.payload.sequenceConsistent) void recoverRuntimeSnapshot()
+      if (event.payload.phase === 'idle') void consumeQueuedInput()
     }
   })
   unlistenEvent = await listen<RuntimeEventEnvelope[]>('engine-runtime-events', event => {
@@ -973,7 +1095,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <SessionSurface>
+  <SessionSurface :root-ref="bindDetailRoot">
     <template #topbar>
       <SessionIdentityBar
         v-if="mode === 'archive'"
@@ -1087,51 +1209,59 @@ onUnmounted(() => {
 
     <template #interaction>
       <SessionInteractionPanel v-if="interactive && pendingInteractions.length">
-        <SessionInteractionCard
+        <SessionApprovalCard
           v-for="request in pendingInteractions"
           :key="request.reference.requestId"
-          :danger="request.options.some(option => option.dangerous)"
-          role="alertdialog"
-          :aria-label="request.title || t('engine.approvalRequired')"
+          :title="t('permission.title')"
+          :subject="interactionSubject(request)"
+          :options="interactionOptions(request)"
+          :default-option-id="interactionDefaultOption(request)"
+          :deny-option-id="interactionDenyOption(request)"
+          :keyboard="pendingInteractions.length === 1"
+          @decide="decide(request, $event)"
         >
-          <div class="flex items-center gap-2 border-b border-border px-3 py-2">
-            <span class="i-carbon-locked h-4 w-4 shrink-0 text-muted-foreground" />
-            <div class="text-sm font-medium">{{ request.title || t('engine.approvalRequired') }}</div>
-          </div>
-          <pre class="max-h-48 overflow-auto whitespace-pre-wrap px-3 py-2 text-[10px] text-muted-foreground">{{ JSON.stringify(request.payload, null, 2) }}</pre>
-          <div class="flex flex-wrap items-center gap-1.5 border-t border-border px-3 py-2">
-            <button
-              v-for="option in request.options"
-              :key="option.id"
-              type="button"
-              class="rounded border border-border px-2.5 py-1 text-xs transition-colors hover:bg-muted"
-              :class="option.dangerous ? 'text-destructive' : 'text-foreground'"
-              @click="decide(request, option.id)"
-            >
-              {{ t(`engine.decision.${option.id}`, option.label) }}
-            </button>
-          </div>
-        </SessionInteractionCard>
+          <component
+            :is="resolveTool(interactionToolName(request))"
+            :input="request.payload"
+            :tool-use-id="request.reference.requestId"
+            :name="interactionToolName(request)"
+          />
+        </SessionApprovalCard>
       </SessionInteractionPanel>
     </template>
 
     <template #input>
       <SessionComposer
         v-if="canSend && !hideInput"
+        :dragging="imageInput.isDragging.value"
         :busy="isBusy"
-        :has-content="!!input.trim()"
+        :has-content="!!input.trim() || !!imageInput.images.value.length"
         :can-send-while-busy="canSendWhileBusy"
-        :send-disabled="attaching || sending || resolvingWriterConflict"
+        :send-disabled="attaching || preparingInput || sending || resolvingWriterConflict"
         :stop-disabled="interrupting || !activeTurnId || actions?.interrupt.available === false"
         :stop-loading="interrupting"
         @send="send"
         @stop="interrupt"
       >
+        <template #queue>
+          <SessionComposerQueue :items="composerQueueItems" @remove="removeQueuedInput" />
+        </template>
+
+        <template #attachments>
+          <SessionComposerAttachments
+            :images="imageInput.images.value"
+            :dragging="imageInput.isDragging.value"
+            :error="imageInput.lastError.value?.message"
+            @remove="imageInput.removeImage"
+          />
+        </template>
+
         <template #field="{ fieldClass }">
           <SessionComposerField
+            ref="composerFieldRef"
             v-model="input"
             :class="fieldClass"
-            :placeholder="t('engine.inputPlaceholder')"
+            :placeholder="t('session.inputPlaceholder')"
             :disabled="attaching || resolvingWriterConflict"
             @keydown="onInputKeydown"
           />
