@@ -90,6 +90,8 @@ pub enum Segment {
         name: String,
         input: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         presentation: Option<ToolCallPresentation>,
     },
     ToolResult {

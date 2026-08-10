@@ -427,6 +427,7 @@ fn normalize_response_item(payload: &Value, line_number: usize) -> Option<Value>
         "function_call" => Some(json!({
             "id": id,
             "type": "dynamicToolCall",
+            "callId": payload.get("call_id").and_then(Value::as_str).unwrap_or(&id),
             "tool": payload.get("name").and_then(Value::as_str).unwrap_or("function_call"),
             "arguments": parse_json_value(payload.get("arguments").cloned().unwrap_or(Value::Null))
         })),
@@ -615,6 +616,28 @@ mod tests {
     }
 
     #[test]
+    fn custom_tool_calls_preserve_pairing_id_and_program_source() {
+        let item = normalize_response_item(
+            &json!({
+                "type": "custom_tool_call",
+                "id": "program-item-1",
+                "call_id": "program-call-1",
+                "name": "exec",
+                "input": "const r = await tools.example({ title: \"检查界面\" });"
+            }),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(item["id"], "program-item-1");
+        assert_eq!(item["callId"], "program-call-1");
+        assert_eq!(
+            item["arguments"].as_str(),
+            Some("const r = await tools.example({ title: \"检查界面\" });")
+        );
+    }
+
+    #[test]
     fn reads_local_codex_jsonl_into_app_server_like_thread() {
         let path = std::env::temp_dir().join(format!(
             "monet-codex-file-source-{}-{}.jsonl",
@@ -655,7 +678,8 @@ mod tests {
                 "type": "response_item",
                 "payload": {
                     "type": "function_call",
-                    "id": "call-1",
+                    "id": "function-item-1",
+                    "call_id": "call-1",
                     "name": "shell",
                     "arguments": "{\"command\":\"pwd\"}"
                 }
@@ -702,6 +726,7 @@ mod tests {
         assert_eq!(thread.cwd, "/tmp/project");
         assert_eq!(thread.turns.len(), 1);
         assert_eq!(thread.turns[0].items[1]["type"], "dynamicToolCall");
+        assert_eq!(thread.turns[0].items[1]["callId"], "call-1");
         assert_eq!(thread.turns[0].items[2]["type"], "toolResult");
         assert_eq!(thread.turns[0].items[3]["text"], "done");
         assert_eq!(thread.turns[0].items[3]["phase"], "final_answer");

@@ -33,6 +33,7 @@ const legacyResults = inject<ComputedRef<Map<string, ToolResultData>>>('toolResu
 
 const result = computed(() => context?.results.value.get(props.tool.id) ?? legacyResults?.value.get(props.tool.id))
 const orchestration = computed(() => isOrchestrationTool(props.tool))
+const title = computed(() => props.tool._title || (orchestration.value ? t('block.toolFold.action.orchestration') : props.tool.name))
 const resultImages = computed(() => {
   const content = result.value?.content
   if (!content || typeof content === 'string') return []
@@ -117,8 +118,8 @@ watch(() => foldState.requestedToolId.value, requested => {
       />
       <span :class="[iconClass, 'tool-fold-icon']" />
       <span class="tool-fold-main">
-        <b>{{ tool.name }}</b>
-        <span v-if="toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
+        <b>{{ title }}</b>
+        <span v-if="!orchestration && toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
       </span>
       <span
         v-if="stateLabel"
@@ -133,8 +134,8 @@ watch(() => foldState.requestedToolId.value, requested => {
       <span class="tool-fold-chevron" aria-hidden="true" />
       <span :class="[iconClass, 'tool-fold-icon']" />
       <span class="tool-fold-main">
-        <b>{{ tool.name }}</b>
-        <span v-if="toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
+        <b>{{ title }}</b>
+        <span v-if="!orchestration && toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
       </span>
       <span
         v-if="stateLabel"

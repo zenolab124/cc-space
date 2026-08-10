@@ -168,6 +168,7 @@ export function projectEngineProcessEntries(
         id: segment.id,
         name,
         input: sharedToolInput(name, segment.input),
+        ...(segment.title ? { _title: segment.title } : {}),
         ...(segment.presentation ? { _presentation: segment.presentation } : {}),
       })
       continue

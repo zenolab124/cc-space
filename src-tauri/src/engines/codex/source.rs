@@ -535,79 +535,86 @@ impl SessionSource for CodexSource {
 
     fn resolve_asset(&self, asset: AssetRef) -> EngineFuture<'_, ResolvedAsset> {
         Box::pin(async move {
-            let thread = self.read_thread_with_turns(&asset.session)?;
+            let primary_thread = self.read_thread_with_turns(&asset.session)?;
+            let mut threads = vec![primary_thread];
+            if let Ok(file_thread) = super::file_source::read_thread(asset.session.native_id()) {
+                threads.push(file_thread);
+            }
             let user_input = parse_user_input_asset_id(&asset.native_id);
             let tool_result = parse_tool_result_asset_id(&asset.native_id);
-            for turn in thread.turns {
-                for item in turn.items {
-                    if item.get("id").and_then(Value::as_str) == Some(&asset.native_id)
-                        && item.get("type").and_then(Value::as_str) == Some("imageView")
-                    {
-                        let path = item.get("path").and_then(Value::as_str).ok_or_else(|| {
-                            EngineError::new(
-                                EngineErrorKind::Protocol,
-                                "Codex image item has no path",
-                            )
-                        })?;
-                        let metadata = fs::metadata(path).map_err(|error| {
-                            EngineError::new(EngineErrorKind::Io, error.to_string())
-                        })?;
-                        if metadata.len() > ASSET_MAX_BYTES as u64 {
-                            return Err(EngineError::new(
-                                EngineErrorKind::Protocol,
-                                "Codex asset exceeds the transfer size limit",
-                            ));
-                        }
-                        let bytes = fs::read(path).map_err(|error| {
-                            EngineError::new(EngineErrorKind::Io, error.to_string())
-                        })?;
-                        return Ok(ResolvedAsset {
-                            media_type: media_type_for_path(path).to_string(),
-                            bytes,
-                        });
-                    }
-                    if let Some((item_id, input_index)) = &user_input {
-                        if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
-                            || item.get("type").and_then(Value::as_str) != Some("userMessage")
+            for thread in threads {
+                for turn in thread.turns {
+                    for item in turn.items {
+                        if item.get("id").and_then(Value::as_str) == Some(&asset.native_id)
+                            && item.get("type").and_then(Value::as_str) == Some("imageView")
                         {
-                            continue;
-                        }
-                        let url = item
-                            .get("content")
-                            .and_then(Value::as_array)
-                            .and_then(|content| content.get(*input_index))
-                            .and_then(|input| {
-                                input
-                                    .get("url")
-                                    .or_else(|| input.get("image_url"))
-                                    .and_then(Value::as_str)
-                            })
-                            .ok_or_else(|| {
-                                EngineError::new(
-                                    EngineErrorKind::Protocol,
-                                    "Codex image input has no data URL",
-                                )
+                            let path =
+                                item.get("path").and_then(Value::as_str).ok_or_else(|| {
+                                    EngineError::new(
+                                        EngineErrorKind::Protocol,
+                                        "Codex image item has no path",
+                                    )
+                                })?;
+                            let metadata = fs::metadata(path).map_err(|error| {
+                                EngineError::new(EngineErrorKind::Io, error.to_string())
                             })?;
-                        return decode_data_url_asset(url);
-                    }
-                    if let Some((item_id, input_index)) = &tool_result {
-                        if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
-                            || item.get("type").and_then(Value::as_str) != Some("toolResult")
-                        {
-                            continue;
-                        }
-                        let url = item
-                            .get("content")
-                            .and_then(Value::as_array)
-                            .and_then(|content| content.get(*input_index))
-                            .and_then(tool_result_image_url)
-                            .ok_or_else(|| {
-                                EngineError::new(
+                            if metadata.len() > ASSET_MAX_BYTES as u64 {
+                                return Err(EngineError::new(
                                     EngineErrorKind::Protocol,
-                                    "Codex tool result has no image data URL",
-                                )
+                                    "Codex asset exceeds the transfer size limit",
+                                ));
+                            }
+                            let bytes = fs::read(path).map_err(|error| {
+                                EngineError::new(EngineErrorKind::Io, error.to_string())
                             })?;
-                        return decode_data_url_asset(url);
+                            return Ok(ResolvedAsset {
+                                media_type: media_type_for_path(path).to_string(),
+                                bytes,
+                            });
+                        }
+                        if let Some((item_id, input_index)) = &user_input {
+                            if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
+                                || item.get("type").and_then(Value::as_str) != Some("userMessage")
+                            {
+                                continue;
+                            }
+                            let url = item
+                                .get("content")
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.get(*input_index))
+                                .and_then(|input| {
+                                    input
+                                        .get("url")
+                                        .or_else(|| input.get("image_url"))
+                                        .and_then(Value::as_str)
+                                })
+                                .ok_or_else(|| {
+                                    EngineError::new(
+                                        EngineErrorKind::Protocol,
+                                        "Codex image input has no data URL",
+                                    )
+                                })?;
+                            return decode_data_url_asset(url);
+                        }
+                        if let Some((item_id, input_index)) = &tool_result {
+                            if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
+                                || item.get("type").and_then(Value::as_str) != Some("toolResult")
+                            {
+                                continue;
+                            }
+                            let url = item
+                                .get("content")
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.get(*input_index))
+                                .and_then(tool_result_image_url)
+                                .ok_or_else(|| {
+                                    EngineError::new(
+                                        EngineErrorKind::Protocol,
+                                        "Codex tool result has no image data URL",
+                                    )
+                                })?;
+                            return decode_data_url_asset(url);
+                        }
                     }
                 }
             }
@@ -791,10 +798,18 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .to_string();
             let presentation = matches!(name.to_ascii_lowercase().as_str(), "exec" | "js")
                 .then_some(ToolCallPresentation::Orchestration);
+            let input = item.get("arguments").cloned().unwrap_or(Value::Null);
+            let title = presentation.and_then(|_| programmatic_tool_title(&input));
             vec![Segment::ToolCall {
-                id,
+                id: item
+                    .get("callId")
+                    .or_else(|| item.get("call_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_string(),
                 name,
-                input: bounded_segment_value(item.get("arguments").cloned().unwrap_or(Value::Null)),
+                input: bounded_segment_value(input),
+                title,
                 presentation,
             }]
         }
@@ -828,6 +843,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .unwrap_or("collaboration")
                 .to_string(),
             input: bounded_segment_value(item.clone()),
+            title: None,
             presentation: None,
         }],
         "imageView" => vec![Segment::Attachment {
@@ -904,6 +920,84 @@ fn tool_result_asset_id(item_id: &str, input_index: usize) -> String {
 fn parse_tool_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
     let (item_id, input_index) = asset_id.rsplit_once(TOOL_RESULT_ASSET_MARKER)?;
     Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
+fn programmatic_tool_title(input: &Value) -> Option<String> {
+    if let Some(title) = input.get("title").and_then(Value::as_str) {
+        let title = title.trim();
+        if !title.is_empty() {
+            return Some(title.to_string());
+        }
+    }
+    let source = input
+        .as_str()
+        .or_else(|| input.get("value").and_then(Value::as_str))
+        .or_else(|| input.get("code").and_then(Value::as_str))?;
+    let mut fallback = None;
+    for (offset, _) in source.match_indices("tools.") {
+        let call = &source[offset + "tools.".len()..];
+        let name_end = call
+            .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .unwrap_or(call.len());
+        let name = &call[..name_end];
+        if name.is_empty() {
+            continue;
+        }
+        let arguments = &call[name_end..];
+        let Some(open_parenthesis) = arguments.find('(') else {
+            continue;
+        };
+        let arguments =
+            &arguments[open_parenthesis + 1..arguments.len().min(open_parenthesis + 2049)];
+        if let Some(title) = js_string_property(arguments, "title") {
+            return Some(title);
+        }
+        fallback.get_or_insert_with(|| name.to_string());
+    }
+    fallback
+}
+
+fn js_string_property(source: &str, property: &str) -> Option<String> {
+    for (offset, _) in source.match_indices(property) {
+        let before = source[..offset].chars().next_back();
+        let after_index = offset + property.len();
+        let after = source[after_index..].chars().next();
+        if before.is_some_and(|value| value.is_ascii_alphanumeric() || value == '_')
+            || after.is_some_and(|value| value.is_ascii_alphanumeric() || value == '_')
+        {
+            continue;
+        }
+        let rest = source[after_index..].trim_start();
+        let Some(rest) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let quote = rest.chars().next()?;
+        if !matches!(quote, '\'' | '"' | '`') {
+            continue;
+        }
+        let mut escaped = false;
+        let mut value = String::new();
+        for character in rest[quote.len_utf8()..].chars() {
+            if escaped {
+                value.push(match character {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    other => other,
+                });
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == quote {
+                let value = value.trim();
+                return (!value.is_empty()).then(|| value.to_string());
+            } else {
+                value.push(character);
+            }
+        }
+    }
+    None
 }
 
 fn tool_result_image_url(value: &Value) -> Option<&str> {
@@ -1680,10 +1774,11 @@ mod tests {
         let segments = map_item_segments(
             &session,
             &json!({
-                "id": "program-1",
+                "id": "program-item-1",
                 "type": "mcpToolCall",
+                "callId": "program-call-1",
                 "tool": "js",
-                "arguments": { "value": "const result = await tools.run()" }
+                "arguments": "const result = await tools.mcp__node_repl__js({ title: \"检查 Monet 当前界面\", code: `work()` });"
             }),
         )
         .unwrap();
@@ -1691,10 +1786,19 @@ mod tests {
         assert!(matches!(
             segments.as_slice(),
             [Segment::ToolCall {
+                id,
+                title: Some(title),
                 presentation: Some(ToolCallPresentation::Orchestration),
                 ..
-            }]
+            }] if id == "program-call-1" && title == "检查 Monet 当前界面"
         ));
+        assert_eq!(
+            programmatic_tool_title(&json!(
+                "const r = await tools.exec_command({ cmd: 'pwd' });"
+            ))
+            .as_deref(),
+            Some("exec_command")
+        );
     }
 
     #[test]

@@ -446,6 +446,7 @@ pub(crate) fn map_block(
             id,
             name,
             input: bounded_segment_value(input),
+            title: None,
             presentation: None,
         },
         ContentBlock::ToolResult {

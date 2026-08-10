@@ -186,6 +186,7 @@ describe('engine process groups', () => {
           id: 'tool-1',
           name: 'js',
           input: { value: 'program' },
+          title: '检查界面',
           presentation: 'orchestration',
         },
       },
@@ -204,6 +205,7 @@ describe('engine process groups', () => {
     expect(projection.blocks[0]).toMatchObject({
       type: 'tool_use',
       name: 'js',
+      _title: '检查界面',
       _presentation: 'orchestration',
     })
     expect(projection.blocks).toHaveLength(1)

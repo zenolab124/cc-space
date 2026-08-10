@@ -122,6 +122,7 @@ impl FixtureEngine {
                     id: "fixture-call".into(),
                     name: "fixture_tool".into(),
                     input: json!({ "value": 1 }),
+                    title: None,
                     presentation: None,
                 },
                 Segment::Unknown {
