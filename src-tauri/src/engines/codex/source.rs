@@ -181,7 +181,13 @@ impl CodexSource {
             for thread in app_threads {
                 // App Server has richer metadata and live state. Local-only rows
                 // are still retained for archived sessions and CLI-less installs.
-                merged.insert(thread.id.clone(), thread.clone());
+                // Keep the rollout path from the local row: App Server responses do
+                // not consistently expose it, while per-turn model and usage metadata
+                // are read from that read-only file.
+                let mut thread = thread.clone();
+                let thread_id = thread.id.clone();
+                inherit_local_thread_path(&mut thread, merged.get(&thread_id));
+                merged.insert(thread.id.clone(), thread);
             }
         } else if merged.is_empty() {
             return Err(
@@ -266,7 +272,10 @@ impl CodexSource {
             }
         });
         match app_server_result {
-            Ok(thread) => Ok(thread),
+            Ok(mut thread) => {
+                self.restore_local_thread_path(&mut thread);
+                Ok(thread)
+            }
             Err(app_server_error) => {
                 super::file_source::read_thread(session.native_id()).or(Err(app_server_error))
             }
@@ -277,11 +286,31 @@ impl CodexSource {
         self.owns_session(session)?;
         let app_server_result = self.read_app_server_thread(session, false);
         match app_server_result {
-            Ok(thread) => Ok(thread),
+            Ok(mut thread) => {
+                self.restore_local_thread_path(&mut thread);
+                Ok(thread)
+            }
             Err(app_server_error) => {
                 super::file_source::read_thread(session.native_id()).or(Err(app_server_error))
             }
         }
+    }
+
+    fn restore_local_thread_path(&self, thread: &mut CodexThread) {
+        if thread.path.is_some() {
+            return;
+        }
+        let cached_path = self
+            .thread_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .and_then(|(_, threads)| threads.iter().find(|value| value.id == thread.id))
+            .and_then(|value| value.path.clone());
+        thread.path = cached_path.or_else(|| {
+            super::file_source::thread_path(&thread.id)
+                .map(|path| path.to_string_lossy().into_owned())
+        });
     }
 
     fn project_native_id(thread: &CodexThread) -> String {
@@ -1205,6 +1234,12 @@ fn turns_unavailable_before_first_message(error: &EngineError) -> bool {
             || error.message.contains("ephemeral thread"))
 }
 
+fn inherit_local_thread_path(thread: &mut CodexThread, local: Option<&CodexThread>) {
+    if thread.path.is_none() {
+        thread.path = local.and_then(|value| value.path.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -1302,6 +1337,29 @@ mod tests {
             CodexSource::project_native_id(&thread),
             UNCLASSIFIED_PROJECT
         );
+    }
+
+    #[test]
+    fn keeps_local_rollout_path_when_app_server_omits_it() {
+        let local = CodexThread {
+            id: "id".into(),
+            name: None,
+            preview: String::new(),
+            cwd: String::new(),
+            model_provider: String::new(),
+            path: Some("/tmp/session.jsonl".into()),
+            created_at: 0,
+            updated_at: 0,
+            turns: Vec::new(),
+        };
+        let mut app_server = CodexThread {
+            path: None,
+            ..local.clone()
+        };
+
+        inherit_local_thread_path(&mut app_server, Some(&local));
+
+        assert_eq!(app_server.path.as_deref(), Some("/tmp/session.jsonl"));
     }
 
     #[test]

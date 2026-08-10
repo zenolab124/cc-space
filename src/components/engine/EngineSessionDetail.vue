@@ -1434,7 +1434,7 @@ onUnmounted(() => {
       </div>
       <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
       <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
-      <div v-else ref="timelineContentElement" class="pb-2">
+      <div v-else ref="timelineContentElement" class="pb-2 relative">
         <div
           v-if="shouldVirtualize"
           ref="historicalVirtualBoxElement"
@@ -1496,9 +1496,9 @@ onUnmounted(() => {
             :hide-user="shouldVirtualize && stickyDisplay?.index === conversationGroups.length - 1"
           />
         </div>
+        <SessionTypingIndicator :active="typingActive" />
       </div>
       <SessionContentState v-if="error" tone="danger">{{ error }}</SessionContentState>
-      <SessionTypingIndicator :active="typingActive" />
       <SessionBackToBottom v-if="!followTimeline" @click="resumeTimelineFollow" />
     </SessionViewport>
 

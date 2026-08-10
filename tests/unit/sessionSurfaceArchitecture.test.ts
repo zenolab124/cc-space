@@ -75,6 +75,12 @@ describe('unified session surface architecture', () => {
     expect(standardController).toContain('<SessionViewport')
     expect(nativeController).toContain('<SessionTypingIndicator')
     expect(standardController).toContain('<SessionTypingIndicator')
+    expect(standardController).toContain('ref="timelineContentElement" class="pb-2 relative"')
+    const standardTimeline = standardController.slice(
+      standardController.indexOf('ref="timelineContentElement"'),
+      standardController.indexOf('<SessionContentState v-if="error"'),
+    )
+    expect(standardTimeline).toContain('<SessionTypingIndicator')
     expect(sharedTyping).toContain('session-typing-dot')
     expect(nativeController).toContain('<SessionContentState')
     expect(standardController).toContain('<SessionContentState')

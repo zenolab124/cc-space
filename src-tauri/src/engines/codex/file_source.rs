@@ -43,18 +43,25 @@ pub(super) fn is_agent_cwd(cwd: &str) -> bool {
 }
 
 pub(super) fn read_thread(id: &str) -> EngineResult<CodexThread> {
+    let Some(path) = thread_path(id) else {
+        return Err(EngineError::new(
+            EngineErrorKind::NotFound,
+            "Codex local session was not found",
+        ));
+    };
+    read_thread_file(&path)
+}
+
+pub(super) fn thread_path(id: &str) -> Option<PathBuf> {
     for path in session_paths() {
         let Some(summary) = read_thread_summary(&path) else {
             continue;
         };
         if summary.id == id || path.file_stem().and_then(|value| value.to_str()) == Some(id) {
-            return read_thread_file(&path);
+            return Some(path);
         }
     }
-    Err(EngineError::new(
-        EngineErrorKind::NotFound,
-        "Codex local session was not found",
-    ))
+    None
 }
 
 pub(super) fn codex_home() -> Option<PathBuf> {
