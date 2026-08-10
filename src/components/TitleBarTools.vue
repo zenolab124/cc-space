@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useUiState } from '@/composables/useUiState'
 import { useAutomation } from '@/composables/useAutomation'
 import { useWorkbench } from '@/composables/useWorkbench'
+import { showSystemOpenMenu } from '@/composables/useFileOpener'
 
 const { t } = useI18n()
 const { activeSection } = useUiState()
@@ -20,12 +21,22 @@ async function openGlobalConfig() {
   const path = `${home}/.claude/settings.json`
   openFailMsg.value = null
   try {
-    await invoke('open_hooks_config', { path })
+    await invoke('open_hooks_config', { path, systemDefault: false })
   } catch {
     openFailMsg.value = t('common.openFailed')
     clearTimeout(openFailTimer)
     openFailTimer = setTimeout(() => { openFailMsg.value = null }, 3000)
   }
+}
+
+function showGlobalConfigMenu(event: MouseEvent) {
+  const home = autoConfig.value?.homePath ?? ''
+  const path = `${home}/.claude/settings.json`
+  return showSystemOpenMenu(
+    event,
+    () => invoke('open_hooks_config', { path, systemDefault: true }),
+    path,
+  )
 }
 </script>
 
@@ -43,7 +54,7 @@ async function openGlobalConfig() {
   <!-- 自动化 -->
   <template v-if="activeSection === 'automation'">
     <span v-if="openFailMsg" class="text-xs text-destructive">{{ openFailMsg }}</span>
-    <button class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-border bg-card cursor-pointer hover:shadow-paper disabled:opacity-50 disabled:cursor-default" :disabled="!autoConfig" @click="openGlobalConfig">{{ $t('common.openConfig') }}</button>
+    <button class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-border bg-card cursor-pointer hover:shadow-paper disabled:opacity-50 disabled:cursor-default" :disabled="!autoConfig" @click="openGlobalConfig" @contextmenu="showGlobalConfigMenu">{{ $t('common.openConfig') }}</button>
     <button class="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-border bg-card cursor-pointer hover:shadow-paper disabled:opacity-50 disabled:cursor-default" :disabled="autoLoading" @click="autoRefresh">
       <span class="i-carbon-renew w-3 h-3" :class="{ 'animate-spin': autoLoading }" />
       {{ $t('common.refresh') }}

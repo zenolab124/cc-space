@@ -254,18 +254,8 @@ pub fn open_workshop_dir(category: String) -> Result<(), String> {
 /// （Windows explorer 成功也常返回非零退出码，等待校验会误报）；
 /// 用 spawn_and_reap 在后台 wait 子进程收尸，避免 defunct 累积。
 fn open_in_file_manager(dir: &Path) -> Result<(), String> {
-    use crate::proc_ext::SpawnAndReap;
-    #[cfg(target_os = "macos")]
-    let opener = "open";
-    #[cfg(target_os = "windows")]
-    let opener = "explorer";
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let opener = "xdg-open";
-
-    std::process::Command::new(opener)
-        .arg(dir)
-        .spawn_and_reap()
-        .map_err(|e| format!("打开目录失败: {}", e))
+    crate::file_opener::open_with_system_default(dir)
+        .map_err(|error| format!("打开目录失败: {error}"))
 }
 
 // ---------- 装配层 ----------
@@ -826,9 +816,9 @@ pub fn get_asset_detail(path: String) -> Result<AssetDetail, String> {
     })
 }
 
-/// FR-002：用系统默认程序打开资产文件。校验 = 资产快照 ∪ 辅助快照
+/// FR-002：按统一策略打开资产文件。校验 = 资产快照 ∪ 辅助快照
 #[tauri::command]
-pub fn open_asset_file(path: String) -> Result<(), String> {
+pub fn open_asset_file(path: String, system_default: Option<bool>) -> Result<(), String> {
     let in_assets = {
         let set = snapshot().lock().unwrap_or_else(|e| e.into_inner());
         set.contains(&path)
@@ -840,7 +830,7 @@ pub fn open_asset_file(path: String) -> Result<(), String> {
     if !in_assets && !in_aux {
         return Err("路径不在扫描快照内，请先刷新资产列表".to_string());
     }
-    open_in_file_manager(Path::new(&path))
+    crate::file_opener::open_path(Path::new(&path), system_default.unwrap_or(false))
 }
 
 // ============================================================================
@@ -1600,7 +1590,7 @@ pub fn get_memory_raw(project_dir: String, file: String) -> Result<MemoryRaw, St
     Ok(MemoryRaw { content, mtime })
 }
 
-/// FR-008 配套：open_memory_index，系统默认程序打开项目的 MEMORY.md（体检面板引导人工处置）
+/// FR-008 配套：open_memory_index，按统一策略打开项目的 MEMORY.md（体检面板引导人工处置）
 #[tauri::command]
 pub fn open_memory_index(project_dir: String) -> Result<(), String> {
     if project_dir.contains('/') || project_dir.contains("..") || project_dir.contains('\\') {
@@ -1613,7 +1603,7 @@ pub fn open_memory_index(project_dir: String) -> Result<(), String> {
     if !path.is_file() {
         return Err("MEMORY.md 不存在".to_string());
     }
-    open_in_file_manager(&path)
+    crate::file_opener::open_path(&path, false)
 }
 
 // ============================================================================

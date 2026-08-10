@@ -80,7 +80,10 @@ pub fn engine_set_enabled(instance: EngineInstanceId, enabled: bool) -> EngineRe
 }
 
 #[tauri::command]
-pub fn engine_open_configuration(instance: EngineInstanceId) -> EngineResult<()> {
+pub fn engine_open_configuration(
+    instance: EngineInstanceId,
+    system_default: Option<bool>,
+) -> EngineResult<()> {
     let path = system::get()?
         .registry()
         .adapter(&instance)?
@@ -92,7 +95,7 @@ pub fn engine_open_configuration(instance: EngineInstanceId) -> EngineResult<()>
             .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
     }
 
-    crate::commands::open_in_text_editor(path.to_string_lossy().into_owned())
+    crate::file_opener::open_path(&path, system_default.unwrap_or(false))
         .map_err(|error| EngineError::new(EngineErrorKind::Io, error))
 }
 

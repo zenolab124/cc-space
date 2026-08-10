@@ -18,6 +18,8 @@
     "loading": "Loading…",
     "loadFailed": "Load failed",
     "openFailed": "Open failed",
+    "openWithSystemDefault": "Open with system default app",
+    "revealInFileManager": "Reveal in file manager",
     "openConfig": "Open Config",
     "openConfigFile": "Open config file",
     "openConfigDir": "Open config directory",

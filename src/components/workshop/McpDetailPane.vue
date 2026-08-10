@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useConfirm } from '@/composables/useConfirm'
 import { parentPath } from '@/utils/path'
+import { showSystemOpenMenu } from '@/composables/useFileOpener'
 import type { WorkshopMcpServer } from '@/types'
 
 /**
@@ -91,13 +92,19 @@ async function handleResetChoices() {
 }
 
 /** 打开来源文件 */
-async function openSourceFile() {
+async function openSourceFile(systemDefault = false) {
   if (!props.server) return
   try {
-    await invoke('open_asset_file', { path: props.server.path })
+    await invoke('open_asset_file', { path: props.server.path, systemDefault })
   } catch (_) {
     // 静默
   }
+}
+
+function showSourceFileMenu(event: MouseEvent) {
+  const path = props.server?.path
+  if (!path) return
+  return showSystemOpenMenu(event, () => openSourceFile(true), path)
 }
 
 function dismissError() {
@@ -129,7 +136,7 @@ function dismissError() {
         </span>
         <span class="detail-source-badge">{{ server.source }}</span>
       </h1>
-      <div class="detail-path" @click="openSourceFile">{{ server.path }}</div>
+      <div class="detail-path" @click="openSourceFile()" @contextmenu="showSourceFileMenu">{{ server.path }}</div>
     </div>
 
     <!-- 配置详情卡 -->
@@ -198,7 +205,7 @@ function dismissError() {
       <!-- 来源文件 -->
       <div class="fm-row">
         <span class="fm-key">{{ t('workshop.mcpSourceFile') }}</span>
-        <span class="fm-val mono path-val" @click="openSourceFile">{{ server.path }}</span>
+        <span class="fm-val mono path-val" @click="openSourceFile()" @contextmenu="showSourceFileMenu">{{ server.path }}</span>
       </div>
     </div>
 

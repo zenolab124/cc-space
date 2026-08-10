@@ -12,6 +12,7 @@ import RoutineForm from '@/components/automation/RoutineForm.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
 import { useEngines } from '@/engines/useEngines'
 import { instanceKey } from '@/engines/identity'
+import { showSystemOpenMenu } from '@/composables/useFileOpener'
 
 const { t } = useI18n()
 const { notifyTransient } = useNotifications()
@@ -77,15 +78,19 @@ async function openGlobalConfig() {
   await openFile(path)
 }
 
-async function openFile(path: string) {
+async function openFile(path: string, systemDefault = false) {
   openFailMsg.value = null
   try {
-    await invoke('open_hooks_config', { path })
+    await invoke('open_hooks_config', { path, systemDefault })
   } catch {
     openFailMsg.value = t('common.openFailed')
     clearTimeout(openFailTimer)
     openFailTimer = setTimeout(() => { openFailMsg.value = null }, 3000)
   }
+}
+
+function showFileMenu(event: MouseEvent, path: string) {
+  return showSystemOpenMenu(event, () => openFile(path, true), path)
 }
 
 const isLoading = computed(() => loadingConfig.value || loadingStats.value)
@@ -351,7 +356,7 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
             <button class="icon-btn" :disabled="isLoading" @click="refresh">
               <span class="i-carbon-renew w-3 h-3" :class="{ 'animate-spin': isLoading }" />
             </button>
-            <button class="auto-btn" @click="openGlobalConfig">
+            <button class="auto-btn" @click="openGlobalConfig" @contextmenu="showFileMenu($event, `${config?.homePath ?? ''}/.claude/settings.json`)">
               <span class="i-carbon-settings w-3 h-3" />
               {{ $t('common.openConfig') }}
             </button>
@@ -442,6 +447,7 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
                       class="icon-btn icon-btn-sm"
                       v-tooltip="$t('common.openConfigFile')"
                       @click="openFile(row.sourcePath)"
+                      @contextmenu="showFileMenu($event, row.sourcePath)"
                     >
                       <span class="i-carbon-document w-3 h-3 block" />
                     </button>

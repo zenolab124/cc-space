@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { isWindows } from '@/composables/usePlatform'
+import { openExternalUrl } from '@/composables/useFileOpener'
 
 const { t } = useI18n()
 
@@ -182,7 +183,7 @@ async function runInstall() {
 }
 
 function openInstallDocs() {
-  invoke('open_in_default_app', { path: 'https://code.claude.com/docs' }).catch(() => {})
+  openExternalUrl('https://code.claude.com/docs').catch(() => {})
 }
 
 function applyBinInfo(next: LocateInfo) {

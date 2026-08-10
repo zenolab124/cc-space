@@ -2,7 +2,7 @@
 //!
 //! - `get_hooks_config`：解析全局与项目级 settings.json 的 hooks 字段
 //! - `get_hooks_stats`：扫描近 7 天 JSONL 反推每条 hook 的运行统计
-//! - `open_hooks_config`：以系统默认编辑器打开指定配置文件
+//! - `open_hooks_config`：按 Monet 的统一文件策略打开指定配置文件
 
 use std::collections::HashMap;
 use std::fs;
@@ -435,32 +435,11 @@ fn days_since_epoch(year: i64, month: i64, day: i64) -> i64 {
 
 // ---------- 打开配置 ----------
 
-/// FR-005: 以系统默认编辑器打开指定配置文件路径
+/// FR-005: 按统一策略打开指定配置文件路径
 #[tauri::command]
-pub fn open_hooks_config(path: String) -> Result<(), String> {
-    use crate::proc_ext::SpawnAndReap;
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use crate::proc_ext::HideConsole;
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path])
-            .hide_console() // cmd 是控制台程序，不抑制会闪黑窗
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+pub fn open_hooks_config(path: String, system_default: Option<bool>) -> Result<(), String> {
+    crate::file_opener::open_path(
+        std::path::Path::new(&path),
+        system_default.unwrap_or(false),
+    )
 }

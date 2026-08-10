@@ -7,6 +7,7 @@ pub mod claude_locator;
 pub mod config;
 mod commands;
 mod discovery;
+mod file_opener;
 pub mod engines;
 mod git_utils;
 mod image_protocol;
@@ -311,7 +312,8 @@ pub fn run() {
             channels::probe_channel,
             channels::scan_cc_switch,
             channels::import_cc_switch,
-            commands::open_in_default_app,
+            commands::open_path,
+            commands::open_external_url,
             commands::read_local_image,
             metadata::get_all_meta,
             metadata::get_all_meta_v2,

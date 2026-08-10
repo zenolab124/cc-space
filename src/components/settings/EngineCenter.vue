@@ -8,6 +8,7 @@ import { useEngines } from '@/engines/useEngines'
 import { instanceKey } from '@/engines/identity'
 import { setEngineEnabled } from '@/engines/client'
 import { useConfirm } from '@/composables/useConfirm'
+import { openExternalUrl, showSystemOpenMenu } from '@/composables/useFileOpener'
 import type { EngineDescriptor } from '@/engines/types'
 import ClaudeEnvCard from './ClaudeEnvCard.vue'
 import ClaudeDataDirCard from './ClaudeDataDirCard.vue'
@@ -81,18 +82,22 @@ async function toggleEnabled(engine: EngineDescriptor) {
 async function openGuide(url: string | null) {
   if (!url) return
   try {
-    await invoke('open_in_default_app', { path: url })
+    await openExternalUrl(url)
   } catch (cause) {
     exportStatus.value = String(cause)
   }
 }
 
-async function openConfiguration(engine: EngineDescriptor) {
+async function openConfiguration(engine: EngineDescriptor, systemDefault = false) {
   try {
-    await invoke('engine_open_configuration', { instance: engine.instance })
+    await invoke('engine_open_configuration', { instance: engine.instance, systemDefault })
   } catch (cause) {
     exportStatus.value = String(cause)
   }
+}
+
+function showConfigurationMenu(event: MouseEvent, engine: EngineDescriptor) {
+  return showSystemOpenMenu(event, () => openConfiguration(engine, true))
 }
 </script>
 
@@ -174,7 +179,7 @@ async function openConfiguration(engine: EngineDescriptor) {
             <button v-if="engine.ui.installGuideUrl" type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted" @click="openGuide(engine.ui.installGuideUrl)">
               {{ t('engineSettings.installGuide') }}
             </button>
-            <button v-if="engine.enabled && engine.capabilities.facets.configuration" type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted" @click="openConfiguration(engine)">
+            <button v-if="engine.enabled && engine.capabilities.facets.configuration" type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted" @click="openConfiguration(engine)" @contextmenu="showConfigurationMenu($event, engine)">
               <span class="i-carbon-edit mr-1 inline-block h-3 w-3 align-text-bottom" />{{ t('engineSettings.editConfiguration') }}
             </button>
             <button type="button" class="rounded border border-border px-2.5 py-1 text-[11px] hover:bg-muted disabled:opacity-50" :disabled="updating.has(instanceKey(engine.instance))" @click="toggleEnabled(engine)">

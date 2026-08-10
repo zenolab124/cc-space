@@ -439,23 +439,7 @@ pub fn set_titlebar_dark(window: tauri::WebviewWindow, dark: bool) {
 /// 在系统文件管理器中打开目录（macOS: Finder / Windows: 资源管理器 / Linux: 默认）
 #[tauri::command]
 pub fn open_in_finder(path: String) -> Result<(), String> {
-    use crate::proc_ext::SpawnAndReap;
-    #[cfg(target_os = "macos")]
-    std::process::Command::new("open")
-        .arg(&path)
-        .spawn_and_reap()
-        .map_err(|e| e.to_string())?;
-    #[cfg(target_os = "windows")]
-    std::process::Command::new("explorer")
-        .arg(&path)
-        .spawn_and_reap()
-        .map_err(|e| e.to_string())?;
-    #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open")
-        .arg(&path)
-        .spawn_and_reap()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::file_opener::open_with_system_default(std::path::Path::new(&path))
 }
 
 /// 在系统文件管理器中显示并高亮文件（macOS: open -R / Windows: explorer /select,）。
@@ -931,63 +915,19 @@ pub async fn get_schema_diagnosis() -> Result<probe::Report, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// 用系统默认应用打开文件(macOS: open / Windows: cmd start / Linux: xdg-open)
+/// 统一路径打开入口：文本类文件走轻量编辑器，其余走系统默认应用。
 #[tauri::command]
-pub fn open_in_default_app(path: String) -> Result<(), String> {
-    use crate::proc_ext::SpawnAndReap;
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use crate::proc_ext::HideConsole;
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path])
-            .hide_console() // cmd 是控制台程序，不抑制会闪黑窗
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+pub fn open_path(path: String, system_default: Option<bool>) -> Result<(), String> {
+    crate::file_opener::open_path(
+        std::path::Path::new(&path),
+        system_default.unwrap_or(false),
+    )
 }
 
-/// 用轻量文本编辑器打开配置文件，避免 JSON 被 IDE 接管。
-pub fn open_in_text_editor(path: String) -> Result<(), String> {
-    use crate::proc_ext::SpawnAndReap;
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .args(["-e", &path])
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use crate::proc_ext::HideConsole;
-        std::process::Command::new("notepad.exe")
-            .arg(&path)
-            .hide_console()
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn_and_reap()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+/// 仅打开网页链接；文件与目录必须走 `open_path`。
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    crate::file_opener::open_external_url(&url)
 }
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];

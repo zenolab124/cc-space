@@ -18,6 +18,8 @@
     "loading": "加载中…",
     "loadFailed": "加载失败",
     "openFailed": "打开失败",
+    "openWithSystemDefault": "使用系统默认应用打开",
+    "revealInFileManager": "在文件管理器中显示",
     "openConfig": "打开配置",
     "openConfigFile": "打开配置文件",
     "openConfigDir": "打开配置目录",

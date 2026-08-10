@@ -3,6 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { renderMarkdownCached } from '@/composables/useMarkdown'
+import { showSystemOpenMenu } from '@/composables/useFileOpener'
 import type { AssetDetail } from '@/types'
 
 /**
@@ -56,15 +57,20 @@ function retry() {
   if (props.path) loadDetail(props.path)
 }
 
-async function openFile() {
+async function openFile(systemDefault = false) {
   if (!props.path) return
   try {
-    await invoke('open_asset_file', { path: props.path })
+    await invoke('open_asset_file', { path: props.path, systemDefault })
   } catch (_) {
     openFailed.value = true
     clearTimeout(openFailTimer)
     openFailTimer = setTimeout(() => { openFailed.value = false }, 3000)
   }
+}
+
+function showFileMenu(event: MouseEvent) {
+  if (!props.path) return
+  return showSystemOpenMenu(event, () => openFile(true), props.path)
 }
 
 /** frontmatter key-value 对列表 */
@@ -127,7 +133,7 @@ const isFileNotExist = computed(() => {
       </h1>
       <div class="detail-path">{{ path }}</div>
       <div class="detail-actions">
-        <button class="ws-btn" @click="openFile">
+        <button class="ws-btn" @click="openFile()" @contextmenu="showFileMenu">
           <span class="i-carbon-launch w-3 h-3" />
           {{ t('workshop.openFile') }}
         </button>

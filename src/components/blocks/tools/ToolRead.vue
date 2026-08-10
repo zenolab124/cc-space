@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
 import { fileName } from '@/utils/path'
+import { openPath, showPathOpenMenu } from '@/composables/useFileOpener'
 
 const props = defineProps<{
   input: Record<string, unknown>
@@ -36,7 +36,7 @@ const lineRange = computed(() => {
 async function openFile() {
   if (!filePath.value) return
   try {
-    await invoke('open_in_default_app', { path: filePath.value })
+    await openPath(filePath.value)
   } catch {
     // 静默降级
   }
@@ -58,6 +58,7 @@ const inLedger = computed(() => hasLedgerAnchor(props.toolUseId))
         class="font-mono text-muted-foreground hover:text-primary hover:underline truncate transition-colors"
         :title="filePath"
         @click="openFile"
+        @contextmenu="showPathOpenMenu($event, filePath)"
       >{{ displayName }}</button>
       <span v-if="lineRange" class="font-mono text-muted-foreground">{{ lineRange }}</span>
       <button

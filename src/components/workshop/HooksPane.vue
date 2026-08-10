@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import type { HookEntry, HookEventGroup } from '@/types'
 import { useHooks } from '@/composables/useHooks'
+import { showSystemOpenMenu } from '@/composables/useFileOpener'
 
 /**
  * Hooks 子页（v2.9.0 FR-005）：
@@ -56,16 +57,22 @@ function isSelected(groupIdx: number, entryIdx: number): boolean {
 const openFailed = ref(false)
 let openFailTimer: ReturnType<typeof setTimeout> | undefined
 
-async function openSourceFile() {
+async function openSourceFile(systemDefault = false) {
   if (!selectedEntry.value) return
   try {
-    await invoke('open_asset_file', { path: selectedEntry.value.sourceFile })
+    await invoke('open_asset_file', { path: selectedEntry.value.sourceFile, systemDefault })
     openFailed.value = false
   } catch (_) {
     openFailed.value = true
     clearTimeout(openFailTimer)
     openFailTimer = setTimeout(() => { openFailed.value = false }, 3000)
   }
+}
+
+function showSourceFileMenu(event: MouseEvent) {
+  const path = selectedEntry.value?.sourceFile
+  if (!path) return
+  return showSystemOpenMenu(event, () => openSourceFile(true), path)
 }
 
 // --- Config 渲染辅助 ---
@@ -158,7 +165,7 @@ function formatConfigValue(value: unknown): { isComplex: boolean; text: string }
         <div class="detail-head">
           <h3 class="detail-title">{{ selectedEvent }} · Hook #{{ selectedIndex }}</h3>
           <div class="detail-actions">
-            <button class="ws-btn" @click="openSourceFile">
+            <button class="ws-btn" @click="openSourceFile()" @contextmenu="showSourceFileMenu">
               <span class="i-carbon-launch w-3 h-3" />
               {{ t('workshop.hooksOpenSource') }}
             </button>

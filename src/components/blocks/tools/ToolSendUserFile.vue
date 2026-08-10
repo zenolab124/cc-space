@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
+import { openPath, showPathOpenMenu } from '@/composables/useFileOpener'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
 
@@ -70,7 +71,7 @@ async function loadImage(index: number) {
 }
 
 function openFile(path: string) {
-  invoke('open_in_default_app', { path })
+  void openPath(path)
 }
 
 function revealInFinder(path: string) {
@@ -93,7 +94,7 @@ function revealInFinder(path: string) {
         <div v-if="f.loading" class="h-32 rounded bg-muted flex items-center justify-center">
           <span class="i-carbon-loading animate-spin w-4 h-4 text-muted-foreground" />
         </div>
-        <div v-else-if="f.dataUrl" class="relative group">
+        <div v-else-if="f.dataUrl" class="relative group" @contextmenu="showPathOpenMenu($event, f.path)">
           <img
             :src="f.dataUrl"
             :alt="f.fileName"
@@ -124,7 +125,7 @@ function revealInFinder(path: string) {
       </template>
 
       <!-- 非图片文件 -->
-      <div v-else class="flex items-center gap-2 rounded bg-muted px-2 py-1.5 group">
+      <div v-else class="flex items-center gap-2 rounded bg-muted px-2 py-1.5 group" @contextmenu="showPathOpenMenu($event, f.path)">
         <span class="i-carbon-document w-4 h-4 shrink-0 text-muted-foreground" />
         <span class="font-mono text-muted-foreground truncate flex-1" :title="f.path">{{ f.fileName }}</span>
         <button

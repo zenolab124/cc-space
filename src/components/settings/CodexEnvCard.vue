@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { isWindows } from '@/composables/usePlatform'
+import { openExternalUrl } from '@/composables/useFileOpener'
 
 const { t } = useI18n()
 
@@ -91,7 +92,7 @@ async function copyCmd(command: string) {
 }
 
 function openInstallDocs() {
-  invoke('open_in_default_app', { path: 'https://developers.openai.com/codex/cli/' }).catch(() => {})
+  openExternalUrl('https://developers.openai.com/codex/cli/').catch(() => {})
 }
 
 let unlistenInstallProgress: (() => void) | null = null
