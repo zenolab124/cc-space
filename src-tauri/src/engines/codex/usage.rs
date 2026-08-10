@@ -124,6 +124,9 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
         return Vec::new();
     };
     let mut model = None;
+    let mut session_kind_resolved = false;
+    let mut is_subagent_rollout = false;
+    let mut reached_turn_context = false;
     let mut contributions = Vec::new();
     for (sequence, line) in BufReader::with_capacity(64 * 1024, file)
         .lines()
@@ -134,7 +137,12 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
             continue;
         };
         match value.get("type").and_then(Value::as_str) {
+            Some("session_meta") if !session_kind_resolved => {
+                is_subagent_rollout = is_subagent_session_meta(&value);
+                session_kind_resolved = true;
+            }
             Some("turn_context") => {
+                reached_turn_context = true;
                 model = value
                     .get("payload")
                     .unwrap_or(&value)
@@ -147,6 +155,11 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
                 let Some((timestamp, date, usage)) = usage_contribution(&value) else {
                     continue;
                 };
+                // legacy 子 Agent rollout 会在自身首个 turn_context 前复制父任务历史。
+                // 这些 token_count 是继承上下文，不是子 Agent 新产生的用量。
+                if is_subagent_rollout && !reached_turn_context {
+                    continue;
+                }
                 let id = format!(
                     "codex:{timestamp}:{}:{}:{}:{}:{}",
                     model.as_deref().unwrap_or("unknown"),
@@ -169,6 +182,21 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
         }
     }
     contributions
+}
+
+fn is_subagent_session_meta(value: &Value) -> bool {
+    let payload = value.get("payload").unwrap_or(value);
+    let source_marks_subagent = payload
+        .get("source")
+        .and_then(Value::as_object)
+        .is_some_and(|source| source.contains_key("subagent"));
+    let has_subagent_identity = payload
+        .get("parent_thread_id")
+        .is_some_and(|value| !value.is_null())
+        && payload
+            .get("agent_path")
+            .is_some_and(|value| !value.is_null());
+    source_marks_subagent || has_subagent_identity
 }
 
 fn usage_contribution(value: &Value) -> Option<(String, NaiveDate, TokenUsage)> {
@@ -210,6 +238,36 @@ fn usage_contribution(value: &Value) -> Option<(String, NaiveDate, TokenUsage)> 
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_rollout_path(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "monet-codex-usage-{name}-{}-{unique}.jsonl",
+            std::process::id()
+        ))
+    }
+
+    fn token_event(timestamp: &str, input: u64, cached: u64, output: u64) -> Value {
+        json!({
+            "type": "event_msg",
+            "timestamp": timestamp,
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": input,
+                        "cached_input_tokens": cached,
+                        "output_tokens": output
+                    }
+                }
+            }
+        })
+    }
 
     #[test]
     fn maps_codex_increment_without_double_counting_cache() {
@@ -258,5 +316,72 @@ mod tests {
             }
         });
         assert_eq!(usage_contribution(&value).unwrap().2.total(), 120);
+    }
+
+    #[test]
+    fn skips_inherited_usage_before_subagent_turn_context() {
+        let path = test_rollout_path("subagent-prefix");
+        let mut file = File::create(&path).unwrap();
+        let rows = [
+            json!({
+                "type": "session_meta",
+                "timestamp": "2026-08-09T08:00:00Z",
+                "payload": {
+                    "source": { "subagent": { "kind": "spawn" } },
+                    "parent_thread_id": "parent",
+                    "agent_path": "agent/test",
+                    "history_mode": "legacy"
+                }
+            }),
+            token_event("2026-08-09T08:00:01Z", 1_000, 900, 50),
+            json!({
+                "type": "turn_context",
+                "timestamp": "2026-08-09T08:00:02Z",
+                "payload": { "turn_id": "child-turn", "model": "gpt-test" }
+            }),
+            token_event("2026-08-09T08:00:03Z", 200, 120, 30),
+        ];
+        for row in rows {
+            writeln!(file, "{row}").unwrap();
+        }
+        drop(file);
+
+        let contributions = scan_file(&path);
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].model.as_deref(), Some("gpt-test"));
+        assert_eq!(contributions[0].usage.total(), 230);
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn keeps_pre_context_usage_for_regular_rollouts() {
+        let path = test_rollout_path("regular-prefix");
+        let mut file = File::create(&path).unwrap();
+        let rows = [
+            json!({
+                "type": "session_meta",
+                "timestamp": "2026-08-09T08:00:00Z",
+                "payload": { "source": "vscode", "history_mode": "legacy" }
+            }),
+            token_event("2026-08-09T08:00:01Z", 100, 40, 10),
+            json!({
+                "type": "turn_context",
+                "timestamp": "2026-08-09T08:00:02Z",
+                "payload": { "turn_id": "turn", "model": "gpt-test" }
+            }),
+            token_event("2026-08-09T08:00:03Z", 200, 120, 30),
+        ];
+        for row in rows {
+            writeln!(file, "{row}").unwrap();
+        }
+        drop(file);
+
+        let contributions = scan_file(&path);
+        assert_eq!(contributions.len(), 2);
+        assert_eq!(contributions[0].model, None);
+        assert_eq!(contributions[0].usage.total(), 110);
+        assert_eq!(contributions[1].model.as_deref(), Some("gpt-test"));
+        assert_eq!(contributions[1].usage.total(), 230);
+        std::fs::remove_file(path).ok();
     }
 }

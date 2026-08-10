@@ -12,7 +12,8 @@ use crate::parser::{self, UsageLedger};
 // v2: CachedContrib 从 tokens 总量改为四类分量（成本分价计算需要），旧缓存整体重扫
 // v3: SessionSummary 增加 subagent_tokens 分项且 total_tokens 口径改为含子 Agent，旧缓存整体重扫
 // v4: usage 按 message.id 选择最终完整快照，子 Agent 缓存保留账本以支持跨文件去重
-const CACHE_VERSION: u32 = 4;
+// v5: Codex 子 Agent 的继承历史前缀不再重复计入用量，旧缓存整体重扫
+const CACHE_VERSION: u32 = 5;
 
 // ── Disk format ──────────────────────────────────────────
 
