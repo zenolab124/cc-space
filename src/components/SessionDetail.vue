@@ -69,6 +69,7 @@ import { shouldSubmitComposer } from './session/composerAction'
 import SessionViewport from './session/SessionViewport.vue'
 import SessionContentState from './session/SessionContentState.vue'
 import SessionBackToBottom from './session/SessionBackToBottom.vue'
+import SessionTypingIndicator from './session/SessionTypingIndicator.vue'
 import SessionInteractionPanel from './session/SessionInteractionPanel.vue'
 import SessionReadonlyBar from './session/SessionReadonlyBar.vue'
 import SessionIdentityBar from './session/SessionIdentityBar.vue'
@@ -3352,14 +3353,7 @@ async function onReload() {
         </div>
       </div>
 
-      <div
-        class="absolute bottom-1 left-0 flex items-center gap-1 pl-5 transition-opacity duration-200"
-        :class="typingActive ? 'opacity-100' : 'opacity-0 pointer-events-none'"
-      >
-        <template v-if="typingActive">
-          <span class="typing-dot" /><span class="typing-dot" /><span class="typing-dot" />
-        </template>
-      </div>
+      <SessionTypingIndicator :active="typingActive" />
 
       <div v-if="stream.streamError" class="px-3 py-2 rounded-md bg-destructive/10 text-destructive text-xs">
         {{ stream.streamError }}
@@ -3662,20 +3656,6 @@ async function onReload() {
 }
 .sticky-nav-btn:hover:not(:disabled) { color: var(--foreground); background: var(--muted); }
 .sticky-nav-btn:disabled { opacity: 0.3; cursor: default; }
-.typing-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--muted-foreground);
-  opacity: 0.4;
-  animation: typing-blink 1.4s infinite both;
-}
-.typing-dot:nth-child(2) { animation-delay: 0.2s; }
-.typing-dot:nth-child(3) { animation-delay: 0.4s; }
-@keyframes typing-blink {
-  0%, 80%, 100% { opacity: 0.15; }
-  40% { opacity: 0.6; }
-}
 /* 搜索命中定位落点反馈:accent 底色淡出(亮暗双套走 token) */
 .search-hit-flash {
   border-radius: 6px;

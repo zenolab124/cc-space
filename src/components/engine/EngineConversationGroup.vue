@@ -18,6 +18,7 @@ const props = defineProps<{
   showThoughtProcess?: boolean
   dayLabel?: string | null
   active?: boolean
+  streaming?: boolean
 }>()
 
 const { locale } = useI18n()
@@ -98,7 +99,7 @@ const turnView = computed<ConversationTurnView>(() => ({
   response: {
     visible: responseRecords.value.length > 0,
     meta: responseMeta.value,
-    showFooter: true,
+    showFooter: props.streaming !== true,
     speaker: props.engineName,
     accent: props.accent ?? 'primary',
   },
@@ -118,7 +119,7 @@ const turnView = computed<ConversationTurnView>(() => ({
           :entries="block.entries"
           :active="active"
         />
-        <EngineSegmentBlock v-else :segment="block.entry.segment" />
+        <EngineSegmentBlock v-else :segment="block.entry.segment" :streaming="streaming" />
       </template>
     </template>
   </ConversationTurn>

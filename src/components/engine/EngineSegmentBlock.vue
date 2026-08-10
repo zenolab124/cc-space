@@ -11,6 +11,7 @@ import SessionProcessDisclosure from '@/components/session/SessionProcessDisclos
 const props = withDefaults(defineProps<{
   segment: EngineSegment
   compact?: boolean
+  streaming?: boolean
 }>(), {
   compact: false,
 })
@@ -99,7 +100,7 @@ onUnmounted(() => {
 
 <template>
   <div v-if="textBlock" :class="compact && 'engine-compact-text'">
-    <BlockText :block="textBlock" />
+    <BlockText :block="textBlock" :streaming="streaming" />
   </div>
 
   <BlockThinking v-else-if="thinkingBlock" :block="thinkingBlock" />

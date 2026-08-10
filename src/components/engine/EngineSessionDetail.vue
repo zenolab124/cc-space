@@ -21,6 +21,7 @@ import { shouldSubmitComposer } from '@/components/session/composerAction'
 import SessionViewport from '@/components/session/SessionViewport.vue'
 import SessionContentState from '@/components/session/SessionContentState.vue'
 import SessionBackToBottom from '@/components/session/SessionBackToBottom.vue'
+import SessionTypingIndicator from '@/components/session/SessionTypingIndicator.vue'
 import SessionInteractionPanel from '@/components/session/SessionInteractionPanel.vue'
 import SessionInteractionCard from '@/components/session/SessionInteractionCard.vue'
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
@@ -34,6 +35,7 @@ import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
+import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
@@ -842,6 +844,15 @@ function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
   }
 }
 
+const runtimeDeltaShaper = useRuntimeDeltaShaper(applyRuntimeEvent)
+const typingActive = computed(() => isBusy.value || runtimeDeltaShaper.pending.value)
+
+function isTurnStreaming(turnId: string | null): boolean {
+  if (!turnId) return false
+  return (isBusy.value && turnId === activeTurnId.value)
+    || runtimeDeltaShaper.pendingTurnIds.value.has(turnId)
+}
+
 function onInputKeydown(event: KeyboardEvent) {
   if (shouldSubmitComposer(event)) {
     event.preventDefault()
@@ -855,6 +866,7 @@ watch(() => props.session.id, async () => {
   const sessionId = props.session.id
   lastAppliedTimelineRequestId = 0
   cancelTurnSettlements()
+  runtimeDeltaShaper.reset()
   resetTimelineFollow()
   toolFoldState.reset()
   runConfigSyncing.value = true
@@ -935,7 +947,7 @@ onMounted(async () => {
     }
   })
   unlistenEvent = await listen<RuntimeEventEnvelope[]>('engine-runtime-events', event => {
-    for (const envelope of event.payload) applyRuntimeEvent(envelope)
+    for (const envelope of event.payload) runtimeDeltaShaper.push(envelope)
   })
   unlistenSourceChange = await listen<SourceChangeEnvelope>('engine-source-change', event => {
     const { instance, change } = event.payload
@@ -1065,10 +1077,12 @@ onUnmounted(() => {
           :accent="engineAccent"
           :show-thought-process="enginePresentation.showThoughtProcess"
           :day-label="group.dayLabel"
-          :active="isBusy && group.turnId === activeTurnId"
+          :active="isTurnStreaming(group.turnId)"
+          :streaming="isTurnStreaming(group.turnId)"
         />
       </div>
       <SessionContentState v-if="error" tone="danger">{{ error }}</SessionContentState>
+      <SessionTypingIndicator :active="typingActive" />
       <SessionBackToBottom v-if="!followTimeline" @click="resumeTimelineFollow" />
     </SessionViewport>
 
