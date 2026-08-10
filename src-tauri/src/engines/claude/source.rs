@@ -254,7 +254,8 @@ impl SessionSource for ClaudeSource {
             for record in records {
                 for segment in record.segments {
                     match segment {
-                        Segment::Text { text: value } | Segment::Reasoning { text: value, .. } => {
+                        Segment::Text { text: value, .. }
+                        | Segment::Reasoning { text: value, .. } => {
                             text.push_str(&value);
                             text.push('\n');
                         }
@@ -435,6 +436,7 @@ pub(crate) fn map_block(
     Ok(match block {
         ContentBlock::Text { text } => Segment::Text {
             text: bounded_segment_text(text),
+            phase: None,
         },
         ContentBlock::Thinking { thinking, .. } => Segment::Reasoning {
             text: bounded_segment_text(thinking),

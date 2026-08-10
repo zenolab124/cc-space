@@ -5,7 +5,7 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use super::app_server::{IncomingMessage, RequestId};
-use super::source::map_item_segments;
+use super::source::{map_item_segments, message_text_phase};
 use super::{default_instance, CodexSupervisor};
 use crate::engines::core::*;
 
@@ -37,6 +37,7 @@ pub struct CodexRuntime {
     supervisor: Arc<CodexSupervisor>,
     sessions: Mutex<HashMap<String, SessionState>>,
     streamed_items: Mutex<HashSet<String>>,
+    text_phases: Mutex<HashMap<String, TextPhase>>,
     pending_interactions: Mutex<HashMap<String, PendingInteraction>>,
     event_sinks: Mutex<Vec<RuntimeEventSink>>,
 }
@@ -48,6 +49,7 @@ impl CodexRuntime {
             supervisor: Arc::clone(&supervisor),
             sessions: Mutex::new(HashMap::new()),
             streamed_items: Mutex::new(HashSet::new()),
+            text_phases: Mutex::new(HashMap::new()),
             pending_interactions: Mutex::new(HashMap::new()),
             event_sinks: Mutex::new(Vec::new()),
         });
@@ -237,6 +239,19 @@ impl CodexRuntime {
                     return;
                 };
                 let item_id = string_field(item, "id").unwrap_or_else(|| "unknown-item".into());
+                let item_key = runtime_item_key(&thread_id, &turn_id, &item_id);
+                if method == "item/started"
+                    && item.get("type").and_then(Value::as_str) == Some("agentMessage")
+                {
+                    if let Some(phase) =
+                        message_text_phase(item.get("phase").and_then(Value::as_str))
+                    {
+                        self.text_phases
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .insert(item_key.clone(), phase);
+                    }
+                }
                 let status = if method == "item/started" {
                     ItemStatus::Running
                 } else {
@@ -261,9 +276,12 @@ impl CodexRuntime {
                 {
                     return;
                 }
-                let item_key = runtime_item_key(&thread_id, &turn_id, &item_id);
                 let was_streamed = self
                     .streamed_items
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&item_key);
+                self.text_phases
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .remove(&item_key);
@@ -306,6 +324,12 @@ impl CodexRuntime {
                 let segment = match method {
                     "item/agentMessage/delta" => Segment::Text {
                         text: bounded_segment_text(delta),
+                        phase: self
+                            .text_phases
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get(&runtime_item_key(&thread_id, &turn_id, &item_id))
+                            .copied(),
                     },
                     "item/commandExecution/outputDelta" => Segment::CommandExecution {
                         id: item_id.clone(),
@@ -356,6 +380,10 @@ impl CodexRuntime {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .retain(|item| !item.starts_with(&item_prefix));
+                self.text_phases
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .retain(|item, _| !item.starts_with(&item_prefix));
                 self.emit(
                     &thread_id,
                     NormalizedRuntimeEvent::TurnCompleted {
@@ -979,7 +1007,12 @@ mod tests {
             json!({
                 "threadId": "thread",
                 "turnId": "turn",
-                "item": { "id": "agent", "type": "agentMessage", "status": "inProgress" }
+                "item": {
+                    "id": "agent",
+                    "type": "agentMessage",
+                    "phase": "commentary",
+                    "status": "inProgress"
+                }
             }),
         );
         runtime.handle_notification(
@@ -991,7 +1024,13 @@ mod tests {
             json!({
                 "threadId": "thread",
                 "turnId": "turn",
-                "item": { "id": "agent", "type": "agentMessage", "text": "OK", "status": "completed" }
+                "item": {
+                    "id": "agent",
+                    "type": "agentMessage",
+                    "text": "OK",
+                    "phase": "commentary",
+                    "status": "completed"
+                }
             }),
         );
         runtime.handle_notification(
@@ -1025,6 +1064,21 @@ mod tests {
                 .count(),
             1
         );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            NormalizedRuntimeEvent::ItemDelta {
+                segment: Segment::Text {
+                    phase: Some(TextPhase::Progress),
+                    ..
+                },
+                ..
+            }
+        )));
+        assert!(runtime
+            .text_phases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
     }
 
     #[test]
@@ -1134,7 +1188,7 @@ mod tests {
                 }
                 NormalizedRuntimeEvent::ItemDelta {
                     ref turn_id,
-                    segment: Segment::Text { ref text },
+                    segment: Segment::Text { ref text, .. },
                     ..
                 } if turn_id == &completed_turn.reference.native_turn_id && !text.is_empty() => {
                     saw_text = true;

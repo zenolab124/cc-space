@@ -23,6 +23,8 @@ describe('unified session surface architecture', () => {
     const nativeToolbar = source('../../src/components/topbar/SessionTopBar.vue')
     const nativeTurns = source('../../src/components/MessageGroup.vue')
     const standardTurns = source('../../src/components/engine/EngineConversationGroup.vue')
+    const standardProcess = source('../../src/components/engine/EngineProcessGroup.vue')
+    const standardProcessItem = source('../../src/components/engine/EngineProcessItem.vue')
     const nativeTools = source('../../src/components/ToolProcessGroup.vue')
     const standardTools = source('../../src/components/engine/EngineSegmentBlock.vue')
     const sharedRunConfig = source('../../src/components/topbar/RunConfigCapsule.vue')
@@ -52,6 +54,8 @@ describe('unified session surface architecture', () => {
     expect(nativeController).toContain('can-send-while-busy')
     expect(standardController).toContain(':can-send-while-busy="canSendWhileBusy"')
     expect(sharedComposer).toContain('resolveComposerAction')
+    expect(sharedComposer).toContain('border-accent bg-accent text-white hover:text-white')
+    expect(sharedComposer).not.toContain('bg-accent text-accent-foreground')
     expect(nativeController).toContain('<SessionComposerField')
     expect(standardController).toContain('<SessionComposerField')
     expect(nativeController).toContain('<SessionViewport')
@@ -64,6 +68,20 @@ describe('unified session surface architecture', () => {
     expect(standardController).toContain('<SessionReadonlyBar')
     expect(nativeTurns).toContain('<ConversationTurn')
     expect(standardTurns).toContain('<ConversationTurn')
+    expect(standardTurns).toContain('<EngineProcessGroup')
+    expect(standardProcess).toContain('<SessionProcessDisclosure')
+    expect(standardProcess).toContain(':content-id="contentId"')
+    expect(standardProcess).toContain('useToolDisplayMode()')
+    expect(standardProcess).toContain("toolDisplayMode === 'cards'")
+    expect(standardProcess).toContain("toolDisplayMode === 'individual'")
+    expect(standardProcess).toContain('buildEngineProcessActivities')
+    expect(standardProcess).not.toContain('EngineSegmentBlock')
+    expect(standardProcess).toContain('mode="card"')
+    expect(standardProcessItem).toContain('class="engine-activity-card"')
+    expect(standardProcessItem).toContain('useToolFoldState()')
+    expect(standardController).toContain('provideToolFoldState()')
+    expect(standardController).toContain(':show-thought-process="enginePresentation.showThoughtProcess"')
+    expect(standardTurns).toContain('props.showThoughtProcess === false && isEngineThoughtSegment(segment)')
     expect(nativeTools).toContain('<SessionProcessDisclosure')
     expect(standardTools).toContain('<SessionProcessDisclosure')
     expect(sharedRunConfig).not.toContain("engine: 'Codex'")
@@ -73,8 +91,8 @@ describe('unified session surface architecture', () => {
     expect(engineTypes).toContain('sendWhileRunning')
     expect(engineClient).toContain('sendInputWhileRunning')
     expect(standardController).toContain('if (sendWhileRunning && !canSendWhileBusy.value)')
-    expect(standardController).toContain('if (!isBusy.value && !(await ensureAttached())) return')
-    expect(standardController).toContain('if (isBusy.value) return runtimeId.value !== null')
+    expect(standardController).toContain('const preparation = await prepareSessionForSend(text)')
+    expect(standardController).toContain("if (isBusy.value) return runtimeId.value !== null ? 'attached' : 'failed'")
     expect(standardController).toContain('void send()')
     expect(coreRuntime).toContain('send_input_while_running')
     expect(coordinator).toContain('send_input_while_running')
@@ -97,5 +115,32 @@ describe('unified session surface architecture', () => {
     ]) {
       expect(genericSurface).not.toMatch(/steer|追加指令/i)
     }
+  })
+
+  it('defers Codex attachment until send and forks only after an explicit conflict choice', () => {
+    const controller = source('../../src/components/engine/EngineSessionDetail.vue')
+    const mounted = controller.slice(
+      controller.indexOf('onMounted(async () =>'),
+      controller.indexOf('onUnmounted(() =>'),
+    )
+
+    expect(mounted).toContain('loadRuntimeConfiguration()')
+    expect(mounted).not.toContain('ensureAttached()')
+    expect(controller).toContain("type AttachOutcome = 'attached' | 'writer-conflict' | 'failed'")
+    expect(controller).toContain("const choice = await confirmMulti(t('engine.codex.writerConflictMessage')")
+    expect(controller).toContain("if (choice === 'retry') continue")
+    expect(controller).toContain("if (choice === 'fork') return await forkAndSend(text)")
+  })
+
+  it('reconciles normalized runtime events without fixed-delay live record clearing', () => {
+    const controller = source('../../src/components/engine/EngineSessionDetail.vue')
+    const runtimeTypes = source('../../src/engines/types.ts')
+
+    expect(runtimeTypes).toContain('export type NormalizedRuntimeEvent =')
+    expect(runtimeTypes).toContain("| { kind: 'turnStarted'; turnId: string }")
+    expect(controller).toContain('reduceRuntimeTimeline')
+    expect(controller).toContain('reconcileLiveRecords')
+    expect(controller).toContain('scheduleTurnSettlement')
+    expect(controller).not.toContain('liveRecords.value = []\n    }, 80)')
   })
 })

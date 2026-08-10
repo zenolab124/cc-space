@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { relativeTime, type SessionSummary } from '@/types'
-import type { ConversationRecord, EngineSegment, ModelDescriptor, RuntimeEventEnvelope, RuntimeSnapshot, SessionActions } from '@/engines/types'
-import { attachSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sendInputWhileRunning, sessionActions, startTurn } from '@/engines/client'
+import type { ConversationRecord, ModelDescriptor, RuntimeEventEnvelope, RuntimeSnapshot, SessionActions, SessionRef } from '@/engines/types'
+import { attachSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sendInputWhileRunning, sessionActions, startTurn } from '@/engines/client'
+import type { SourceChangeEnvelope } from '@/engines/events'
 import { sameInstance } from '@/engines/identity'
+import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
+import { hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline } from '@/engines/runtimeTimeline'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
 import SessionSurface from '@/components/session/SessionSurface.vue'
@@ -31,7 +34,8 @@ import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
-import { engineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
+import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
+import { engineRunConfig, inheritEngineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 
 const props = withDefaults(defineProps<{
@@ -45,6 +49,7 @@ const records = ref<ConversationRecord[]>([])
 const liveRecords = ref<ConversationRecord[]>([])
 const loading = ref(false)
 const attaching = ref(false)
+const resolvingWriterConflict = ref(false)
 const sending = ref(false)
 const interrupting = ref(false)
 const error = ref<string | null>(null)
@@ -77,15 +82,25 @@ let timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineResizeObserver: ResizeObserver | null = null
 const { getMeta, updateMeta } = useSessionMeta()
-const { openSession, removeSession, findSession, engineDraft } = useWorkbench()
+const { openSession, removeSession, findSession, engineDraft, registerEngineDraft } = useWorkbench()
 const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
-const { confirm } = useConfirm()
+const { confirm, confirmMulti } = useConfirm()
 const { channels, defaultSessionChannels } = useChannels()
+const toolFoldState = provideToolFoldState()
+provide(TOOL_FOLD_INTERACTION, stopTimelineFollow)
 let unlistenSnapshot: UnlistenFn | null = null
 let unlistenEvent: UnlistenFn | null = null
+let unlistenSourceChange: UnlistenFn | null = null
 let recoveringSnapshot = false
+let sessionGeneration = 0
+let timelineRequestId = 0
+let lastAppliedTimelineRequestId = 0
+let foregroundRequestId = 0
+const completedTurnIds = new Set<string>()
+const settlementTimers = new Map<string, number>()
+const TURN_SETTLEMENT_DELAYS = [0, 100, 250, 600, 1_200, 2_000] as const
 
 const reference = computed(() => props.session.reference)
 const nativeSessionId = computed(() => props.session.native_id || props.session.id)
@@ -250,6 +265,14 @@ function causeMessage(cause: unknown): string {
     if (typeof message === 'string') return message
   }
   return String(cause)
+}
+
+function isActiveWriterConflict(cause: unknown): boolean {
+  if (sessionEngineId.value !== 'codex') return false
+  if (cause && typeof cause === 'object' && 'kind' in cause) {
+    return (cause as { kind?: unknown }).kind === 'conflict'
+  }
+  return causeMessage(cause).includes('already has an active writer')
 }
 
 function bindViewport(element: HTMLElement | null) {
@@ -443,55 +466,104 @@ function ownsSession(candidate: RuntimeSnapshot['session']): boolean {
     && sameInstance(candidate.engine, reference.value.engine)
 }
 
-async function reload() {
-  if (!reference.value) return
-  loading.value = true
-  error.value = null
-  try {
-    const [timeline, resolvedActions] = await Promise.all([
-      loadTimeline(reference.value),
-      sessionActions(reference.value),
-    ])
-    records.value = timeline.records
-    actions.value = resolvedActions
-  } catch (cause) {
-    error.value = causeMessage(cause)
-  } finally {
-    loading.value = false
+function isCurrentTarget(target: SessionRef, generation: number): boolean {
+  return generation === sessionGeneration && ownsSession(target)
+}
+
+function cancelTurnSettlements() {
+  for (const timer of settlementTimers.values()) window.clearTimeout(timer)
+  settlementTimers.clear()
+  completedTurnIds.clear()
+}
+
+function reconcileLoadedRecords(timelineRecords: ConversationRecord[]) {
+  records.value = timelineRecords
+  liveRecords.value = reconcileLiveRecords(
+    timelineRecords,
+    liveRecords.value,
+    completedTurnIds,
+  )
+  for (const turnId of [...completedTurnIds]) {
+    if (!hasLiveTurn(liveRecords.value, turnId)) {
+      completedTurnIds.delete(turnId)
+      const timer = settlementTimers.get(turnId)
+      if (timer !== undefined) window.clearTimeout(timer)
+      settlementTimers.delete(turnId)
+    }
   }
 }
 
-async function ensureAttached(): Promise<boolean> {
-  if (!reference.value || attaching.value) return false
+async function reload(options: { quiet?: boolean } = {}): Promise<boolean> {
+  const target = reference.value
+  if (!target) return false
+  const generation = sessionGeneration
+  const requestId = ++timelineRequestId
+  if (!options.quiet) {
+    foregroundRequestId = requestId
+    loading.value = true
+    error.value = null
+  }
+  try {
+    const [timeline, resolvedActions] = await Promise.all([
+      loadTimeline(target),
+      sessionActions(target),
+    ])
+    if (!isCurrentTarget(target, generation) || requestId < lastAppliedTimelineRequestId) return false
+    lastAppliedTimelineRequestId = requestId
+    reconcileLoadedRecords(timeline.records)
+    actions.value = resolvedActions
+    return true
+  } catch (cause) {
+    if (isCurrentTarget(target, generation)) error.value = causeMessage(cause)
+    return false
+  } finally {
+    if (!options.quiet && requestId === foregroundRequestId && generation === sessionGeneration) {
+      loading.value = false
+    }
+  }
+}
+
+async function loadRuntimeConfiguration() {
+  const target = reference.value
+  if (!target || models.value.length > 0) return
+  const generation = sessionGeneration
+  const sessionId = props.session.id
+  try {
+    const loadedModels = await listModels(target.engine)
+    if (!isCurrentTarget(target, generation) || props.session.id !== sessionId) return
+    models.value = loadedModels
+    const stored = engineRunConfig(sessionId)
+    selectedChannel.value = stored?.channelId
+      ?? configuredDefaultChannelId()
+    const defaultModel = models.value.find(model => model.model === stored?.model)
+      ?? models.value.find(model => model.model === activeChannelBinding.value?.defaultModel)
+      ?? models.value.find(model => model.model === timelineModel.value)
+      ?? models.value.find(model => model.isDefault)
+      ?? models.value.find(model => !model.hidden)
+    selectedModel.value = defaultModel?.model ?? null
+    modelOverridden.value = !!stored?.modelOverridden && !!stored.model
+    const storedEffortSupported = defaultModel?.efforts.some(item => item.id === stored?.effort) === true
+    selectedEffort.value = storedEffortSupported
+      ? stored!.effort
+      : activeChannelBinding.value?.defaultEffort
+        ?? timelineEffort.value
+        ?? defaultModel?.defaultEffort
+        ?? null
+    effortOverridden.value = !!stored?.effortOverridden && storedEffortSupported
+  } catch (_) {
+    if (isCurrentTarget(target, generation)) models.value = []
+  }
+}
+
+type AttachOutcome = 'attached' | 'writer-conflict' | 'failed'
+
+async function ensureAttached(): Promise<AttachOutcome> {
+  if (!reference.value || attaching.value) return 'failed'
   // 已在运行的 runtime 不能 resume：重挂载会清掉 active turn，令后续事件失配。
-  if (isBusy.value) return runtimeId.value !== null
+  if (isBusy.value) return runtimeId.value !== null ? 'attached' : 'failed'
   attaching.value = true
   try {
-    if (models.value.length === 0) {
-      try {
-        models.value = await listModels(reference.value.engine)
-        const stored = engineRunConfig(props.session.id)
-        selectedChannel.value = stored?.channelId
-          ?? configuredDefaultChannelId()
-        const defaultModel = models.value.find(model => model.model === stored?.model)
-          ?? models.value.find(model => model.model === activeChannelBinding.value?.defaultModel)
-          ?? models.value.find(model => model.model === timelineModel.value)
-          ?? models.value.find(model => model.isDefault)
-          ?? models.value.find(model => !model.hidden)
-        selectedModel.value = defaultModel?.model ?? null
-        modelOverridden.value = !!stored?.modelOverridden && !!stored.model
-        const storedEffortSupported = defaultModel?.efforts.some(item => item.id === stored?.effort) === true
-        selectedEffort.value = storedEffortSupported
-          ? stored!.effort
-          : activeChannelBinding.value?.defaultEffort
-            ?? timelineEffort.value
-            ?? defaultModel?.defaultEffort
-            ?? null
-        effortOverridden.value = !!stored?.effortOverridden && storedEffortSupported
-      } catch (_) {
-        models.value = []
-      }
-    }
+    await loadRuntimeConfiguration()
     if (runtimeId.value && attachedChannel.value === undefined) {
       // create/fork 草稿记录的是实际附着渠道；空线程首条消息前尚无
       // rollout，不能重复 resume。已落盘会话没有这份可靠记录，必须走
@@ -501,15 +573,15 @@ async function ensureAttached(): Promise<boolean> {
         attachedChannel.value = draft.attachedChannel
         if (draft.attachedChannel !== selectedChannel.value) {
           error.value = t('engine.draftChannelLocked')
-          return false
+          return 'failed'
         }
       }
     }
-    if (runtimeId.value && attachedChannel.value === selectedChannel.value) return true
+    if (runtimeId.value && attachedChannel.value === selectedChannel.value) return 'attached'
     if (actions.value?.resume.available !== true) {
       const reason = actions.value?.resume.reasonCode
       error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
-      return false
+      return 'failed'
     }
     if (!runtimeId.value || attachedChannel.value !== selectedChannel.value) {
       const attached = await attachSession(reference.value, {
@@ -519,10 +591,11 @@ async function ensureAttached(): Promise<boolean> {
       runtimeId.value = attached.runtimeId
       attachedChannel.value = selectedChannel.value
     }
-    return true
+    return 'attached'
   } catch (cause) {
+    if (isActiveWriterConflict(cause)) return 'writer-conflict'
     error.value = causeMessage(cause)
-    return false
+    return 'failed'
   } finally {
     attaching.value = false
   }
@@ -544,16 +617,85 @@ async function recoverRuntimeSnapshot() {
   }
 }
 
+async function forkAndSend(text: string): Promise<boolean> {
+  const source = reference.value
+  const draft = engineDraft(props.session.id)
+  const project = props.session.project_reference ?? draft?.project
+  const cwd = props.session.cwd ?? draft?.cwd
+  if (!source || !project || !cwd) {
+    error.value = t('common.forkSessionFailed')
+    return false
+  }
+  try {
+    const created = await forkSession(source, null, {
+      ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
+      ...(selectedModel.value ? { model: selectedModel.value } : {}),
+    })
+    const forkedSessionId = sessionUiId(created.session)
+    inheritEngineRunConfig(props.session.id, forkedSessionId)
+    registerEngineDraft(forkedSessionId, {
+      reference: created.session,
+      project,
+      engineName: props.session.engine_name || enginePresentation.value.displayName,
+      cwd,
+      attachedChannel: selectedChannel.value,
+    })
+    await startTurn(created.session, text, {
+      ...(selectedModel.value ? { model: selectedModel.value } : {}),
+      ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
+    })
+    input.value = ''
+    return true
+  } catch (cause) {
+    error.value = causeMessage(cause)
+    return false
+  }
+}
+
+type SendPreparation = 'attached' | 'forked' | 'cancelled'
+
+async function prepareSessionForSend(text: string): Promise<SendPreparation> {
+  resolvingWriterConflict.value = true
+  error.value = null
+  try {
+    while (true) {
+      const outcome = await ensureAttached()
+      if (outcome === 'attached') return 'attached'
+      if (outcome === 'failed') return 'cancelled'
+
+      const choice = await confirmMulti(t('engine.codex.writerConflictMessage'), [
+        {
+          label: t('engine.codex.writerConflictRetry'),
+          value: 'retry',
+          style: 'success',
+        },
+        {
+          label: t('engine.codex.writerConflictForkAndSend'),
+          value: 'fork',
+        },
+      ])
+      if (choice === 'retry') continue
+      if (choice === 'fork') return await forkAndSend(text) ? 'forked' : 'cancelled'
+      return 'cancelled'
+    }
+  } finally {
+    resolvingWriterConflict.value = false
+  }
+}
+
 async function send() {
   const text = input.value.trim()
-  if (!text || !reference.value || sending.value) return
+  if (!text || !reference.value || sending.value || resolvingWriterConflict.value) return
   const sendWhileRunning = isBusy.value
   if (sendWhileRunning && !canSendWhileBusy.value) {
     const reason = actions.value?.sendWhileRunning.reasonCode
     error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
     return
   }
-  if (!isBusy.value && !(await ensureAttached())) return
+  if (!isBusy.value) {
+    const preparation = await prepareSessionForSend(text)
+    if (preparation !== 'attached') return
+  }
   if (!runtimeId.value) {
     error.value = runtimeUnavailableReason.value
     return
@@ -571,7 +713,7 @@ async function send() {
     timestamp: new Date().toISOString(),
     segments: [{ kind: 'text', text }],
     usage: null,
-    sourceMeta: {},
+    sourceMeta: optimisticUserSourceMeta(),
   })
   try {
     if (sendWhileRunning && runtimeId.value && activeTurnId.value) {
@@ -653,45 +795,50 @@ async function decide(request: RuntimeSnapshot['pendingInteractions'][number], d
   }
 }
 
+async function refreshSessionActions() {
+  const target = reference.value
+  if (!target) return
+  const generation = sessionGeneration
+  try {
+    const resolvedActions = await sessionActions(target)
+    if (isCurrentTarget(target, generation)) actions.value = resolvedActions
+  } catch (cause) {
+    if (isCurrentTarget(target, generation)) error.value = causeMessage(cause)
+  }
+}
+
+function scheduleTurnSettlement(turnId: string, attempt = 0) {
+  const existing = settlementTimers.get(turnId)
+  if (existing !== undefined) window.clearTimeout(existing)
+  const generation = sessionGeneration
+  const delay = TURN_SETTLEMENT_DELAYS[Math.min(attempt, TURN_SETTLEMENT_DELAYS.length - 1)]
+  const timer = window.setTimeout(async () => {
+    settlementTimers.delete(turnId)
+    if (generation !== sessionGeneration || !completedTurnIds.has(turnId)) return
+    await reload({ quiet: true })
+    if (generation !== sessionGeneration || !hasLiveTurn(liveRecords.value, turnId)) {
+      completedTurnIds.delete(turnId)
+      return
+    }
+    if (attempt + 1 < TURN_SETTLEMENT_DELAYS.length) {
+      scheduleTurnSettlement(turnId, attempt + 1)
+    }
+  }, delay)
+  settlementTimers.set(turnId, timer)
+}
+
 function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
   if (!ownsSession(envelope.session)) return
-  const event = envelope.event
-  if (event.kind === 'itemDelta') {
-    const itemId = String(event.itemId)
-    let record = liveRecords.value.find(item => item.id === itemId)
-    if (!record) {
-      record = {
-        id: itemId,
-        session: envelope.session,
-        turnId: String(event.turnId),
-        parentId: null,
-        role: 'assistant',
-        timestamp: envelope.timestamp,
-        segments: [],
-        usage: null,
-        sourceMeta: {
-          ...(selectedModel.value ? { model: selectedModel.value } : {}),
-          ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
-        },
-      }
-      liveRecords.value.push(record)
-    }
-    const segment = event.segment as EngineSegment
-    const last = record.segments[record.segments.length - 1]
-    if (last?.kind === 'text' && segment.kind === 'text') last.text += segment.text
-    else if (last?.kind === 'reasoning' && segment.kind === 'reasoning') last.text += segment.text
-    else if (last?.kind === 'commandExecution' && segment.kind === 'commandExecution' && last.id === segment.id) {
-      if (!last.command) last.command = segment.command
-      if (!last.cwd) last.cwd = segment.cwd
-      last.output = `${last.output ?? ''}${segment.output ?? ''}` || null
-      last.status = segment.status
-    }
-    else record.segments.push(segment)
-  } else if (event.kind === 'turnCompleted') {
-    window.setTimeout(async () => {
-      await reload()
-      liveRecords.value = []
-    }, 80)
+  const effect = reduceRuntimeTimeline(liveRecords.value, envelope, {
+    ...(selectedModel.value ? { model: selectedModel.value } : {}),
+    ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
+  })
+  if (effect.changed) liveRecords.value = effect.records
+  if (effect.error) error.value = effect.error
+  if (effect.refreshActions) void refreshSessionActions()
+  if (effect.completedTurnId) {
+    completedTurnIds.add(effect.completedTurnId)
+    scheduleTurnSettlement(effect.completedTurnId)
   }
 }
 
@@ -703,7 +850,13 @@ function onInputKeydown(event: KeyboardEvent) {
 }
 
 watch(() => props.session.id, async () => {
+  sessionGeneration++
+  const generation = sessionGeneration
+  const sessionId = props.session.id
+  lastAppliedTimelineRequestId = 0
+  cancelTurnSettlements()
   resetTimelineFollow()
+  toolFoldState.reset()
   runConfigSyncing.value = true
   try {
     records.value = []
@@ -722,10 +875,11 @@ watch(() => props.session.id, async () => {
     await reload()
     await nextTick()
     requestTimelineFollow(true)
-    if (interactive.value) await ensureAttached()
+    if (interactive.value) await loadRuntimeConfiguration()
   } finally {
+    if (generation !== sessionGeneration || props.session.id !== sessionId) return
     runConfigSyncing.value = false
-    setEngineRunConfig(props.session.id, {
+    setEngineRunConfig(sessionId, {
       model: selectedModel.value,
       effort: selectedEffort.value,
       channelId: selectedChannel.value,
@@ -776,22 +930,33 @@ onMounted(async () => {
     if (ownsSession(event.payload.session)) {
       snapshot.value = event.payload
       runtimeId.value = event.payload.runtimeId
+      if (event.payload.lastError) error.value = event.payload.lastError
       if (!event.payload.sequenceConsistent) void recoverRuntimeSnapshot()
     }
   })
   unlistenEvent = await listen<RuntimeEventEnvelope[]>('engine-runtime-events', event => {
     for (const envelope of event.payload) applyRuntimeEvent(envelope)
   })
+  unlistenSourceChange = await listen<SourceChangeEnvelope>('engine-source-change', event => {
+    const { instance, change } = event.payload
+    if (!reference.value || !sameInstance(instance, reference.value.engine)) return
+    if (change.kind === 'fullRefresh' || (change.session && ownsSession(change.session))) {
+      void reload({ quiet: true })
+    }
+  })
   await Promise.all([reload(), recoverRuntimeSnapshot(), refreshChannels()])
-  if (interactive.value) await ensureAttached()
+  if (interactive.value) await loadRuntimeConfiguration()
 })
 
 onUnmounted(() => {
+  sessionGeneration++
+  cancelTurnSettlements()
   invalidateTimelineScrollRequests()
   timelineResizeObserver?.disconnect()
   timelineResizeObserver = null
   unlistenSnapshot?.()
   unlistenEvent?.()
+  unlistenSourceChange?.()
 })
 </script>
 
@@ -898,8 +1063,9 @@ onUnmounted(() => {
           :engine-name="enginePresentation.displayName"
           :model="timelineModel"
           :accent="engineAccent"
-          :show-reasoning-summaries="enginePresentation.showReasoningSummaries"
+          :show-thought-process="enginePresentation.showThoughtProcess"
           :day-label="group.dayLabel"
+          :active="isBusy && group.turnId === activeTurnId"
         />
       </div>
       <SessionContentState v-if="error" tone="danger">{{ error }}</SessionContentState>
@@ -942,7 +1108,7 @@ onUnmounted(() => {
         :busy="isBusy"
         :has-content="!!input.trim()"
         :can-send-while-busy="canSendWhileBusy"
-        :send-disabled="attaching || sending"
+        :send-disabled="attaching || sending || resolvingWriterConflict"
         :stop-disabled="interrupting || !activeTurnId || actions?.interrupt.available === false"
         :stop-loading="interrupting"
         @send="send"
@@ -953,7 +1119,7 @@ onUnmounted(() => {
             v-model="input"
             :class="fieldClass"
             :placeholder="t('engine.inputPlaceholder')"
-            :disabled="attaching"
+            :disabled="attaching || resolvingWriterConflict"
             @keydown="onInputKeydown"
           />
         </template>

@@ -25,8 +25,8 @@ export interface ConversationTurnView {
 export interface EnginePresentation {
   accent: EngineAccent
   displayName: string
-  /** 仅有标题、没有正文的推理摘要不进入会话正文。 */
-  showReasoningSummaries: boolean
+  /** 是否允许过程文本与推理内容进入会话视图。 */
+  showThoughtProcess: boolean
 }
 
 /** 将标准引擎的轮次记录收束为共享回复框消费的元信息。 */
@@ -55,15 +55,15 @@ export function engineResponseMeta(
 const PRESENTATIONS: Record<string, Omit<EnginePresentation, 'displayName'>> = {
   claude: {
     accent: 'claude',
-    showReasoningSummaries: true,
+    showThoughtProcess: true,
   },
   'claude-code': {
     accent: 'claude',
-    showReasoningSummaries: true,
+    showThoughtProcess: true,
   },
   codex: {
     accent: 'codex',
-    showReasoningSummaries: false,
+    showThoughtProcess: false,
   },
 }
 
@@ -80,6 +80,6 @@ export function resolveEnginePresentation(
   return {
     accent: configured?.accent ?? 'primary',
     displayName: displayName?.trim() || engineId?.trim() || 'Agent',
-    showReasoningSummaries: configured?.showReasoningSummaries ?? true,
+    showThoughtProcess: configured?.showThoughtProcess ?? true,
   }
 }

@@ -1038,7 +1038,7 @@
     "toolDisplayMode_individual": "逐项折叠",
     "toolDisplayMode_individualHint": "每个工具默认显示为一行摘要。",
     "toolDisplayMode_grouped": "合并折叠",
-    "toolDisplayMode_groupedHint": "连续工具先合并为执行过程，再逐项展开。",
+    "toolDisplayMode_groupedHint": "连续工具合并为执行过程，展开后直接显示工具卡片。",
     "stickyUserPrompt": "用户提问吸顶显示",
     "stickyUserPromptHint": "滚动会话时在顶部保留当前用户提问；关闭后消息随正文正常滚动。",
     "stickyUserPromptOn": "已开启",
@@ -1459,7 +1459,10 @@
       "handshakeFailed": "无法连接 Codex App Server",
       "authenticationRequired": "需要先在 Codex CLI 完成登录",
       "accountProbeFailed": "无法确认 Codex 登录状态",
-      "historyUnavailable": "未找到 Codex 会话数据"
+      "historyUnavailable": "未找到 Codex 会话数据",
+      "writerConflictMessage": "该会话正在其他 Codex 客户端中使用。\n\n请先在其他客户端关闭这个会话；如果关闭后仍然提示占用，请退出对应客户端，然后回来重试。\n\n也可以创建分支并发送。分支只包含当前已保存的历史，尚未完成的回复可能不会带入。取消不会清除当前输入。",
+      "writerConflictRetry": "我已关闭，重试",
+      "writerConflictForkAndSend": "创建分支并发送"
     },
     "session": {
       "cwdUnavailable": "会话工作目录不可用",
@@ -1476,6 +1479,14 @@
     "async": {
       "title": "异步 Agent",
       "noTranscript": "该 Agent 暂无可读取的会话记录"
+    },
+    "process": {
+      "title": "工作过程",
+      "runningTitle": "正在工作",
+      "itemCount": "{count} 项",
+      "running": "进行中",
+      "failed": "有操作失败",
+      "interrupted": "已中断"
     },
     "model": "模型",
     "approvalRequired": "需要你的批准",

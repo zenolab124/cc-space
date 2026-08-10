@@ -112,6 +112,7 @@ impl FixtureEngine {
             segments: vec![
                 Segment::Text {
                     text: "Fixture response".into(),
+                    phase: None,
                 },
                 Segment::Reasoning {
                     text: "Fixture reasoning".into(),
@@ -409,6 +410,7 @@ impl AgentRuntime for FixtureEngine {
                     item_id: item_id.clone(),
                     segment: Segment::Text {
                         text: "fixture delta".into(),
+                        phase: None,
                     },
                 },
             );

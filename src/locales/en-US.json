@@ -1038,7 +1038,7 @@
     "toolDisplayMode_individual": "Collapsed items",
     "toolDisplayMode_individualHint": "Show one summary line per tool.",
     "toolDisplayMode_grouped": "Grouped process",
-    "toolDisplayMode_groupedHint": "Group consecutive tools, then expand individual items.",
+    "toolDisplayMode_groupedHint": "Group consecutive tools, then show their cards in one expansion.",
     "stickyUserPrompt": "Sticky user prompt",
     "stickyUserPromptHint": "Keep the current user prompt at the top while scrolling; turn this off to let it scroll with the conversation.",
     "stickyUserPromptOn": "On",
@@ -1459,7 +1459,10 @@
       "handshakeFailed": "Could not connect to the Codex App Server",
       "authenticationRequired": "Sign in with the Codex CLI first",
       "accountProbeFailed": "Could not verify the Codex sign-in state",
-      "historyUnavailable": "No Codex session data was found"
+      "historyUnavailable": "No Codex session data was found",
+      "writerConflictMessage": "This session is in use by another Codex client.\n\nClose this session in the other client first. If it still appears in use, quit that client, then come back and retry.\n\nYou can also fork and send. The fork includes only saved history, so an unfinished response may not be included. Cancelling keeps your current input.",
+      "writerConflictRetry": "Closed it — retry",
+      "writerConflictForkAndSend": "Fork and send"
     },
     "session": {
       "cwdUnavailable": "The session working directory is unavailable",
@@ -1476,6 +1479,14 @@
     "async": {
       "title": "Async agents",
       "noTranscript": "No readable transcript is available for this agent"
+    },
+    "process": {
+      "title": "Work process",
+      "runningTitle": "Working",
+      "itemCount": "{count} items",
+      "running": "In progress",
+      "failed": "An action failed",
+      "interrupted": "Interrupted"
     },
     "model": "Model",
     "approvalRequired": "Approval required",

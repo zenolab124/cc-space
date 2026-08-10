@@ -5,24 +5,27 @@ import type { ConversationRecord, EngineSegment } from '@/engines/types'
 import type { ConversationTurnView, EngineAccent } from '@/engines/presentation'
 import type { AssistantResponseMeta } from '@/utils/assistantResponse'
 import { engineResponseMeta } from '@/engines/presentation'
+import { buildEngineResponseBlocks, isEngineThoughtSegment } from '@/engines/processGroups'
 import ConversationTurn from '@/components/session/ConversationTurn.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
+import EngineProcessGroup from './EngineProcessGroup.vue'
 
 const props = defineProps<{
   records: ConversationRecord[]
   engineName: string
   model: string | null
   accent?: EngineAccent
-  showReasoningSummaries?: boolean
+  showThoughtProcess?: boolean
   dayLabel?: string | null
+  active?: boolean
 }>()
 
 const { locale } = useI18n()
 
 function isRenderable(segment: EngineSegment): boolean {
+  if (props.showThoughtProcess === false && isEngineThoughtSegment(segment)) return false
   if (segment.kind === 'unknown') return !!segment.summary?.trim()
   if (segment.kind === 'reasoning') {
-    if (segment.visibility === 'summary' && props.showReasoningSummaries === false) return false
     return segment.visibility === 'redacted' || !!segment.text.trim()
   }
   if (segment.kind === 'text') return !!segment.text.trim()
@@ -43,6 +46,9 @@ const responseRecords = computed(() => props.records
   .filter(record => record.segments.length > 0))
 
 const responseTimeline = computed(() => props.records.filter(record => record.role !== 'user'))
+const responseBlocks = computed(() => buildEngineResponseBlocks(
+  responseRecords.value,
+))
 
 function dateTimeLabel(value: string | null | undefined): string {
   if (!value) return ''
@@ -106,19 +112,14 @@ const turnView = computed<ConversationTurnView>(() => ({
       <EngineSegmentBlock v-for="(segment, index) in userSegments" :key="index" :segment="segment" />
     </template>
     <template #response>
-      <div
-        v-for="record in responseRecords"
-        :key="`${record.id}:${record.timestamp}`"
-        class="engine-response-entry"
-      >
-        <EngineSegmentBlock v-for="(segment, index) in record.segments" :key="index" :segment="segment" />
-      </div>
+      <template v-for="block in responseBlocks" :key="block.key">
+        <EngineProcessGroup
+          v-if="block.kind === 'process'"
+          :entries="block.entries"
+          :active="active"
+        />
+        <EngineSegmentBlock v-else :segment="block.entry.segment" />
+      </template>
     </template>
   </ConversationTurn>
 </template>
-
-<style scoped>
-.engine-response-entry + .engine-response-entry {
-  margin-top: var(--message-block-gap);
-}
-</style>

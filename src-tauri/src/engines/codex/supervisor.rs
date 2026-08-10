@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::app_server::{
-    AppServerClient, AppServerError, AppServerErrorKind, IncomingMessage, RequestId,
+    AppServerClient, AppServerError, AppServerErrorKind, IncomingMessage, RequestId, RpcError,
 };
 use crate::engines::core::{EngineError, EngineErrorKind, EngineResult};
 
@@ -222,10 +222,7 @@ fn actor_loop(
                 }
                 Ok(IncomingMessage::ErrorResponse { id, error }) => {
                     if let Some(response) = pending.remove(&id) {
-                        let _ = response.send(Err(EngineError::new(
-                            EngineErrorKind::Protocol,
-                            format!("Codex request failed: {}", error.message),
-                        )));
+                        let _ = response.send(Err(map_rpc_error(error)));
                     }
                 }
                 Ok(message) => {
@@ -254,6 +251,19 @@ fn actor_loop(
             }
         }
     }
+}
+
+fn map_rpc_error(error: RpcError) -> EngineError {
+    if error.message.contains("already has an active writer") {
+        return EngineError::new(
+            EngineErrorKind::Conflict,
+            "Codex thread is active in another client",
+        );
+    }
+    EngineError::new(
+        EngineErrorKind::Protocol,
+        format!("Codex request failed: {}", error.message),
+    )
 }
 
 fn map_transport_error(error: AppServerError) -> EngineError {
@@ -297,6 +307,29 @@ mod tests {
         let error = map_transport_error(AppServerError::test_error(AppServerErrorKind::Eof));
         assert_eq!(error.kind, EngineErrorKind::Unavailable);
         assert!(error.retryable);
+    }
+
+    #[test]
+    fn active_writer_rpc_error_is_a_non_automatic_conflict() {
+        let error = map_rpc_error(RpcError {
+            code: -32000,
+            message: "thread example already has an active writer".into(),
+            data: None,
+        });
+        assert_eq!(error.kind, EngineErrorKind::Conflict);
+        assert_eq!(error.message, "Codex thread is active in another client");
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn unrelated_rpc_error_remains_a_protocol_failure() {
+        let error = map_rpc_error(RpcError {
+            code: -32602,
+            message: "invalid params".into(),
+            data: None,
+        });
+        assert_eq!(error.kind, EngineErrorKind::Protocol);
+        assert_eq!(error.message, "Codex request failed: invalid params");
     }
 
     #[test]

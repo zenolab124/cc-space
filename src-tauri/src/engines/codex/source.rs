@@ -478,7 +478,7 @@ impl SessionSource for CodexSource {
                 for item in turn.items {
                     for segment in map_item_segments(&session, &item)? {
                         match segment {
-                            Segment::Text { text: value }
+                            Segment::Text { text: value, .. }
                             | Segment::Reasoning { text: value, .. } => {
                                 text.push_str(&value);
                                 text.push('\n');
@@ -632,6 +632,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                         .and_then(Value::as_str)
                         .map(|text| Segment::Text {
                             text: bounded_segment_text(text.to_string()),
+                            phase: None,
                         })
                 }
                 Some(kind) => Some(Segment::Unknown {
@@ -648,6 +649,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                     .unwrap_or_default()
                     .to_string(),
             ),
+            phase: message_text_phase(item.get("phase").and_then(Value::as_str)),
         }],
         "plan" => vec![Segment::Text {
             text: bounded_segment_text(
@@ -656,6 +658,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                     .unwrap_or_default()
                     .to_string(),
             ),
+            phase: Some(TextPhase::Progress),
         }],
         "reasoning" => {
             let mut values = Vec::new();
@@ -1037,6 +1040,14 @@ fn map_status(status: Option<&str>) -> ItemStatus {
     }
 }
 
+pub(crate) fn message_text_phase(phase: Option<&str>) -> Option<TextPhase> {
+    match phase {
+        Some("commentary" | "progress") => Some(TextPhase::Progress),
+        Some("final_answer" | "finalAnswer" | "final") => Some(TextPhase::Final),
+        _ => None,
+    }
+}
+
 fn paginate<T>(
     values: Vec<T>,
     cursor: Option<String>,
@@ -1114,8 +1125,24 @@ mod tests {
             map_item_segments(&session, &json!({"id":"a","type":"agentMessage","text":"hello"}))
                 .unwrap()
                 .as_slice(),
-            [Segment::Text { text }] if text == "hello"
+            [Segment::Text { text, phase: None }] if text == "hello"
         ));
+        assert_eq!(
+            map_item_segments(
+                &session,
+                &json!({
+                    "id": "progress",
+                    "type": "agentMessage",
+                    "text": "checking",
+                    "phase": "commentary"
+                })
+            )
+            .unwrap(),
+            vec![Segment::Text {
+                text: "checking".into(),
+                phase: Some(TextPhase::Progress),
+            }]
+        );
         assert_eq!(
             map_item_segments(
                 &session,

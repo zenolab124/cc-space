@@ -296,7 +296,12 @@ impl ThreadBuilder {
                     .or_else(|| payload.get("text").and_then(text_value));
                 if let Some(text) = text.filter(|text| !text.is_empty()) {
                     let id = format!("event-agent-{line_number}");
-                    let item = json!({"id": id, "type": "agentMessage", "text": text});
+                    let item = json!({
+                        "id": id,
+                        "type": "agentMessage",
+                        "text": text,
+                        "phase": payload.get("phase").cloned().unwrap_or(Value::Null)
+                    });
                     let turn_id = self.current_turn_id();
                     self.add_item_if_text_is_new(&turn_id, item, &text);
                 }
@@ -393,7 +398,8 @@ fn normalize_response_item(payload: &Value, line_number: usize) -> Option<Value>
             Some("assistant") => Some(json!({
                 "id": id,
                 "type": "agentMessage",
-                "text": content_or_text(payload.get("content")?)
+                "text": content_or_text(payload.get("content")?),
+                "phase": payload.get("phase").cloned().unwrap_or(Value::Null)
             })),
             _ => None,
         },
@@ -403,7 +409,8 @@ fn normalize_response_item(payload: &Value, line_number: usize) -> Option<Value>
             "text": payload
                 .get("content")
                 .map(content_or_text)
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            "phase": payload.get("phase").cloned().unwrap_or(Value::Null)
         })),
         "reasoning" => Some(json!({
             "id": id,
@@ -637,11 +644,20 @@ mod tests {
                 }
             }),
             json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "phase": "final_answer",
+                    "message": "done"
+                }
+            }),
+            json!({
                 "type": "response_item",
                 "payload": {
                     "type": "message",
                     "id": "assistant-1",
                     "role": "assistant",
+                    "phase": "final_answer",
                     "content": [{"type": "output_text", "text": "done"}]
                 }
             }),
@@ -663,6 +679,7 @@ mod tests {
         assert_eq!(thread.turns[0].items[1]["type"], "dynamicToolCall");
         assert_eq!(thread.turns[0].items[2]["type"], "toolResult");
         assert_eq!(thread.turns[0].items[3]["text"], "done");
+        assert_eq!(thread.turns[0].items[3]["phase"], "final_answer");
 
         let _ = fs::remove_file(path);
     }

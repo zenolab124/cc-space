@@ -1,0 +1,144 @@
+import { describe, expect, it } from 'vitest'
+import {
+  hasLiveTurn,
+  optimisticUserSourceMeta,
+  reconcileLiveRecords,
+  reduceRuntimeTimeline,
+} from '../../src/engines/runtimeTimeline'
+import type {
+  ConversationRecord,
+  NormalizedRuntimeEvent,
+  RuntimeEventEnvelope,
+  SessionRef,
+} from '../../src/engines/types'
+
+const session: SessionRef = {
+  engine: { engineId: 'fixture', instanceId: 'default' },
+  nativeId: 'session-1',
+}
+
+function envelope(event: NormalizedRuntimeEvent): RuntimeEventEnvelope {
+  return {
+    session,
+    runtimeId: 'runtime-1',
+    generation: 1,
+    sequence: 1,
+    timestamp: '2026-08-10T00:00:00Z',
+    event,
+  }
+}
+
+function record(overrides: Partial<ConversationRecord> = {}): ConversationRecord {
+  return {
+    id: 'record-1',
+    session,
+    turnId: 'turn-1',
+    parentId: null,
+    role: 'assistant',
+    timestamp: '2026-08-10T00:00:00Z',
+    segments: [],
+    usage: null,
+    sourceMeta: {},
+    ...overrides,
+  }
+}
+
+describe('standard runtime timeline reducer', () => {
+  it('binds the optimistic user message to the normalized turn before deltas arrive', () => {
+    const pending = record({
+      id: 'pending-user-1',
+      turnId: null,
+      role: 'user',
+      segments: [{ kind: 'text', text: 'hello' }],
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+
+    const started = reduceRuntimeTimeline([pending], envelope({ kind: 'turnStarted', turnId: 'turn-1' }))
+    expect(started.changed).toBe(true)
+    expect(started.records[0].turnId).toBe('turn-1')
+
+    const delta = reduceRuntimeTimeline(started.records, envelope({
+      kind: 'itemDelta',
+      turnId: 'turn-1',
+      itemId: 'assistant-1',
+      segment: { kind: 'text', text: 'world', phase: 'final' },
+    }))
+    expect(delta.records.map(item => item.turnId)).toEqual(['turn-1', 'turn-1'])
+  })
+
+  it('keeps progress and final text separate and settles streamed command status', () => {
+    let state = reduceRuntimeTimeline([], envelope({
+      kind: 'itemDelta',
+      turnId: 'turn-1',
+      itemId: 'assistant-1',
+      segment: { kind: 'text', text: 'checking', phase: 'progress' },
+    })).records
+    state = reduceRuntimeTimeline(state, envelope({
+      kind: 'itemDelta',
+      turnId: 'turn-1',
+      itemId: 'assistant-1',
+      segment: { kind: 'text', text: 'done', phase: 'final' },
+    })).records
+    expect(state[0].segments).toHaveLength(2)
+
+    state = reduceRuntimeTimeline(state, envelope({
+      kind: 'itemDelta',
+      turnId: 'turn-1',
+      itemId: 'command-1',
+      segment: {
+        kind: 'commandExecution',
+        id: 'command-1',
+        command: 'pnpm test',
+        cwd: null,
+        output: 'pass',
+        status: 'running',
+      },
+    })).records
+    const completed = reduceRuntimeTimeline(state, envelope({
+      kind: 'itemCompleted',
+      turnId: 'turn-1',
+      itemId: 'command-1',
+      status: 'completed',
+    }))
+    expect(completed.changed).toBe(true)
+    expect(completed.records[1].segments[0]).toMatchObject({ status: 'completed' })
+  })
+
+  it('surfaces runtime failures and action capability changes', () => {
+    const failed = reduceRuntimeTimeline([], envelope({
+      kind: 'runtimeError',
+      message: 'runtime failed',
+      retryable: true,
+    }))
+    expect(failed.error).toBe('runtime failed')
+
+    const changed = reduceRuntimeTimeline([], envelope({ kind: 'capabilitiesChanged' }))
+    expect(changed.refreshActions).toBe(true)
+  })
+})
+
+describe('live history reconciliation', () => {
+  it('keeps unflushed records and removes them only after history confirms landing', () => {
+    const pendingUser = record({
+      id: 'pending-user-1',
+      role: 'user',
+      segments: [{ kind: 'text', text: 'hello' }],
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+    const liveAssistant = record({
+      id: 'assistant-1',
+      segments: [{ kind: 'text', text: 'world', phase: 'final' }],
+    })
+    const completedTurns = new Set(['turn-1'])
+
+    expect(reconcileLiveRecords([], [pendingUser, liveAssistant], completedTurns)).toHaveLength(2)
+
+    const persisted = [
+      record({ id: 'user-1', role: 'user', segments: [{ kind: 'text', text: 'hello' }] }),
+      record({ id: 'assistant-1', segments: [{ kind: 'text', text: 'world', phase: 'final' }] }),
+    ]
+    const reconciled = reconcileLiveRecords(persisted, [pendingUser, liveAssistant], completedTurns)
+    expect(reconciled).toEqual([])
+    expect(hasLiveTurn(reconciled, 'turn-1')).toBe(false)
+  })
+})

@@ -114,7 +114,7 @@ export interface SessionActions {
 }
 
 export type EngineSegment =
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; phase?: 'progress' | 'final' }
   | { kind: 'reasoning'; text: string; visibility: 'visible' | 'summary' | 'redacted' }
   | { kind: 'toolCall'; id: string; name: string; input: unknown }
   | { kind: 'toolResult'; callId: string; content: unknown; isError: boolean }
@@ -172,13 +172,30 @@ export interface RuntimeSnapshot {
   lastError: string | null
 }
 
+export type EngineItemStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined' | 'interrupted'
+export type EngineTurnStatus = 'completed' | 'interrupted' | 'failed'
+
+export type NormalizedRuntimeEvent =
+  | { kind: 'sessionAttached' }
+  | { kind: 'sessionDetached' }
+  | { kind: 'turnStarted'; turnId: string }
+  | { kind: 'itemStarted'; turnId: string; itemId: string; status: EngineItemStatus }
+  | { kind: 'itemDelta'; turnId: string; itemId: string; segment: EngineSegment }
+  | { kind: 'itemCompleted'; turnId: string; itemId: string; status: EngineItemStatus }
+  | { kind: 'interactionRequested'; request: InteractionRequest }
+  | { kind: 'interactionResolved'; reference: InteractionRef; decision: string }
+  | { kind: 'turnCompleted'; turnId: string; status: EngineTurnStatus; error: string | null }
+  | { kind: 'runtimeError'; message: string; retryable: boolean }
+  | { kind: 'runtimeExited' }
+  | { kind: 'capabilitiesChanged' }
+
 export interface RuntimeEventEnvelope {
   session: SessionRef
   runtimeId: { 0: string } | string
   generation: number
   sequence: number
   timestamp: string
-  event: ({ kind: string } & Record<string, unknown>)
+  event: NormalizedRuntimeEvent
 }
 
 export interface ModelDescriptor {

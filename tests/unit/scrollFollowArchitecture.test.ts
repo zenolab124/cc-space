@@ -121,7 +121,7 @@ describe('scroll follow race guards', () => {
     expect(engine).toContain('ref="timelineContentElement"')
     expect(engine).toMatch(/watch\(\(\) => allRecords\.value\.length, \(\) => \{\s*requestTimelineFollow\(\)/)
     expect(engine).not.toMatch(/watch\(\(\) => allRecords\.value\.length,[\s\S]{0,180}scrollTo\(/)
-    expect(engine).toMatch(/watch\(\(\) => props\.session\.id,[\s\S]{0,100}resetTimelineFollow\(\)/)
+    expect(engine).toMatch(/watch\(\(\) => props\.session\.id,[\s\S]{0,260}resetTimelineFollow\(\)/)
     expect(engine).toMatch(/onUnmounted\(\(\) => \{[\s\S]*invalidateTimelineScrollRequests\(\)[\s\S]*timelineResizeObserver\?\.disconnect\(\)/)
   })
 })

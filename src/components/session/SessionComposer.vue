@@ -88,7 +88,7 @@ const dangerActionClass = `min-h-9 shrink-0 rounded-md border border-destructive
             type="button"
             :class="['flex items-center gap-1.5', stopVariant === 'danger'
               ? dangerActionClass
-              : [secondaryActionClass, 'border-accent bg-accent text-accent-foreground']]"
+              : [secondaryActionClass, 'border-accent bg-accent text-white hover:text-white']]"
             :disabled="stopDisabled"
             :aria-busy="stopLoading"
             @click="emit('stop')"

@@ -8,7 +8,12 @@ import BlockText from '@/components/blocks/BlockText.vue'
 import BlockThinking from '@/components/blocks/BlockThinking.vue'
 import SessionProcessDisclosure from '@/components/session/SessionProcessDisclosure.vue'
 
-const props = defineProps<{ segment: EngineSegment }>()
+const props = withDefaults(defineProps<{
+  segment: EngineSegment
+  compact?: boolean
+}>(), {
+  compact: false,
+})
 const { t } = useI18n()
 const expanded = ref(false)
 const assetUrl = ref<string | null>(null)
@@ -93,7 +98,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <BlockText v-if="textBlock" :block="textBlock" />
+  <div v-if="textBlock" :class="compact && 'engine-compact-text'">
+    <BlockText :block="textBlock" />
+  </div>
 
   <BlockThinking v-else-if="thinkingBlock" :block="thinkingBlock" />
 
@@ -184,6 +191,13 @@ onUnmounted(() => {
 .engine-process-status.is-failed,
 .engine-process-status.is-declined,
 .engine-process-status.is-interrupted { color: var(--destructive); }
+.engine-compact-text {
+  color: var(--muted-foreground);
+}
+.engine-compact-text :deep(.prose-msg.message-prose) {
+  font-size: 12px;
+  line-height: 1.6;
+}
 .engine-code,
 .engine-output {
   overflow-x: auto;

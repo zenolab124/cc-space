@@ -209,10 +209,15 @@ impl ClaudeRuntime {
             } => {
                 let item_id = format!("{message_id}:{index}");
                 let segment = match delta.get("type").and_then(Value::as_str) {
-                    Some("text_delta") => delta
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(|text| Segment::Text { text: text.into() }),
+                    Some("text_delta") => {
+                        delta
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .map(|text| Segment::Text {
+                                text: text.into(),
+                                phase: None,
+                            })
+                    }
                     Some("thinking_delta") => {
                         delta.get("thinking").and_then(Value::as_str).map(|text| {
                             Segment::Reasoning {

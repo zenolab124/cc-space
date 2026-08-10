@@ -78,6 +78,8 @@ pub struct AssetRef {
 pub enum Segment {
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<TextPhase>,
     },
     Reasoning {
         text: String,
@@ -114,6 +116,13 @@ pub enum Segment {
         type_name: String,
         summary: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextPhase {
+    Progress,
+    Final,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

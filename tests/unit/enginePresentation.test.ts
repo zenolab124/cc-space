@@ -12,12 +12,12 @@ describe('engine presentation registry', () => {
     expect(resolveEnginePresentation('claude', 'Claude Code')).toEqual({
       accent: 'claude',
       displayName: 'Claude Code',
-      showReasoningSummaries: true,
+      showThoughtProcess: true,
     })
     expect(resolveEnginePresentation('codex', 'Codex')).toEqual({
       accent: 'codex',
       displayName: 'Codex',
-      showReasoningSummaries: false,
+      showThoughtProcess: false,
     })
   })
 
@@ -25,7 +25,7 @@ describe('engine presentation registry', () => {
     expect(resolveEnginePresentation('future-agent', null)).toEqual({
       accent: 'primary',
       displayName: 'future-agent',
-      showReasoningSummaries: true,
+      showThoughtProcess: true,
     })
   })
 

@@ -20,15 +20,21 @@ function actionClass(act: ConfirmAction) {
     style="background: rgba(70, 45, 20, 0.18)"
     @mousedown.self="actions.length ? settleMulti(null) : settle(false)"
   >
-    <div class="w-80 rounded bg-popover border border-border shadow-paper-lifted p-4">
-      <p class="text-sm text-foreground whitespace-pre-wrap">{{ message }}</p>
+    <div
+      class="w-80 rounded bg-popover border border-border shadow-paper-lifted p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-message"
+    >
+      <p id="confirm-dialog-message" class="text-sm text-foreground whitespace-pre-wrap">{{ message }}</p>
       <div v-if="actions.length" class="mt-4 flex justify-end gap-2">
-        <button :class="btnCancel" @click="settleMulti(null)">
+        <button type="button" :class="btnCancel" autofocus @click="settleMulti(null)">
           {{ $t('common.cancel') }}
         </button>
         <button
           v-for="act in actions"
           :key="act.value"
+          type="button"
           :class="actionClass(act)"
           @click="settleMulti(act.value)"
         >
@@ -36,10 +42,11 @@ function actionClass(act: ConfirmAction) {
         </button>
       </div>
       <div v-else class="mt-4 flex justify-end gap-2">
-        <button :class="btnCancel" @click="settle(false)">
+        <button type="button" :class="btnCancel" autofocus @click="settle(false)">
           {{ $t('common.cancel') }}
         </button>
         <button
+          type="button"
           :class="`${btnBase} bg-primary text-primary-foreground hover:shadow-paper`"
           @click="settle(true)"
         >

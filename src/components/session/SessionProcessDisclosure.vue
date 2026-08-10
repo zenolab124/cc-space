@@ -3,9 +3,11 @@ withDefaults(defineProps<{
   expanded: boolean
   state?: string
   title?: string
+  contentId?: string
 }>(), {
   state: 'neutral',
   title: undefined,
+  contentId: undefined,
 })
 
 defineEmits<{ (event: 'toggle', value: MouseEvent): void }>()
@@ -18,6 +20,7 @@ defineEmits<{ (event: 'toggle', value: MouseEvent): void }>()
       class="session-process-line"
       :class="[`is-${state}`, { 'is-expanded': expanded }]"
       :aria-expanded="expanded"
+      :aria-controls="contentId"
       :title="title"
       @click="$emit('toggle', $event)"
     >
@@ -26,7 +29,7 @@ defineEmits<{ (event: 'toggle', value: MouseEvent): void }>()
       <span class="min-w-0 flex-1" />
       <slot name="status" />
     </button>
-    <div v-if="expanded" class="session-process-detail">
+    <div v-if="expanded" :id="contentId" class="session-process-detail">
       <slot />
     </div>
   </div>
