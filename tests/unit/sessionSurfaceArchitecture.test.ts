@@ -171,6 +171,22 @@ describe('unified session surface architecture', () => {
     expect(controller).toContain("if (choice === 'fork') return await forkAndSend(inputItems)")
   })
 
+  it('shows the shared session context banner when a standard runtime is created or resumed', () => {
+    const nativeController = source('../../src/components/SessionDetail.vue')
+    const standardController = source('../../src/components/engine/EngineSessionDetail.vue')
+    const sharedBanner = source('../../src/components/session/SessionBannerOverlay.vue')
+
+    expect(nativeController).toContain("import SessionBannerOverlay from './session/SessionBannerOverlay.vue'")
+    expect(standardController).toContain("import SessionBannerOverlay from '@/components/session/SessionBannerOverlay.vue'")
+    expect(nativeController).toContain('<SessionBannerOverlay')
+    expect(standardController).toContain('<SessionBannerOverlay')
+    expect(sharedBanner).toContain("import SessionBanner from '@/components/SessionBanner.vue'")
+    expect(sharedBanner).toContain('<SessionBanner')
+    expect(standardController).toContain('announceCurrentRuntime()')
+    expect(standardController).toContain('showSessionBanner(!engineDraft(props.session.id))')
+    expect(standardController).toContain('<template #overlay>')
+  })
+
   it('reconciles normalized runtime events without fixed-delay live record clearing', () => {
     const controller = source('../../src/components/engine/EngineSessionDetail.vue')
     const runtimeTypes = source('../../src/engines/types.ts')

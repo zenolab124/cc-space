@@ -80,7 +80,7 @@ import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { useHtmlVisual } from '@/features'
-import SessionBanner from './SessionBanner.vue'
+import SessionBannerOverlay from './session/SessionBannerOverlay.vue'
 import SessionAnchorNav, { type AnchorItem } from './SessionAnchorNav.vue'
 import {
   usePermissionRequests,
@@ -3137,25 +3137,17 @@ async function onReload() {
     </div>
     <!-- 会话横幅:悬浮通知层,不占文档流——出现/增高不推挤消息、不触发滚动跟随,
          根除"hook 事件陆续到达时横幅增高顶块/与用户上滚手势竞态拽回"。
-         最短停留 5s,首轮回合结束后到点淡出(scheduleBannerHide) -->
-    <Transition name="banner-float">
-      <div
-        v-if="interactive && featureBannerShown && effectiveSessionId"
-        class="absolute top-2 left-4 right-4 z-30 pointer-events-none"
-      >
-        <div class="pointer-events-auto shadow-paper-lifted rounded-md bg-popover/40 backdrop-blur-md border border-border">
-          <SessionBanner
-            :session-id="effectiveSessionId"
-            :resumed="bannerResumed"
-            :cwd="bannerCwd"
-            :model="settings.modelId"
-            :effort="(settings.effort as string | null)"
-            :features="htmlVisualEnabled ? [$t('settings.htmlVisual')] : []"
-            :hook-events="bannerHookEvents"
-          />
-        </div>
-      </div>
-    </Transition>
+         固定停留 5s 后淡出,生命周期由控制器负责 -->
+    <SessionBannerOverlay
+      :visible="interactive && featureBannerShown"
+      :session-id="effectiveSessionId || ''"
+      :resumed="bannerResumed"
+      :cwd="bannerCwd"
+      :model="settings.modelId"
+      :effort="(settings.effort as string | null)"
+      :features="htmlVisualEnabled ? [$t('settings.htmlVisual')] : []"
+      :hook-events="bannerHookEvents"
+    />
       </template>
     <!-- 虚拟化下的自绘吸顶:原生 sticky 被虚拟项 transform 劫持,此层吸在滚动视口顶,内容为视口顶部所在组的用户消息克隆;点击回跳该组 -->
     <div v-if="stickyUserPromptEnabled && stickyGroup?.user" class="sticky-user-overlay" :title="$t('session.stickyJumpHint')" @click="jumpToStickyGroup">
@@ -3523,16 +3515,6 @@ async function onReload() {
 </template>
 
 <style scoped>
-/* 会话横幅悬浮层:淡入下滑进场,淡出上滑退场 */
-.banner-float-enter-active,
-.banner-float-leave-active {
-  transition: opacity 200ms ease, transform 200ms ease;
-}
-.banner-float-enter-from,
-.banner-float-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
 .msg-block {
   contain: layout style;
 }

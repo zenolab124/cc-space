@@ -32,6 +32,7 @@ import SessionApprovalCard, { type SessionApprovalOption } from '@/components/se
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
 import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
 import ConversationUserMessage from '@/components/session/ConversationUserMessage.vue'
+import SessionBannerOverlay from '@/components/session/SessionBannerOverlay.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
 import SessionTokenBreakdown from '@/components/topbar/SessionTokenBreakdown.vue'
 import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
@@ -132,6 +133,34 @@ interface QueuedRuntimeInput {
 }
 
 const queuedInputs = ref<QueuedRuntimeInput[]>([])
+const sessionBannerVisible = ref(false)
+const sessionBannerResumed = ref(false)
+const SESSION_BANNER_MS = 5000
+let sessionBannerAnnounced = false
+let sessionBannerTimer = 0
+
+function resetSessionBanner() {
+  window.clearTimeout(sessionBannerTimer)
+  sessionBannerTimer = 0
+  sessionBannerAnnounced = false
+  sessionBannerVisible.value = false
+  sessionBannerResumed.value = false
+}
+
+function showSessionBanner(resumed: boolean) {
+  sessionBannerAnnounced = true
+  sessionBannerResumed.value = resumed
+  sessionBannerVisible.value = true
+  window.clearTimeout(sessionBannerTimer)
+  sessionBannerTimer = window.setTimeout(() => {
+    sessionBannerVisible.value = false
+  }, SESSION_BANNER_MS)
+}
+
+function announceCurrentRuntime() {
+  if (sessionBannerAnnounced) return
+  showSessionBanner(!engineDraft(props.session.id))
+}
 
 function bindDetailRoot(element: HTMLElement | null) {
   detailRootRef.value = element ?? undefined
@@ -808,7 +837,10 @@ async function ensureAttached(): Promise<AttachOutcome> {
         }
       }
     }
-    if (runtimeId.value && attachedChannel.value === selectedChannel.value) return 'attached'
+    if (runtimeId.value && attachedChannel.value === selectedChannel.value) {
+      announceCurrentRuntime()
+      return 'attached'
+    }
     if (actions.value?.resume.available !== true) {
       const reason = actions.value?.resume.reasonCode
       error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
@@ -821,6 +853,7 @@ async function ensureAttached(): Promise<AttachOutcome> {
       })
       runtimeId.value = attached.runtimeId
       attachedChannel.value = selectedChannel.value
+      showSessionBanner(!engineDraft(props.session.id))
     }
     return 'attached'
   } catch (cause) {
@@ -1196,6 +1229,7 @@ watch(() => props.session.id, async () => {
   toolFoldState.reset()
   runConfigSyncing.value = true
   try {
+    resetSessionBanner()
     records.value = []
     liveRecords.value = []
     queuedInputs.value = []
@@ -1291,6 +1325,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   sessionGeneration++
+  resetSessionBanner()
   cancelTurnSettlements()
   invalidateTimelineScrollRequests()
   timelineResizeObserver?.disconnect()
@@ -1398,6 +1433,18 @@ onUnmounted(() => {
     </template>
 
     <SessionViewport :scroll-ref="bindViewport" @wheel="onTimelineWheel" @scroll="onTimelineScroll">
+      <template #overlay>
+        <SessionBannerOverlay
+          :visible="interactive && sessionBannerVisible"
+          :session-id="nativeSessionId"
+          :resumed="sessionBannerResumed"
+          :cwd="session.cwd || ''"
+          :model="selectedModel"
+          :effort="selectedEffort"
+          :features="[]"
+          :hook-events="[]"
+        />
+      </template>
       <div
         v-if="stickyDisplay"
         class="engine-sticky-user-overlay"
