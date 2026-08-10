@@ -17,6 +17,33 @@ describe('macOS background service recovery', () => {
     expect(services).not.toContain('is not present in the app bundle')
   })
 
+  it('does not boot out a managed service when no legacy plist exists', () => {
+    const management = source('../../src-tauri/src/service_management.rs')
+    const cleanupStart = management.indexOf('pub fn remove_legacy_launch_agent(label: &str)')
+    const cleanup = management.slice(
+      cleanupStart,
+      management.indexOf('#[cfg(not(target_os = "macos"))]', cleanupStart),
+    )
+
+    expect(cleanup).toContain('if !plist.exists()')
+    expect(cleanup.indexOf('if !plist.exists()'))
+      .toBeLessThan(cleanup.indexOf('.args(["bootout", &service])'))
+  })
+
+  it('re-registers an enabled service whose launchd task is missing or unhealthy', () => {
+    const services = source('../../src-tauri/src/background_services.rs')
+    const management = source('../../src-tauri/src/service_management.rs')
+
+    expect(services).toContain('runtime_recovery_required')
+    expect(services).toContain('service_management::launchd_service_healthy(launchd_label)')
+    expect(services).toContain('service_management::unregister(kind, value)')
+    expect(services).toContain('recovery registration failed')
+    expect(management).toContain('pub fn launchd_service_healthy(label: &str)')
+    expect(management).toContain('needs LWCR update')
+    expect(management).toContain('job state = spawn failed')
+    expect(management).toContain('EX_CONFIG')
+  })
+
   it('refreshes a missing or stale Widget snapshot before registering the scheduler', () => {
     const widget = source('../../src-tauri/src/widget.rs')
     const startup = widget.slice(

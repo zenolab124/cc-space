@@ -146,6 +146,38 @@ pub fn open_login_items() -> Result<(), String> {
     Err("background item settings are only available on macOS".into())
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn launchd_service_output_healthy(command_succeeded: bool, output: &str) -> bool {
+    command_succeeded
+        && !output.contains("needs LWCR update")
+        && !output.contains("job state = spawn failed")
+        && !output.contains("EX_CONFIG")
+}
+
+/// 判断受管后台服务在当前用户的 launchd domain 中是否可用。
+/// SMAppService 的 Enabled 只表示注册/授权状态；软件更新替换可执行文件后，
+/// 任务可能仍可 print，却因旧 LWCR（代码签名约束）进入 spawn failed。
+#[cfg(target_os = "macos")]
+pub fn launchd_service_healthy(label: &str) -> bool {
+    let uid = unsafe { libc::getuid() };
+    let service = format!("gui/{uid}/{label}");
+    let Ok(output) = std::process::Command::new("/bin/launchctl")
+        .args(["print", &service])
+        .output()
+    else {
+        return false;
+    };
+    launchd_service_output_healthy(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn launchd_service_healthy(_label: &str) -> bool {
+    false
+}
+
 /// 删除旧版本手写到 ~/Library/LaunchAgents 的 plist，避免它继续与
 /// SMAppService 的受管注册竞争同一个后台项目。
 #[cfg(target_os = "macos")]
@@ -154,6 +186,11 @@ pub fn remove_legacy_launch_agent(label: &str) {
     let plist = home
         .join("Library/LaunchAgents")
         .join(format!("{label}.plist"));
+    // 同名 SMAppService 也会出现在 gui/<uid>/<label>。旧 plist 不存在时
+    // 禁止 bootout，否则会误把当前受管服务从 launchd domain 中移除。
+    if !plist.exists() {
+        return;
+    }
     let uid = unsafe { libc::getuid() };
     let service = format!("gui/{uid}/{label}");
     let _ = std::process::Command::new("/bin/launchctl")
@@ -164,3 +201,37 @@ pub fn remove_legacy_launch_agent(label: &str) {
 
 #[cfg(not(target_os = "macos"))]
 pub fn remove_legacy_launch_agent(_label: &str) {}
+
+#[cfg(test)]
+mod tests {
+    use super::launchd_service_output_healthy;
+
+    #[test]
+    fn launchd_health_rejects_missing_and_failed_services() {
+        assert!(!launchd_service_output_healthy(false, ""));
+        assert!(!launchd_service_output_healthy(
+            true,
+            "state = spawn scheduled\njob state = spawn failed"
+        ));
+        assert!(!launchd_service_output_healthy(
+            true,
+            "properties = needs LWCR update | has LWCR"
+        ));
+        assert!(!launchd_service_output_healthy(
+            true,
+            "last exit code = 78: EX_CONFIG"
+        ));
+    }
+
+    #[test]
+    fn launchd_health_accepts_running_and_idle_services() {
+        assert!(launchd_service_output_healthy(
+            true,
+            "state = running\njob state = running"
+        ));
+        assert!(launchd_service_output_healthy(
+            true,
+            "state = not running\nlast exit code = 0"
+        ));
+    }
+}

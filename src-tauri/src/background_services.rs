@@ -25,11 +25,52 @@ fn registration_required(status: ServiceStatus) -> bool {
 }
 
 fn registration_usable(status: ServiceStatus) -> bool {
-    matches!(status, ServiceStatus::Enabled | ServiceStatus::RequiresApproval)
+    matches!(
+        status,
+        ServiceStatus::Enabled | ServiceStatus::RequiresApproval
+    )
 }
 
-fn ensure_registered(kind: ServiceKind, value: &str, label: &str) -> Result<ServiceStatus, String> {
+fn runtime_recovery_required(status: ServiceStatus, launchd_healthy: bool) -> bool {
+    matches!(status, ServiceStatus::Enabled) && !launchd_healthy
+}
+
+fn validate_registered_status(
+    kind: ServiceKind,
+    value: &str,
+    label: &str,
+) -> Result<ServiceStatus, String> {
+    let registered = status(kind, value);
+    if registration_usable(registered) {
+        Ok(registered)
+    } else {
+        Err(format!(
+            "{label} registration did not become active (status={})",
+            registered.as_str()
+        ))
+    }
+}
+
+fn ensure_registered(
+    kind: ServiceKind,
+    value: &str,
+    launchd_label: &str,
+    label: &str,
+) -> Result<ServiceStatus, String> {
     let current = status(kind, value);
+    let launchd_healthy = !matches!(current, ServiceStatus::Enabled)
+        || service_management::launchd_service_healthy(launchd_label);
+    if runtime_recovery_required(current, launchd_healthy) {
+        // bootout 可能让任务消失，软件更新也可能让现有任务因旧 LWCR 进入
+        // spawn failed；两种情况下 SMAppService 都仍会报告 Enabled。
+        // register 会报 already registered，只能先注销再注册。
+        log::warn!("{label} is enabled but unhealthy, re-registering");
+        service_management::unregister(kind, value)
+            .map_err(|error| format!("{label} recovery unregister failed: {error}"))?;
+        service_management::register(kind, value)
+            .map_err(|error| format!("{label} recovery registration failed: {error}"))?;
+        return validate_registered_status(kind, value, label);
+    }
     if registration_usable(current) {
         return Ok(current);
     }
@@ -39,15 +80,7 @@ fn ensure_registered(kind: ServiceKind, value: &str, label: &str) -> Result<Serv
     if registration_required(current) {
         service_management::register(kind, value)
             .map_err(|error| format!("{label} registration was rejected: {error}"))?;
-        let registered = status(kind, value);
-        return if registration_usable(registered) {
-            Ok(registered)
-        } else {
-            Err(format!(
-                "{label} registration did not become active (status={})",
-                registered.as_str()
-            ))
-        };
+        return validate_registered_status(kind, value, label);
     }
     Err("ServiceManagement is unavailable on this macOS version".into())
 }
@@ -57,7 +90,12 @@ pub fn register_tray() -> Result<ServiceStatus, String> {
         return Err("ServiceManagement is unavailable on this macOS version".into());
     }
     service_management::remove_legacy_launch_agent(TRAY_SERVICE_ID);
-    ensure_registered(ServiceKind::LoginItem, TRAY_SERVICE_ID, "Menu bar helper")
+    ensure_registered(
+        ServiceKind::LoginItem,
+        TRAY_SERVICE_ID,
+        TRAY_SERVICE_ID,
+        "Menu bar helper",
+    )
 }
 
 pub fn unregister_tray() -> Result<(), String> {
@@ -76,6 +114,7 @@ pub fn register_widget_updater() -> Result<ServiceStatus, String> {
     ensure_registered(
         ServiceKind::LaunchAgent,
         WIDGET_UPDATER_PLIST,
+        WIDGET_UPDATER_LABEL,
         "Widget updater",
     )
 }
@@ -102,8 +141,8 @@ pub fn ensure_tray() {
     if cfg!(debug_assertions) || !crate::scheduler::owns_machine_schedule() {
         return;
     }
-    service_management::remove_legacy_launch_agent(TRAY_SERVICE_ID);
     if crate::tray_agent::disabled_marker_path().exists() {
+        service_management::remove_legacy_launch_agent(TRAY_SERVICE_ID);
         return;
     }
     match register_tray() {
@@ -188,6 +227,20 @@ mod tests {
         assert!(registration_usable(ServiceStatus::RequiresApproval));
         assert!(!registration_usable(ServiceStatus::NotRegistered));
         assert!(!registration_usable(ServiceStatus::NotFound));
+    }
+
+    #[test]
+    fn enabled_but_unhealthy_service_requires_runtime_recovery() {
+        assert!(runtime_recovery_required(ServiceStatus::Enabled, false));
+        assert!(!runtime_recovery_required(ServiceStatus::Enabled, true));
+        assert!(!runtime_recovery_required(
+            ServiceStatus::RequiresApproval,
+            false
+        ));
+        assert!(!runtime_recovery_required(
+            ServiceStatus::NotRegistered,
+            false
+        ));
     }
 
     #[test]
