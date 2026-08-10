@@ -458,6 +458,27 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
         <div class="flex items-center gap-2 mb-2.5">
           <h2 class="sec-title mb-0">{{ $t('automation.routinesTitle') }}</h2>
           <div class="ml-auto flex items-center gap-1.5">
+            <div v-if="routineRows.length" class="inline-flex items-center gap-1.5">
+              <select
+                class="routine-engine-select routine-engine-select-all"
+                :value="bulkEngineKey"
+                :aria-label="$t('automation.bulkEngineAria')"
+                v-tooltip="$t('automation.engineChangeHint')"
+                :disabled="enginesLoading || bulkEngineSwitching || switchingEngineIds.size > 0 || availableRoutineEngineOptions.length === 0"
+                @change="onAllRoutineEnginesChange"
+              >
+                <option v-if="!bulkEngineKey" value="" disabled>{{ $t('automation.bulkEngineMixed') }}</option>
+                <option
+                  v-for="option in routineEngineOptions"
+                  :key="option.key"
+                  :value="option.key"
+                  :disabled="!option.available"
+                >
+                  {{ $t('automation.bulkEngineOption', { engine: option.descriptor.displayName }) }}{{ option.available ? '' : ` · ${$t('automation.routineForm.engineUnavailableSuffix')}` }}
+                </option>
+              </select>
+              <span v-if="bulkEngineSwitching" class="i-carbon-circle-dash w-3 h-3 animate-spin text-muted-foreground" />
+            </div>
             <button class="icon-btn" :disabled="routinesLoading" @click="refreshRoutines">
               <span class="i-carbon-renew w-3 h-3" :class="{ 'animate-spin': routinesLoading }" />
             </button>
@@ -493,32 +514,7 @@ function logStatus(log: RoutineExecutionLog): 'cancelled' | 'success' | 'running
                 <th>{{ $t('automation.routineColumns.name') }}</th>
                 <th>{{ $t('automation.routineColumns.schedule') }}</th>
                 <th>{{ $t('automation.routineColumns.command') }}</th>
-                <th>
-                  <div class="flex flex-col items-start gap-1">
-                    <span>{{ $t('automation.routineColumns.engine') }}</span>
-                    <div class="inline-flex items-center gap-1.5">
-                      <select
-                        class="routine-engine-select routine-engine-select-all"
-                        :value="bulkEngineKey"
-                        :aria-label="$t('automation.bulkEngineAria')"
-                        v-tooltip="$t('automation.engineChangeHint')"
-                        :disabled="enginesLoading || bulkEngineSwitching || switchingEngineIds.size > 0 || availableRoutineEngineOptions.length === 0"
-                        @change="onAllRoutineEnginesChange"
-                      >
-                        <option v-if="!bulkEngineKey" value="" disabled>{{ $t('automation.bulkEngineMixed') }}</option>
-                        <option
-                          v-for="option in routineEngineOptions"
-                          :key="option.key"
-                          :value="option.key"
-                          :disabled="!option.available"
-                        >
-                          {{ $t('automation.bulkEngineOption', { engine: option.descriptor.displayName }) }}{{ option.available ? '' : ` · ${$t('automation.routineForm.engineUnavailableSuffix')}` }}
-                        </option>
-                      </select>
-                      <span v-if="bulkEngineSwitching" class="i-carbon-circle-dash w-3 h-3 animate-spin text-muted-foreground" />
-                    </div>
-                  </div>
-                </th>
+                <th>{{ $t('automation.routineColumns.engine') }}</th>
                 <th>{{ $t('automation.routineColumns.status') }}</th>
                 <th>{{ $t('automation.routineColumns.lastRun') }}</th>
                 <th>{{ $t('automation.routineColumns.actions') }}</th>

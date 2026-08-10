@@ -44,6 +44,9 @@ describe('定时任务默认引擎', () => {
 
     expect(view).toContain('@change="onRoutineEngineChange(r, $event)"')
     expect(view).toContain('@change="onAllRoutineEnginesChange"')
+    expect(view.indexOf('@change="onAllRoutineEnginesChange"'))
+      .toBeLessThan(view.indexOf('<table class="auto-table routine-table">'))
+    expect(view).toContain(`<th>{{ $t('automation.routineColumns.engine') }}</th>`)
     expect(view).toContain('bulkEngineSwitching')
     expect(view).toContain('role="alert"')
     expect(composable).toContain("invoke<number>('update_all_routine_engines', { engine })")
