@@ -176,17 +176,10 @@ pub fn format_v1(info: &QuotaInfo) -> Option<String> {
 
 pub fn format_bundle(bundle: &QuotaBundle) -> Option<String> {
     let config = read_v2();
-    let multi_provider = {
-        let mut providers: Vec<&str> = config
-            .slots
-            .iter()
-            .map(|slot| slot.provider.as_str())
-            .collect();
-        providers.sort_unstable();
-        providers.dedup();
-        providers.len() > 1
-    };
+    format_bundle_with_config(bundle, &config)
+}
 
+fn format_bundle_with_config(bundle: &QuotaBundle, config: &TrayTitleConfigV2) -> Option<String> {
     let parts: Vec<_> = config
         .slots
         .iter()
@@ -201,13 +194,11 @@ pub fn format_bundle(bundle: &QuotaBundle) -> Option<String> {
                 .flat_map(|group| &group.items)
                 .find(|item| item.id == slot.item)?;
             let percent = item.used_percent?;
-            Some(if multi_provider {
-                format!("{} {:.0}%", provider.display_name, percent)
-            } else {
-                format!("{percent:.0}%")
-            })
+            Some(format!("{percent:.0}%"))
         })
         .collect();
+    // 菜单栏标题只承担快速扫读：provider 与额度窗口身份保留在配置和展开菜单中，
+    // 标题本身只显示百分比，避免多 provider 时占满菜单栏。
     (!parts.is_empty()).then(|| parts.join(" | "))
 }
 
@@ -245,5 +236,70 @@ mod tests {
             ],
         });
         assert_eq!(config.slots, vec![TrayTitleSlot::Weekly]);
+    }
+
+    #[test]
+    fn multi_provider_title_contains_only_percentages() {
+        let bundle: QuotaBundle = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "providers": [
+                {
+                    "id": "claude",
+                    "displayName": "Claude Code",
+                    "visible": true,
+                    "available": true,
+                    "groups": [{
+                        "id": "default",
+                        "label": "Default",
+                        "items": [{
+                            "id": "default/session",
+                            "label": "Session",
+                            "usedPercent": 42.4,
+                            "kind": "fiveHour"
+                        }]
+                    }],
+                    "stale": false,
+                    "inFlight": false
+                },
+                {
+                    "id": "codex",
+                    "displayName": "Codex",
+                    "visible": true,
+                    "available": true,
+                    "groups": [{
+                        "id": "codex",
+                        "label": "Codex",
+                        "items": [{
+                            "id": "codex/primary",
+                            "label": "Primary",
+                            "usedPercent": 67.2,
+                            "kind": "fiveHour"
+                        }]
+                    }],
+                    "stale": false,
+                    "inFlight": false
+                }
+            ],
+            "generatedAt": "2026-08-11T00:00:00Z"
+        }))
+        .expect("valid quota bundle fixture");
+        let config = TrayTitleConfigV2 {
+            version: 2,
+            slots: vec![
+                TrayTitleSlotV2 {
+                    provider: "claude".into(),
+                    item: "default/session".into(),
+                },
+                TrayTitleSlotV2 {
+                    provider: "codex".into(),
+                    item: "codex/primary".into(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            format_bundle_with_config(&bundle, &config).as_deref(),
+            Some("42% | 67%")
+        );
     }
 }
