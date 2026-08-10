@@ -1,27 +1,12 @@
 import type { ConversationRecord, EngineSegment } from './types'
+import type { ContentBlock } from '@/types'
+import type { ToolVisualState } from '@/composables/useToolDisplay'
+import { usesInlineToolResult, type ToolResultData } from '@/utils/toolPair'
 
 export interface EngineResponseSegmentEntry {
   key: string
   segment: EngineSegment
 }
-
-type ToolCallSegment = Extract<EngineSegment, { kind: 'toolCall' }>
-type ToolResultSegment = Extract<EngineSegment, { kind: 'toolResult' }>
-type CommandSegment = Extract<EngineSegment, { kind: 'commandExecution' }>
-type FileChangeSegment = Extract<EngineSegment, { kind: 'fileChange' }>
-
-export type EngineProcessActivity =
-  | {
-    kind: 'tool'
-    key: string
-    id: string
-    call: ToolCallSegment | null
-    result: ToolResultSegment | null
-  }
-  | { kind: 'command'; key: string; id: string; segment: CommandSegment }
-  | { kind: 'fileChange'; key: string; id: string; segment: FileChangeSegment }
-
-export type EngineProcessVisualState = 'done' | 'running' | 'error' | 'interrupted' | 'unknown'
 
 export type EngineResponseBlock =
   | { kind: 'process'; key: string; entries: EngineResponseSegmentEntry[] }
@@ -71,68 +56,156 @@ export function buildEngineResponseBlocks(
   return blocks
 }
 
-/** 将不同引擎的中立 Segment 收束为前端唯一消费的工具活动模型。 */
-export function buildEngineProcessActivities(
+export interface EngineProcessProjection {
+  blocks: ContentBlock[]
+  results: Map<string, ToolResultData>
+  states: Map<string, ToolVisualState>
+}
+
+function objectInput(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return { value }
+}
+
+const SHARED_TOOL_NAMES = new Map([
+  ['read', 'Read'],
+  ['edit', 'Edit'],
+  ['write', 'Write'],
+  ['grep', 'Grep'],
+  ['glob', 'Glob'],
+  ['bash', 'Bash'],
+  ['websearch', 'WebSearch'],
+  ['webfetch', 'WebFetch'],
+  ['task', 'Task'],
+  ['agent', 'Agent'],
+  ['workflow', 'Workflow'],
+  ['skill', 'Skill'],
+])
+
+function sharedToolName(name: string): string {
+  return SHARED_TOOL_NAMES.get(name.toLowerCase()) ?? name
+}
+
+function sharedToolInput(name: string, value: unknown): Record<string, unknown> {
+  const input = objectInput(value)
+  if (
+    (name === 'Read' || name === 'Edit' || name === 'Write')
+    && typeof input.path === 'string'
+    && typeof input.file_path !== 'string'
+  ) {
+    return { ...input, file_path: input.path }
+  }
+  return input
+}
+
+function resultContent(value: unknown): string | ContentBlock[] {
+  if (typeof value === 'string') return value
+  if (
+    Array.isArray(value)
+    && value.every(item => item && typeof item === 'object' && typeof item.type === 'string')
+  ) {
+    return value as ContentBlock[]
+  }
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value)
+  } catch (_) {
+    return String(value)
+  }
+}
+
+function visualState(status: string): ToolVisualState {
+  if (status === 'completed') return 'done'
+  if (status === 'failed' || status === 'declined') return 'error'
+  if (status === 'interrupted') return 'interrupted'
+  if (status === 'running' || status === 'pending') return 'running'
+  return 'unknown'
+}
+
+/**
+ * 把各引擎的中立工具 Segment 投影到 Claude 会话已经使用的 ContentBlock 契约。
+ * 渲染层从这里开始完全复用同一套分组、折叠和工具卡片，不再维护引擎专属卡片。
+ */
+export function projectEngineProcessEntries(
   entries: EngineResponseSegmentEntry[],
-): EngineProcessActivity[] {
-  const activities: EngineProcessActivity[] = []
-  const calls = new Map<string, Extract<EngineProcessActivity, { kind: 'tool' }>>()
+): EngineProcessProjection {
+  const blocks: ContentBlock[] = []
+  const results = new Map<string, ToolResultData>()
+  const states = new Map<string, ToolVisualState>()
+  const pairedCallNames = new Map(entries.flatMap(entry => {
+    const segment = entry.segment
+    if (segment.kind === 'toolCall') return [[segment.id, sharedToolName(segment.name)] as const]
+    if (segment.kind === 'commandExecution') return [[segment.id, 'Bash'] as const]
+    return []
+  }))
 
   for (const entry of entries) {
     const segment = entry.segment
     if (segment.kind === 'toolCall') {
-      const activity: Extract<EngineProcessActivity, { kind: 'tool' }> = {
-        kind: 'tool',
-        key: entry.key,
+      const name = sharedToolName(segment.name)
+      blocks.push({
+        type: 'tool_use',
         id: segment.id,
-        call: segment,
-        result: null,
-      }
-      activities.push(activity)
-      calls.set(segment.id, activity)
+        name,
+        input: sharedToolInput(name, segment.input),
+      })
       continue
     }
     if (segment.kind === 'toolResult') {
-      const call = calls.get(segment.callId)
-      if (call && call.result === null) {
-        call.result = segment
-      } else {
-        activities.push({
-          kind: 'tool',
-          key: entry.key,
-          id: segment.callId || entry.key,
-          call: null,
-          result: segment,
+      const content = resultContent(segment.content)
+      results.set(segment.callId, { content, is_error: segment.isError, recordUuid: null })
+      const pairedName = pairedCallNames.get(segment.callId)
+      if (!pairedName || !usesInlineToolResult(pairedName)) {
+        blocks.push({
+          type: 'tool_result',
+          tool_use_id: segment.callId,
+          content,
+          is_error: segment.isError,
         })
       }
       continue
     }
     if (segment.kind === 'commandExecution') {
-      activities.push({ kind: 'command', key: entry.key, id: segment.id, segment })
+      blocks.push({
+        type: 'tool_use',
+        id: segment.id,
+        name: 'Bash',
+        input: {
+          command: segment.command,
+          ...(segment.cwd ? { cwd: segment.cwd } : {}),
+        },
+      })
+      if (segment.output !== null) {
+        results.set(segment.id, {
+          content: segment.output,
+          is_error: segment.status === 'failed' || segment.status === 'declined',
+          recordUuid: null,
+        })
+      }
+      states.set(segment.id, visualState(segment.status))
       continue
     }
     if (segment.kind === 'fileChange') {
-      activities.push({ kind: 'fileChange', key: entry.key, id: segment.id, segment })
+      const changes = segment.changes.length > 0
+        ? segment.changes
+        : [{ path: '', kind: 'update', diff: null }]
+      changes.forEach((change, index) => {
+        const id = changes.length === 1 ? segment.id : `${segment.id}:${index}`
+        blocks.push({
+          type: 'tool_use',
+          id,
+          name: 'Edit',
+          input: {
+            file_path: change.path,
+            change_kind: change.kind,
+            ...(change.diff ? { new_string: change.diff } : {}),
+          },
+        })
+        states.set(id, visualState(segment.status))
+      })
     }
   }
 
-  return activities
-}
-
-export function engineProcessActivityState(
-  activity: EngineProcessActivity,
-  active: boolean,
-): EngineProcessVisualState {
-  if (activity.kind === 'tool') {
-    if (activity.result?.isError) return 'error'
-    if (activity.result) return 'done'
-    return activity.call && active ? 'running' : 'unknown'
-  }
-
-  const status = activity.segment.status
-  if (status === 'completed') return 'done'
-  if (status === 'failed' || status === 'declined') return 'error'
-  if (status === 'interrupted') return 'interrupted'
-  if (status === 'running' || status === 'pending') return 'running'
-  return active ? 'running' : 'unknown'
+  return { blocks, results, states }
 }

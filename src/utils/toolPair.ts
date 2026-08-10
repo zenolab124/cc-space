@@ -2,7 +2,7 @@ import type { ContentBlock } from '@/types'
 
 export const INLINE_RESULT_TOOLS = new Set(['Bash', 'WebSearch'])
 
-function isInlineTool(name: string): boolean {
+export function usesInlineToolResult(name: string): boolean {
   return INLINE_RESULT_TOOLS.has(name) || name.startsWith('mcp__')
 }
 
@@ -24,7 +24,7 @@ export function flattenResultText(content: string | ContentBlock[]): string {
 export function filterConsumedResults(blocks: ContentBlock[]): ContentBlock[] {
   const inlineIds = new Set<string>()
   for (const b of blocks) {
-    if (b.type === 'tool_use' && isInlineTool((b as { name: string }).name)) {
+    if (b.type === 'tool_use' && usesInlineToolResult((b as { name: string }).name)) {
       inlineIds.add((b as { id: string }).id)
     }
   }

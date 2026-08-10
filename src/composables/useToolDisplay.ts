@@ -161,6 +161,7 @@ export function deriveToolVisualState(opts: {
 export interface ToolExecutionContext {
   results: ComputedRef<Map<string, ToolResultData>>
   asyncStates?: ComputedRef<Map<string, AsyncToolState>>
+  visualStates?: ComputedRef<Map<string, ToolVisualState>>
   permissionRequest?: ComputedRef<{
     toolUseId: string | null
     toolName: string

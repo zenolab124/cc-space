@@ -1077,7 +1077,6 @@ onUnmounted(() => {
           :accent="engineAccent"
           :show-thought-process="enginePresentation.showThoughtProcess"
           :day-label="group.dayLabel"
-          :active="isTurnStreaming(group.turnId)"
           :streaming="isTurnStreaming(group.turnId)"
         />
       </div>

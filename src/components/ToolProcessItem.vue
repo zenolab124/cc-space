@@ -35,13 +35,14 @@ const waitingPermission = computed(() => {
   return !!request && request.toolUseId === props.tool.id
 })
 
-const state = computed(() => deriveToolVisualState({
-  result: result.value,
-  asyncState: asyncState.value,
-  waitingPermission: waitingPermission.value,
-  streaming: props.streaming,
-  runInBackground: props.tool.name === 'Bash' && props.tool.input.run_in_background === true,
-}))
+const state = computed(() => context?.visualStates?.value.get(props.tool.id)
+  ?? deriveToolVisualState({
+    result: result.value,
+    asyncState: asyncState.value,
+    waitingPermission: waitingPermission.value,
+    streaming: props.streaming,
+    runInBackground: props.tool.name === 'Bash' && props.tool.input.run_in_background === true,
+  }))
 
 const autoExpanded = computed(() => state.value === 'permission')
 const expanded = computed(() => {

@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildEngineProcessActivities,
   buildEngineResponseBlocks,
-  engineProcessActivityState,
   isEngineProcessSegment,
   isEngineThoughtSegment,
+  projectEngineProcessEntries,
 } from '../../src/engines/processGroups'
 
 describe('engine process groups', () => {
@@ -72,30 +71,104 @@ describe('engine process groups', () => {
     expect(blocks.map(block => block.kind)).toEqual(['content', 'content'])
   })
 
-  it('pairs a neutral tool call and result into one frontend activity', () => {
-    const activities = buildEngineProcessActivities([
+  it('projects neutral tools and commands into the shared content block contract', () => {
+    const projection = projectEngineProcessEntries([
       { key: 'call', segment: { kind: 'toolCall', id: 'tool-1', name: 'read', input: { path: 'a.ts' } } },
       { key: 'result', segment: { kind: 'toolResult', callId: 'tool-1', content: 'ok', isError: false } },
       { key: 'command', segment: { kind: 'commandExecution', id: 'cmd-1', command: 'pnpm test', cwd: null, output: 'pass', status: 'completed' } },
     ])
 
-    expect(activities).toHaveLength(2)
-    expect(activities[0]).toMatchObject({
-      kind: 'tool',
-      id: 'tool-1',
-      call: { name: 'read' },
-      result: { content: 'ok' },
-    })
-    expect(engineProcessActivityState(activities[0], false)).toBe('done')
-    expect(engineProcessActivityState(activities[1], false)).toBe('done')
+    expect(projection.blocks).toEqual([
+      {
+        type: 'tool_use',
+        id: 'tool-1',
+        name: 'Read',
+        input: { path: 'a.ts', file_path: 'a.ts' },
+      },
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-1',
+        content: 'ok',
+        is_error: false,
+      },
+      {
+        type: 'tool_use',
+        id: 'cmd-1',
+        name: 'Bash',
+        input: { command: 'pnpm test' },
+      },
+    ])
+    expect(projection.results.get('tool-1')).toMatchObject({ content: 'ok', is_error: false })
+    expect(projection.results.get('cmd-1')).toMatchObject({ content: 'pass', is_error: false })
+    expect(projection.states.get('cmd-1')).toBe('done')
+  })
+
+  it('projects file changes as shared edit cards with explicit states', () => {
+    const projection = projectEngineProcessEntries([{
+      key: 'change',
+      segment: {
+        kind: 'fileChange',
+        id: 'change-1',
+        status: 'running',
+        changes: [
+          { path: 'src/App.vue', kind: 'update', diff: '+line' },
+          { path: 'src/main.ts', kind: 'create', diff: null },
+        ],
+      },
+    }])
+
+    expect(projection.blocks).toEqual([
+      expect.objectContaining({
+        type: 'tool_use',
+        id: 'change-1:0',
+        name: 'Edit',
+        input: { file_path: 'src/App.vue', change_kind: 'update', new_string: '+line' },
+      }),
+      expect.objectContaining({
+        type: 'tool_use',
+        id: 'change-1:1',
+        name: 'Edit',
+        input: { file_path: 'src/main.ts', change_kind: 'create' },
+      }),
+    ])
+    expect([...projection.states.values()]).toEqual(['running', 'running'])
   })
 
   it('keeps an unmatched result visible instead of dropping adapter data', () => {
-    const activities = buildEngineProcessActivities([
+    const projection = projectEngineProcessEntries([
       { key: 'result', segment: { kind: 'toolResult', callId: 'missing', content: 'failed', isError: true } },
     ])
 
-    expect(activities[0]).toMatchObject({ kind: 'tool', call: null, result: { isError: true } })
-    expect(engineProcessActivityState(activities[0], false)).toBe('error')
+    expect(projection.blocks[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'missing',
+      content: 'failed',
+      is_error: true,
+    })
+    expect(projection.results.get('missing')).toMatchObject({ is_error: true })
+  })
+
+  it('lets shared inline-result cards consume their paired result', () => {
+    const projection = projectEngineProcessEntries([
+      { key: 'call', segment: { kind: 'toolCall', id: 'mcp-1', name: 'mcp__browser__navigate', input: { url: 'https://example.com' } } },
+      { key: 'result', segment: { kind: 'toolResult', callId: 'mcp-1', content: 'opened', isError: false } },
+    ])
+
+    expect(projection.blocks).toEqual([
+      expect.objectContaining({ type: 'tool_use', id: 'mcp-1', name: 'mcp__browser__navigate' }),
+    ])
+    expect(projection.results.get('mcp-1')).toMatchObject({ content: 'opened' })
+  })
+
+  it('preserves non-object tool input under a neutral value field', () => {
+    const projection = projectEngineProcessEntries([
+      { key: 'call', segment: { kind: 'toolCall', id: 'tool-1', name: 'custom', input: ['a', 'b'] } },
+    ])
+
+    expect(projection.blocks[0]).toMatchObject({
+      type: 'tool_use',
+      id: 'tool-1',
+      input: { value: ['a', 'b'] },
+    })
   })
 })

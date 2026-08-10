@@ -28,6 +28,8 @@ const context = inject(TOOL_EXECUTION_CONTEXT, null)
 const legacyResults = inject<ComputedRef<Map<string, ToolResultData>>>('toolResultMap')
 
 function stateOf(tool: ToolUseBlock): ToolVisualState {
+  const projected = context?.visualStates?.value.get(tool.id)
+  if (projected) return projected
   const request = context?.permissionRequest?.value
   return deriveToolVisualState({
     result: context?.results.value.get(tool.id) ?? legacyResults?.value.get(tool.id),

@@ -1,14 +1,25 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ConversationRecord, EngineSegment } from '@/engines/types'
 import type { ConversationTurnView, EngineAccent } from '@/engines/presentation'
 import type { AssistantResponseMeta } from '@/utils/assistantResponse'
 import { engineResponseMeta } from '@/engines/presentation'
-import { buildEngineResponseBlocks, isEngineThoughtSegment } from '@/engines/processGroups'
+import {
+  buildEngineResponseBlocks,
+  isEngineThoughtSegment,
+  projectEngineProcessEntries,
+  type EngineProcessProjection,
+  type EngineResponseBlock,
+} from '@/engines/processGroups'
+import type { ToolResultData } from '@/utils/toolPair'
+import {
+  TOOL_EXECUTION_CONTEXT,
+  type ToolVisualState,
+} from '@/composables/useToolDisplay'
 import ConversationTurn from '@/components/session/ConversationTurn.vue'
+import ContentBlockList from '@/components/ContentBlockList.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
-import EngineProcessGroup from './EngineProcessGroup.vue'
 
 const props = defineProps<{
   records: ConversationRecord[]
@@ -17,7 +28,6 @@ const props = defineProps<{
   accent?: EngineAccent
   showThoughtProcess?: boolean
   dayLabel?: string | null
-  active?: boolean
   streaming?: boolean
 }>()
 
@@ -47,9 +57,39 @@ const responseRecords = computed(() => props.records
   .filter(record => record.segments.length > 0))
 
 const responseTimeline = computed(() => props.records.filter(record => record.role !== 'user'))
-const responseBlocks = computed(() => buildEngineResponseBlocks(
+type ResponseBlockView =
+  | Extract<EngineResponseBlock, { kind: 'content' }>
+  | (Extract<EngineResponseBlock, { kind: 'process' }> & { projection: EngineProcessProjection })
+
+const responseBlocks = computed<ResponseBlockView[]>(() => buildEngineResponseBlocks(
   responseRecords.value,
-))
+).map(block => block.kind === 'process'
+  ? { ...block, projection: projectEngineProcessEntries(block.entries) }
+  : block))
+
+const toolResults = computed(() => {
+  const results = new Map<string, ToolResultData>()
+  for (const block of responseBlocks.value) {
+    if (block.kind !== 'process') continue
+    for (const [id, result] of block.projection.results) results.set(id, result)
+  }
+  return results
+})
+
+const toolVisualStates = computed(() => {
+  const states = new Map<string, ToolVisualState>()
+  for (const block of responseBlocks.value) {
+    if (block.kind !== 'process') continue
+    for (const [id, state] of block.projection.states) states.set(id, state)
+  }
+  return states
+})
+
+provide('toolResultMap', toolResults)
+provide(TOOL_EXECUTION_CONTEXT, {
+  results: toolResults,
+  visualStates: toolVisualStates,
+})
 
 function dateTimeLabel(value: string | null | undefined): string {
   if (!value) return ''
@@ -114,10 +154,10 @@ const turnView = computed<ConversationTurnView>(() => ({
     </template>
     <template #response>
       <template v-for="block in responseBlocks" :key="block.key">
-        <EngineProcessGroup
+        <ContentBlockList
           v-if="block.kind === 'process'"
-          :entries="block.entries"
-          :active="active"
+          :blocks="block.projection.blocks"
+          :streaming="streaming"
         />
         <EngineSegmentBlock v-else :segment="block.entry.segment" :streaming="streaming" />
       </template>
