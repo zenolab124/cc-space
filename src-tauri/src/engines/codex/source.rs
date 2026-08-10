@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -18,6 +19,8 @@ const MAX_PAGES: usize = 100;
 const THREAD_CACHE_TTL: Duration = Duration::from_secs(2);
 const TOKEN_USAGE_TAIL_BYTES: u64 = 1024 * 1024;
 const USAGE_CACHE_LIMIT: usize = 2048;
+const ASSET_MAX_BYTES: usize = 32 * 1024 * 1024;
+const USER_INPUT_ASSET_MARKER: &str = ":user-input:";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -503,6 +506,7 @@ impl SessionSource for CodexSource {
     fn resolve_asset(&self, asset: AssetRef) -> EngineFuture<'_, ResolvedAsset> {
         Box::pin(async move {
             let thread = self.read_thread_with_turns(&asset.session)?;
+            let user_input = parse_user_input_asset_id(&asset.native_id);
             for turn in thread.turns {
                 for item in turn.items {
                     if item.get("id").and_then(Value::as_str) == Some(&asset.native_id)
@@ -517,7 +521,7 @@ impl SessionSource for CodexSource {
                         let metadata = fs::metadata(path).map_err(|error| {
                             EngineError::new(EngineErrorKind::Io, error.to_string())
                         })?;
-                        if metadata.len() > 32 * 1024 * 1024 {
+                        if metadata.len() > ASSET_MAX_BYTES as u64 {
                             return Err(EngineError::new(
                                 EngineErrorKind::Protocol,
                                 "Codex asset exceeds the transfer size limit",
@@ -530,6 +534,30 @@ impl SessionSource for CodexSource {
                             media_type: media_type_for_path(path).to_string(),
                             bytes,
                         });
+                    }
+                    if let Some((item_id, input_index)) = &user_input {
+                        if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
+                            || item.get("type").and_then(Value::as_str) != Some("userMessage")
+                        {
+                            continue;
+                        }
+                        let url = item
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .and_then(|content| content.get(*input_index))
+                            .and_then(|input| {
+                                input
+                                    .get("url")
+                                    .or_else(|| input.get("image_url"))
+                                    .and_then(Value::as_str)
+                            })
+                            .ok_or_else(|| {
+                                EngineError::new(
+                                    EngineErrorKind::Protocol,
+                                    "Codex image input has no data URL",
+                                )
+                            })?;
+                        return decode_data_url_asset(url);
                     }
                 }
             }
@@ -625,22 +653,8 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|input| match input.get("type").and_then(Value::as_str) {
-                Some("text") => {
-                    input
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .map(|text| Segment::Text {
-                            text: bounded_segment_text(text.to_string()),
-                            phase: None,
-                        })
-                }
-                Some(kind) => Some(Segment::Unknown {
-                    type_name: format!("userInput:{kind}"),
-                    summary: None,
-                }),
-                None => None,
-            })
+            .enumerate()
+            .filter_map(|(index, input)| map_user_input_segment(session, &id, index, input))
             .collect(),
         "agentMessage" => vec![Segment::Text {
             text: bounded_segment_text(
@@ -768,6 +782,101 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
         }],
     };
     Ok(segments)
+}
+
+fn map_user_input_segment(
+    session: &SessionRef,
+    item_id: &str,
+    index: usize,
+    input: &Value,
+) -> Option<Segment> {
+    match input.get("type").and_then(Value::as_str) {
+        Some("text") => input
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| Segment::Text {
+                text: bounded_segment_text(text.to_string()),
+                phase: None,
+            }),
+        Some("image" | "input_image") => {
+            let media_type = input
+                .get("url")
+                .or_else(|| input.get("image_url"))
+                .and_then(Value::as_str)
+                .and_then(data_url_media_type)
+                .unwrap_or("image/*")
+                .to_string();
+            Some(Segment::Attachment {
+                asset: AssetRef {
+                    session: session.clone(),
+                    native_id: user_input_asset_id(item_id, index),
+                },
+                media_type,
+                title: None,
+            })
+        }
+        Some(kind) => Some(Segment::Unknown {
+            type_name: format!("userInput:{kind}"),
+            summary: None,
+        }),
+        None => None,
+    }
+}
+
+fn user_input_asset_id(item_id: &str, input_index: usize) -> String {
+    format!("{item_id}{USER_INPUT_ASSET_MARKER}{input_index}")
+}
+
+fn parse_user_input_asset_id(asset_id: &str) -> Option<(String, usize)> {
+    let (item_id, input_index) = asset_id.rsplit_once(USER_INPUT_ASSET_MARKER)?;
+    Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
+fn data_url_media_type(url: &str) -> Option<&str> {
+    let metadata = url.strip_prefix("data:")?.split_once(',')?.0;
+    metadata
+        .strip_suffix(";base64")
+        .filter(|value| !value.is_empty())
+}
+
+fn decode_data_url_asset(url: &str) -> EngineResult<ResolvedAsset> {
+    let (metadata, encoded) = url
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(','))
+        .ok_or_else(|| EngineError::new(EngineErrorKind::Protocol, "Codex image URL is invalid"))?;
+    let media_type = metadata
+        .strip_suffix(";base64")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            EngineError::new(
+                EngineErrorKind::Protocol,
+                "Codex image URL is not base64 encoded",
+            )
+        })?;
+    if encoded.len()
+        > ASSET_MAX_BYTES
+            .saturating_mul(4)
+            .saturating_div(3)
+            .saturating_add(4)
+    {
+        return Err(EngineError::new(
+            EngineErrorKind::Protocol,
+            "Codex asset exceeds the transfer size limit",
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| EngineError::new(EngineErrorKind::Protocol, error.to_string()))?;
+    if bytes.len() > ASSET_MAX_BYTES {
+        return Err(EngineError::new(
+            EngineErrorKind::Protocol,
+            "Codex asset exceeds the transfer size limit",
+        ));
+    }
+    Ok(ResolvedAsset {
+        media_type: media_type.to_string(),
+        bytes,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -1154,6 +1263,26 @@ mod tests {
                 summary: None
             }]
         );
+        assert!(matches!(
+            map_item_segments(
+                &session,
+                &json!({
+                    "id": "user",
+                    "type": "userMessage",
+                    "content": [{
+                        "type": "image",
+                        "url": "data:image/png;base64,aW1hZ2U="
+                    }]
+                })
+            )
+            .unwrap()
+            .as_slice(),
+            [Segment::Attachment { asset, media_type, .. }]
+                if asset.native_id == "user:user-input:0" && media_type == "image/png"
+        ));
+        let asset = decode_data_url_asset("data:image/png;base64,aW1hZ2U=").unwrap();
+        assert_eq!(asset.media_type, "image/png");
+        assert_eq!(asset.bytes, b"image");
     }
 
     #[test]

@@ -115,6 +115,39 @@ describe('standard runtime timeline reducer', () => {
     const changed = reduceRuntimeTimeline([], envelope({ kind: 'capabilitiesChanged' }))
     expect(changed.refreshActions).toBe(true)
   })
+
+  it('scopes repeated item ids to their own turn', () => {
+    const previous = record({
+      id: 'shared-item',
+      turnId: 'turn-1',
+      segments: [{
+        kind: 'commandExecution',
+        id: 'shared-item',
+        command: 'first',
+        cwd: null,
+        output: null,
+        status: 'running',
+      }],
+    })
+    const current = reduceRuntimeTimeline([previous], envelope({
+      kind: 'itemDelta',
+      turnId: 'turn-2',
+      itemId: 'shared-item',
+      segment: { kind: 'text', text: 'second', phase: 'final' },
+    })).records
+
+    expect(current).toHaveLength(2)
+    expect(current.map(item => item.turnId)).toEqual(['turn-1', 'turn-2'])
+
+    const completed = reduceRuntimeTimeline(current, envelope({
+      kind: 'itemCompleted',
+      turnId: 'turn-2',
+      itemId: 'shared-item',
+      status: 'completed',
+    }))
+    expect(completed.changed).toBe(false)
+    expect(completed.records[0].segments[0]).toMatchObject({ status: 'running' })
+  })
 })
 
 describe('live history reconciliation', () => {
@@ -140,5 +173,20 @@ describe('live history reconciliation', () => {
     const reconciled = reconcileLiveRecords(persisted, [pendingUser, liveAssistant], completedTurns)
     expect(reconciled).toEqual([])
     expect(hasLiveTurn(reconciled, 'turn-1')).toBe(false)
+  })
+
+  it('does not reconcile an item against the same id from another turn', () => {
+    const live = record({
+      id: 'shared-item',
+      turnId: 'turn-2',
+      segments: [{ kind: 'text', text: 'new', phase: 'final' }],
+    })
+    const persisted = [record({
+      id: 'shared-item',
+      turnId: 'turn-1',
+      segments: [{ kind: 'text', text: 'old', phase: 'final' }],
+    })]
+
+    expect(reconcileLiveRecords(persisted, [live], new Set(['turn-2']))).toEqual([live])
   })
 })

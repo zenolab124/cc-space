@@ -12,7 +12,9 @@ import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
 import { hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline } from '@/engines/runtimeTimeline'
+import { isRenderableEngineSegment } from '@/engines/processGroups'
 import EngineConversationGroup from './EngineConversationGroup.vue'
+import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
 import SessionSurface from '@/components/session/SessionSurface.vue'
 import SessionComposer from '@/components/session/SessionComposer.vue'
@@ -29,6 +31,7 @@ import SessionInteractionPanel from '@/components/session/SessionInteractionPane
 import SessionApprovalCard, { type SessionApprovalOption } from '@/components/session/SessionApprovalCard.vue'
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
 import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
+import ConversationUserMessage from '@/components/session/ConversationUserMessage.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
 import SessionTokenBreakdown from '@/components/topbar/SessionTokenBreakdown.vue'
 import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
@@ -41,6 +44,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
 import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
+import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
@@ -123,6 +127,7 @@ interface QueuedRuntimeInput {
   id: string
   text: string
   imageCount: number
+  images: Array<{ id: string; dataUrl: string; mediaType: string }>
   input: RuntimeInputItem[]
 }
 
@@ -265,8 +270,10 @@ const historicalGroupKeys = computed(() => historicalGroups.value.map(group =>
 const historicalKeySnapshot = shallowRef<readonly string[]>([])
 const historicalKeyExtractor = shallowRef<(index: number) => string>(index => `missing:${index}`)
 const historicalGroupHeights = new Map<string, number>()
+const historicalVirtualBoxElement = ref<HTMLElement>()
 const lastGroupElement = ref<HTMLElement>()
 let lastGroupResizeObserver: ResizeObserver | null = null
+let stickyUpdateFrame = 0
 
 watch(historicalGroupKeys, (keys) => {
   const previous = historicalKeySnapshot.value
@@ -327,6 +334,129 @@ watch(lastGroupElement, (element) => {
 watch(() => props.session.id, () => {
   historicalGroupHeights.clear()
   void nextTick(() => conversationVirtualizer.value.measure())
+})
+const { stickyUserPromptEnabled } = useStickyUserPrompt()
+const stickyGroupIndex = ref(-1)
+
+function visibleGroupUserSegments(group: typeof conversationGroups.value[number]) {
+  return group.records
+    .filter(record => record.role === 'user')
+    .flatMap(record => record.segments)
+    .filter(segment => isRenderableEngineSegment(
+      segment,
+      enginePresentation.value.showThoughtProcess,
+    ))
+}
+
+function groupHasVisibleResponse(group: typeof conversationGroups.value[number]): boolean {
+  return group.records.some(record => record.role !== 'user'
+    && record.segments.some(segment => isRenderableEngineSegment(
+      segment,
+      enginePresentation.value.showThoughtProcess,
+    )))
+}
+
+function updateStickyGroup() {
+  if (!stickyUserPromptEnabled.value || !shouldVirtualize.value) {
+    stickyGroupIndex.value = -1
+    return
+  }
+  const viewport = viewportElement.value
+  const virtualBox = historicalVirtualBoxElement.value
+  if (!viewport || !virtualBox) {
+    stickyGroupIndex.value = -1
+    return
+  }
+  const viewportTop = viewport.getBoundingClientRect().top
+  const virtualTop = virtualBox.getBoundingClientRect().top - viewportTop + viewport.scrollTop
+  const probe = viewport.scrollTop - virtualTop + 40
+  if (probe <= 0) {
+    stickyGroupIndex.value = -1
+    return
+  }
+  if (probe >= conversationVirtualizer.value.getTotalSize()) {
+    stickyGroupIndex.value = conversationGroups.value.length - 1
+    return
+  }
+  let index = -1
+  for (const item of conversationVirtualizer.value.getVirtualItems()) {
+    if (item.start <= probe) index = item.index
+    else break
+  }
+  stickyGroupIndex.value = index
+}
+
+function scheduleStickyUpdate() {
+  if (stickyUpdateFrame) return
+  stickyUpdateFrame = window.requestAnimationFrame(() => {
+    stickyUpdateFrame = 0
+    updateStickyGroup()
+  })
+}
+
+const stickyDisplay = computed(() => {
+  if (!stickyUserPromptEnabled.value || !shouldVirtualize.value) return null
+  for (let index = stickyGroupIndex.value; index >= 0; index--) {
+    const group = conversationGroups.value[index]
+    if (group && visibleGroupUserSegments(group).length > 0 && groupHasVisibleResponse(group)) {
+      return { group, index }
+    }
+  }
+  return null
+})
+const stickyUserSegments = computed(() => stickyDisplay.value
+  ? visibleGroupUserSegments(stickyDisplay.value.group)
+  : [])
+function stickyDateTimeLabel(value: string | null | undefined): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString(locale.value, {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+const stickyTimeLabel = computed(() => {
+  const timestamp = stickyDisplay.value?.group.records.find(record => record.role === 'user')?.timestamp
+  return stickyDateTimeLabel(timestamp)
+})
+
+function stickyNeighborIndex(from: number, direction: 1 | -1): number {
+  for (let index = from; index >= 0 && index < conversationGroups.value.length; index += direction) {
+    const group = conversationGroups.value[index]
+    if (visibleGroupUserSegments(group).length > 0 && groupHasVisibleResponse(group)) return index
+  }
+  return -1
+}
+
+const stickyPreviousIndex = computed(() => stickyDisplay.value
+  ? stickyNeighborIndex(stickyDisplay.value.index - 1, -1)
+  : -1)
+const stickyNextIndex = computed(() => stickyDisplay.value
+  ? stickyNeighborIndex(stickyDisplay.value.index + 1, 1)
+  : -1)
+
+function scrollToConversationGroup(index: number) {
+  if (index < 0 || !shouldVirtualize.value) return
+  stopTimelineFollow()
+  if (index < historicalGroups.value.length) {
+    conversationVirtualizer.value.scrollToIndex(index, { align: 'start' })
+    return
+  }
+  const viewport = viewportElement.value
+  const virtualBox = historicalVirtualBoxElement.value
+  if (!viewport || !virtualBox) return
+  const virtualTop = virtualBox.getBoundingClientRect().top
+    - viewport.getBoundingClientRect().top
+    + viewport.scrollTop
+  viewport.scrollTop = virtualTop + conversationVirtualizer.value.getTotalSize()
+}
+
+watch([conversationGroups, stickyUserPromptEnabled, shouldVirtualize], () => {
+  void nextTick(scheduleStickyUpdate)
 })
 const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
@@ -421,6 +551,7 @@ function onTimelineWheel(event: WheelEvent) {
 }
 
 function onTimelineScroll(event: Event) {
+  scheduleStickyUpdate()
   const element = event.currentTarget as HTMLElement
   const nextScrollTop = element.scrollTop
   const delta = nextScrollTop - lastTimelineScrollTop
@@ -811,7 +942,10 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
     timestamp: new Date().toISOString(),
     segments: item.text ? [{ kind: 'text', text: item.text }] : [],
     usage: null,
-    sourceMeta: optimisticUserSourceMeta(),
+    sourceMeta: {
+      ...optimisticUserSourceMeta(),
+      optimisticImages: item.images,
+    },
   })
   try {
     await startTurnWithInput(reference.value, item.input, {
@@ -855,6 +989,11 @@ async function send() {
       id: `queued-input-${++queuedInputSequence}`,
       text,
       imageCount: draftImages.length,
+      images: draftImages.map(image => ({
+        id: image.id,
+        dataUrl: image.dataUrl,
+        mediaType: image.mime,
+      })),
       input: inputItems,
     }
 
@@ -1160,6 +1299,8 @@ onUnmounted(() => {
   timelineResizeObserver = null
   lastGroupResizeObserver?.disconnect()
   lastGroupResizeObserver = null
+  if (stickyUpdateFrame) window.cancelAnimationFrame(stickyUpdateFrame)
+  stickyUpdateFrame = 0
   unlistenSnapshot?.()
   unlistenEvent?.()
   unlistenSourceChange?.()
@@ -1259,11 +1400,44 @@ onUnmounted(() => {
     </template>
 
     <SessionViewport :scroll-ref="bindViewport" @wheel="onTimelineWheel" @scroll="onTimelineScroll">
+      <div
+        v-if="stickyDisplay"
+        class="engine-sticky-user-overlay"
+        :title="t('session.stickyJumpHint')"
+        @click="scrollToConversationGroup(stickyDisplay.index)"
+      >
+        <ConversationUserMessage :time-label="stickyTimeLabel">
+          <EngineSegmentBlock
+            v-for="(segment, index) in stickyUserSegments"
+            :key="index"
+            :segment="segment"
+          />
+          <template #actions>
+            <span class="flex items-center gap-0.5">
+              <button
+                type="button"
+                class="engine-sticky-nav-btn"
+                :disabled="stickyPreviousIndex < 0"
+                :title="t('session.stickyPrev')"
+                @click.stop="scrollToConversationGroup(stickyPreviousIndex)"
+              ><span class="i-carbon-chevron-up h-3.5 w-3.5" /></button>
+              <button
+                type="button"
+                class="engine-sticky-nav-btn"
+                :disabled="stickyNextIndex < 0"
+                :title="t('session.stickyNext')"
+                @click.stop="scrollToConversationGroup(stickyNextIndex)"
+              ><span class="i-carbon-chevron-down h-3.5 w-3.5" /></button>
+            </span>
+          </template>
+        </ConversationUserMessage>
+      </div>
       <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
       <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
       <div v-else ref="timelineContentElement" class="pb-2">
         <div
           v-if="shouldVirtualize"
+          ref="historicalVirtualBoxElement"
           :style="{ height: `${conversationVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }"
         >
           <div
@@ -1287,6 +1461,7 @@ onUnmounted(() => {
               :show-thought-process="enginePresentation.showThoughtProcess"
               :day-label="historicalGroups[virtualItem.index].dayLabel"
               :streaming="isTurnStreaming(historicalGroups[virtualItem.index].turnId)"
+              :hide-user="stickyDisplay?.index === virtualItem.index"
             />
           </div>
         </div>
@@ -1318,6 +1493,7 @@ onUnmounted(() => {
             :show-thought-process="enginePresentation.showThoughtProcess"
             :day-label="lastConversationGroup.dayLabel"
             :streaming="isTurnStreaming(lastConversationGroup.turnId)"
+            :hide-user="shouldVirtualize && stickyDisplay?.index === conversationGroups.length - 1"
           />
         </div>
       </div>
@@ -1421,3 +1597,31 @@ onUnmounted(() => {
     </template>
   </SessionSurface>
 </template>
+
+<style scoped>
+.engine-sticky-user-overlay {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: 0;
+  overflow: visible;
+  cursor: pointer;
+}
+.engine-sticky-nav-btn {
+  display: inline-flex;
+  padding: 1px;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+.engine-sticky-nav-btn:hover:not(:disabled) {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.engine-sticky-nav-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+</style>

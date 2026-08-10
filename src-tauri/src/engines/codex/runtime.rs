@@ -271,6 +271,28 @@ impl CodexRuntime {
                     }
                 };
                 self.emit(&thread_id, lifecycle);
+                if method == "item/started"
+                    && item.get("type").and_then(Value::as_str) == Some("commandExecution")
+                {
+                    self.emit(
+                        &thread_id,
+                        NormalizedRuntimeEvent::ItemDelta {
+                            turn_id: turn_id.clone(),
+                            item_id: item_id.clone(),
+                            segment: Segment::CommandExecution {
+                                id: item_id.clone(),
+                                command: item
+                                    .get("command")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                cwd: item.get("cwd").and_then(Value::as_str).map(String::from),
+                                output: None,
+                                status: ItemStatus::Running,
+                            },
+                        },
+                    );
+                }
                 if method != "item/completed"
                     || item.get("type").and_then(Value::as_str) == Some("userMessage")
                 {
@@ -1079,6 +1101,65 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .is_empty());
+    }
+
+    #[test]
+    fn command_start_preserves_metadata_before_output_deltas() {
+        let runtime = CodexRuntime::new(CodexSupervisor::new()).unwrap();
+        let (event_tx, event_rx) = mpsc::channel();
+        runtime
+            .subscribe_events(Arc::new(move |event| {
+                let _ = event_tx.send(event);
+            }))
+            .unwrap();
+
+        runtime.handle_notification(
+            "item/started",
+            json!({
+                "threadId": "thread",
+                "turnId": "turn",
+                "item": {
+                    "id": "command",
+                    "type": "commandExecution",
+                    "command": "pnpm test",
+                    "cwd": "/workspace",
+                    "status": "inProgress"
+                }
+            }),
+        );
+        runtime.handle_notification(
+            "item/commandExecution/outputDelta",
+            json!({
+                "threadId": "thread",
+                "turnId": "turn",
+                "itemId": "command",
+                "delta": "passed"
+            }),
+        );
+
+        let events: Vec<_> = event_rx.try_iter().map(|event| event.event).collect();
+        assert!(matches!(
+            &events[1],
+            NormalizedRuntimeEvent::ItemDelta {
+                segment: Segment::CommandExecution {
+                    command,
+                    cwd: Some(cwd),
+                    output: None,
+                    ..
+                },
+                ..
+            } if command == "pnpm test" && cwd == "/workspace"
+        ));
+        assert!(matches!(
+            &events[2],
+            NormalizedRuntimeEvent::ItemDelta {
+                segment: Segment::CommandExecution {
+                    output: Some(output),
+                    ..
+                },
+                ..
+            } if output == "passed"
+        ));
     }
 
     #[test]

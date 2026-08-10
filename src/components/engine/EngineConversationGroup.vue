@@ -7,7 +7,7 @@ import type { AssistantResponseMeta } from '@/utils/assistantResponse'
 import { engineResponseMeta } from '@/engines/presentation'
 import {
   buildEngineResponseBlocks,
-  isEngineThoughtSegment,
+  isRenderableEngineSegment,
   projectEngineProcessEntries,
   type EngineProcessProjection,
   type EngineResponseBlock,
@@ -29,24 +29,31 @@ const props = defineProps<{
   showThoughtProcess?: boolean
   dayLabel?: string | null
   streaming?: boolean
+  hideUser?: boolean
 }>()
 
 const { locale } = useI18n()
 
 function isRenderable(segment: EngineSegment): boolean {
-  if (props.showThoughtProcess === false && isEngineThoughtSegment(segment)) return false
-  if (segment.kind === 'unknown') return !!segment.summary?.trim()
-  if (segment.kind === 'reasoning') {
-    return segment.visibility === 'redacted' || !!segment.text.trim()
-  }
-  if (segment.kind === 'text') return !!segment.text.trim()
-  return true
+  return isRenderableEngineSegment(segment, props.showThoughtProcess !== false)
 }
 
 const userSegments = computed(() => props.records
   .filter(record => record.role === 'user')
   .flatMap(record => record.segments)
   .filter(isRenderable))
+const optimisticImages = computed(() => props.records
+  .filter(record => record.role === 'user')
+  .flatMap(record => Array.isArray(record.sourceMeta.optimisticImages)
+    ? record.sourceMeta.optimisticImages
+    : [])
+  .filter((image): image is { id: string; dataUrl: string; mediaType: string } => {
+    if (!image || typeof image !== 'object') return false
+    const candidate = image as Record<string, unknown>
+    return typeof candidate.id === 'string'
+      && typeof candidate.dataUrl === 'string'
+      && typeof candidate.mediaType === 'string'
+  }))
 
 const responseRecords = computed(() => props.records
   .filter(record => record.role !== 'user')
@@ -132,9 +139,9 @@ const turnView = computed<ConversationTurnView>(() => ({
   dayLabel: props.dayLabel ?? null,
   timeLabel: timeLabel.value || null,
   user: {
-    visible: userSegments.value.length > 0,
+    visible: userSegments.value.length > 0 || optimisticImages.value.length > 0,
     sticky: responseRecords.value.length > 0,
-    hidden: false,
+    hidden: props.hideUser === true,
   },
   response: {
     visible: responseRecords.value.length > 0,
@@ -151,6 +158,15 @@ const turnView = computed<ConversationTurnView>(() => ({
   <ConversationTurn :turn="turnView">
     <template #user>
       <EngineSegmentBlock v-for="(segment, index) in userSegments" :key="index" :segment="segment" />
+      <div v-if="optimisticImages.length" class="mt-2 flex flex-wrap gap-2">
+        <img
+          v-for="image in optimisticImages"
+          :key="image.id"
+          :src="image.dataUrl"
+          :alt="image.mediaType"
+          class="max-h-48 max-w-full rounded border border-border object-contain shadow-paper"
+        />
+      </div>
     </template>
     <template #response>
       <template v-for="block in responseBlocks" :key="block.key">

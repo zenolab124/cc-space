@@ -2,6 +2,8 @@ import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { listEngines, runtimeSnapshots, segmentText } from './client'
 import { sessionUiId } from './integration'
+import { resolveEnginePresentation } from './presentation'
+import { isEngineThoughtSegment } from './processGroups'
 import type {
   EngineSegment,
   RuntimeEventEnvelope,
@@ -76,6 +78,11 @@ function appendTail(sessionId: string, segment: EngineSegment) {
   updateMap(tails, sessionId, normalized)
 }
 
+export function shouldIncludeRuntimeTailSegment(engineId: string, segment: EngineSegment): boolean {
+  return resolveEnginePresentation(engineId, null).showThoughtProcess
+    || !isEngineThoughtSegment(segment)
+}
+
 function applyEvent(envelope: RuntimeEventEnvelope) {
   const sessionId = sessionUiId(envelope.session)
   const event = envelope.event
@@ -83,7 +90,9 @@ function applyEvent(envelope: RuntimeEventEnvelope) {
     updateMap(startedAt, sessionId, Date.now())
     updateMap(tails, sessionId, [])
   } else if (event.kind === 'itemDelta' && event.segment) {
-    appendTail(sessionId, event.segment as EngineSegment)
+    if (shouldIncludeRuntimeTailSegment(envelope.session.engine.engineId, event.segment)) {
+      appendTail(sessionId, event.segment)
+    }
   } else if (event.kind === 'runtimeError') {
     updateMap(tails, sessionId, [{ kind: 'error', text: String(event.message ?? '') }])
   }

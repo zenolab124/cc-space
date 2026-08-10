@@ -63,8 +63,13 @@ function appendSegment(record: ConversationRecord, segment: EngineSegment): void
   record.segments.push({ ...segment })
 }
 
-function completeItem(records: ConversationRecord[], itemId: string, status: EngineItemStatus): boolean {
-  const record = records.find(item => item.id === itemId)
+function completeItem(
+  records: ConversationRecord[],
+  turnId: string,
+  itemId: string,
+  status: EngineItemStatus,
+): boolean {
+  const record = records.find(item => item.turnId === turnId && item.id === itemId)
   if (!record) return false
   let changed = false
   for (const segment of record.segments) {
@@ -87,7 +92,7 @@ function ensureDeltaRecord(
   itemId: string,
   sourceMeta: Record<string, unknown>,
 ): ConversationRecord {
-  let record = records.find(item => item.id === itemId)
+  let record = records.find(item => item.turnId === turnId && item.id === itemId)
   if (record) return record
   record = {
     id: itemId,
@@ -131,7 +136,7 @@ export function reduceRuntimeTimeline(
       break
     }
     case 'itemCompleted':
-      changed = completeItem(records, event.itemId, event.status)
+      changed = completeItem(records, event.turnId, event.itemId, event.status)
       break
     case 'turnCompleted':
       changed = bindLatestOptimisticUser(records, event.turnId)
@@ -178,7 +183,7 @@ export function reconcileLiveRecords(
   live: ConversationRecord[],
   completedTurnIds: ReadonlySet<string>,
 ): ConversationRecord[] {
-  const persistedIds = new Set(persisted.map(record => record.id))
+  const persistedIds = new Set(persisted.map(record => `${record.turnId ?? ''}\u001f${record.id}`))
   const persistedUsers = new Map<string, Set<string>>()
   for (const record of persisted) {
     if (record.role !== 'user' || !record.turnId) continue
@@ -189,7 +194,7 @@ export function reconcileLiveRecords(
 
   return live.filter(record => {
     if (!record.turnId || !completedTurnIds.has(record.turnId)) return true
-    if (persistedIds.has(record.id)) return false
+    if (persistedIds.has(`${record.turnId}\u001f${record.id}`)) return false
     if (record.role !== 'user' || record.sourceMeta[OPTIMISTIC_RECORD] !== true) return true
     return !persistedUsers.get(record.turnId)?.has(textOf(record))
   })

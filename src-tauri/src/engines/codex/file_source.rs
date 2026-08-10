@@ -455,6 +455,10 @@ fn normalized_content(value: &Value) -> Value {
                         "type": "text",
                         "text": item.get("text").and_then(Value::as_str).unwrap_or_default()
                     })),
+                    "image" | "input_image" => Some(json!({
+                        "type": "image",
+                        "url": item.get("url").cloned().or_else(|| item.get("image_url").cloned()).unwrap_or(Value::Null)
+                    })),
                     other => Some(json!({"type": other})),
                 }
             })
@@ -588,6 +592,20 @@ fn bounded_preview(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalized_content_preserves_user_image_data() {
+        assert_eq!(
+            normalized_content(&json!([{
+                "type": "input_image",
+                "image_url": "data:image/png;base64,aW1hZ2U="
+            }])),
+            json!([{
+                "type": "image",
+                "url": "data:image/png;base64,aW1hZ2U="
+            }])
+        );
+    }
 
     #[test]
     fn reads_local_codex_jsonl_into_app_server_like_thread() {

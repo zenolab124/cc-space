@@ -17,6 +17,19 @@ export function isEngineThoughtSegment(segment: EngineSegment): boolean {
     || (segment.kind === 'text' && segment.phase === 'progress')
 }
 
+export function isRenderableEngineSegment(
+  segment: EngineSegment,
+  showThoughtProcess = true,
+): boolean {
+  if (!showThoughtProcess && isEngineThoughtSegment(segment)) return false
+  if (segment.kind === 'unknown') return !!segment.summary?.trim()
+  if (segment.kind === 'reasoning') {
+    return segment.visibility === 'redacted' || !!segment.text.trim()
+  }
+  if (segment.kind === 'text') return !!segment.text.trim()
+  return true
+}
+
 export function isEngineProcessSegment(segment: EngineSegment): boolean {
   return [
     'commandExecution',
