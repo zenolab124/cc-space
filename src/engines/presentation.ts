@@ -9,7 +9,6 @@ export interface ConversationTurnView {
   timeLabel: string | null
   user: {
     visible: boolean
-    sticky: boolean
   }
   response: {
     visible: boolean

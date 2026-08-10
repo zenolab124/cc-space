@@ -29,7 +29,6 @@ const props = defineProps<{
   showThoughtProcess?: boolean
   dayLabel?: string | null
   streaming?: boolean
-  stickyUser?: boolean
 }>()
 
 const { locale } = useI18n()
@@ -140,7 +139,6 @@ const turnView = computed<ConversationTurnView>(() => ({
   timeLabel: timeLabel.value || null,
   user: {
     visible: userSegments.value.length > 0 || optimisticImages.value.length > 0,
-    sticky: props.stickyUser === true && responseRecords.value.length > 0,
   },
   response: {
     visible: responseRecords.value.length > 0,

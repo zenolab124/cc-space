@@ -222,6 +222,7 @@ describe('unified session surface architecture', () => {
     expect(controller).toContain('v-if="lastConversationGroup"')
     expect(controller).toContain('class="engine-sticky-user-overlay"')
     expect(controller).not.toContain(':hide-user=')
+    expect(controller).toContain(':data-conversation-index="conversationGroups.length - 1"')
     const virtualHistory = controller.slice(
       controller.indexOf('v-for="virtualItem in conversationVirtualizer.getVirtualItems()"'),
       controller.indexOf('<div v-else class="space-y-4">'),
@@ -232,11 +233,7 @@ describe('unified session surface architecture', () => {
       controller.indexOf('<SessionTypingIndicator'),
     )
     expect(activeTail).not.toContain('sticky-user')
-    const lastGroupHandoff = controller.slice(
-      controller.indexOf('if (probe >= conversationVirtualizer.value.getTotalSize())'),
-      controller.indexOf('let index = -1'),
-    )
-    expect(lastGroupHandoff).toContain('stickyGroupIndex.value = -1')
+    expect(controller).toContain('probe >= engineElementScrollTop(lastElement, viewport, viewportTop)')
     expect(controller).toContain('groupConversationRecords(allRecords.value)')
     expect(asyncPanel).toContain('groupConversationRecords(records.value)')
   })

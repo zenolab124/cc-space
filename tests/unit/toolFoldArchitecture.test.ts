@@ -16,7 +16,7 @@ describe('工具组单层折叠', () => {
     expect(items).toContain('nested?: boolean')
     expect(items).toContain(':foldable="!props.nested"')
     expect(item).toContain('foldable?: boolean')
-    expect(item).toContain('v-if="!foldable || expanded"')
+    expect(item).toContain('v-if="!orchestration && (!foldable || expanded)"')
   })
 })
 

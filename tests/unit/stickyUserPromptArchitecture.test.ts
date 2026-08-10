@@ -15,23 +15,26 @@ describe('用户提问吸顶开关', () => {
     expect(composable).toContain('writeSetting(SETTING_KEY, value)')
   })
 
-  it('同时控制普通 sticky、虚拟 overlay 和流式 pending 消息', () => {
+  it('只控制独立悬浮层，不改变用户消息正文的文档流定位', () => {
     const turn = source('../../src/components/session/ConversationTurn.vue')
     const detail = source('../../src/components/SessionDetail.vue')
     const standardDetail = source('../../src/components/engine/EngineSessionDetail.vue')
 
-    expect(turn).toContain('turn.user.sticky && stickyUserPromptEnabled')
-    expect(turn).not.toContain('conversation-user-ghost')
+    const userPosition = turn.indexOf('<div v-if="turn.user.visible">')
+    const responsePosition = turn.indexOf('<AssistantResponseFrame')
+    expect(userPosition).toBeGreaterThan(-1)
+    expect(responsePosition).toBeGreaterThan(userPosition)
+    expect(turn).not.toContain('position: sticky')
+    expect(turn).not.toContain('stickyUserPromptEnabled')
     expect(detail).toContain('if (!stickyUserPromptEnabled.value)')
-    expect(detail).toContain('stickyUserPromptEnabled && stickyGroup?.user')
-    expect(detail).toContain("'user-msg-sticky': stickyUserPromptEnabled")
+    expect(detail).toContain('stickyUserPromptEnabled && (stickyPending || stickyGroup?.user)')
+    expect(detail).toContain('ref="pendingStickyRef"')
+    expect(detail).not.toContain('user-msg-sticky')
     expect(detail).not.toContain(':hide-user=')
     expect(standardDetail).not.toContain(':hide-user=')
-    const nativeVirtualHistory = detail.slice(
-      detail.indexOf('v-for="vitem in messageVirtualizer.getVirtualItems()"'),
-      detail.indexOf('<!-- shouldVirtualize=false'),
-    )
-    expect(nativeVirtualHistory).not.toContain('sticky-user')
+    expect(detail).not.toMatch(/\n\s+sticky-user(?:\s|>)/)
+    expect(standardDetail).not.toMatch(/\n\s+sticky-user(?:\s|>)/)
+    expect(standardDetail).toContain(':data-conversation-index="conversationGroups.length - 1"')
   })
 
   it('在外观设置中提供可持久化的全局开关', () => {

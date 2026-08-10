@@ -29,8 +29,6 @@ const props = defineProps<{
   gi: number
   dayLabel?: string | null
   timeLabel?: string | null
-  /** 仅历史轮次允许吸顶；当前最后一轮必须留在普通文档流。 */
-  stickyUser?: boolean
   responseMeta?: AssistantResponseMeta | null
   channelMarksByUuid: Map<string | null, ChannelMark[]>
   modelSwitchName: (record: any) => string | null
@@ -60,7 +58,6 @@ const turnView = computed<ConversationTurnView>(() => ({
   timeLabel: props.timeLabel ?? null,
   user: {
     visible: normalUserVisible.value,
-    sticky: props.stickyUser === true && hasAssistantResponses.value,
   },
   response: {
     visible: hasAssistantResponses.value,

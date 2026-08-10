@@ -366,6 +366,10 @@ watch(() => props.session.id, () => {
 const { stickyUserPromptEnabled } = useStickyUserPrompt()
 const stickyGroupIndex = ref(-1)
 
+function engineElementScrollTop(element: HTMLElement, viewport: HTMLElement, viewportTop: number): number {
+  return element.getBoundingClientRect().top - viewportTop + viewport.scrollTop
+}
+
 function visibleGroupUserSegments(group: typeof conversationGroups.value[number]) {
   return group.records
     .filter(record => record.role === 'user')
@@ -376,40 +380,52 @@ function visibleGroupUserSegments(group: typeof conversationGroups.value[number]
     ))
 }
 
-function groupHasVisibleResponse(group: typeof conversationGroups.value[number]): boolean {
-  return group.records.some(record => record.role !== 'user'
-    && record.segments.some(segment => isRenderableEngineSegment(
-      segment,
-      enginePresentation.value.showThoughtProcess,
-    )))
-}
-
 function updateStickyGroup() {
-  if (!stickyUserPromptEnabled.value || !shouldVirtualize.value) {
+  if (!stickyUserPromptEnabled.value) {
     stickyGroupIndex.value = -1
     return
   }
   const viewport = viewportElement.value
-  const virtualBox = historicalVirtualBoxElement.value
-  if (!viewport || !virtualBox) {
+  if (!viewport) {
     stickyGroupIndex.value = -1
     return
   }
   const viewportTop = viewport.getBoundingClientRect().top
-  const virtualTop = virtualBox.getBoundingClientRect().top - viewportTop + viewport.scrollTop
-  const probe = viewport.scrollTop - virtualTop + 40
-  if (probe <= 0) {
+  const probe = viewport.scrollTop + 40
+
+  if (!shouldVirtualize.value) {
+    let index = -1
+    for (const element of timelineContentElement.value?.querySelectorAll<HTMLElement>('[data-conversation-index]') ?? []) {
+      const candidate = Number(element.dataset.conversationIndex)
+      if (Number.isInteger(candidate) && engineElementScrollTop(element, viewport, viewportTop) <= probe) {
+        index = candidate
+      }
+    }
+    stickyGroupIndex.value = index
+    return
+  }
+
+  const lastIndex = conversationGroups.value.length - 1
+  const lastElement = timelineContentElement.value?.querySelector<HTMLElement>(`[data-conversation-index="${lastIndex}"]`)
+  if (lastElement && probe >= engineElementScrollTop(lastElement, viewport, viewportTop)) {
+    stickyGroupIndex.value = lastIndex
+    return
+  }
+
+  const virtualBox = historicalVirtualBoxElement.value
+  if (!virtualBox) {
     stickyGroupIndex.value = -1
     return
   }
-  if (probe >= conversationVirtualizer.value.getTotalSize()) {
-    // 最后一轮不受虚拟项 transform 影响，让正文节点继续承担原生 sticky。
+  const virtualTop = engineElementScrollTop(virtualBox, viewport, viewportTop)
+  const virtualProbe = viewport.scrollTop - virtualTop + 40
+  if (virtualProbe <= 0) {
     stickyGroupIndex.value = -1
     return
   }
   let index = -1
   for (const item of conversationVirtualizer.value.getVirtualItems()) {
-    if (item.start <= probe) index = item.index
+    if (item.start <= virtualProbe) index = item.index
     else break
   }
   stickyGroupIndex.value = index
@@ -424,10 +440,10 @@ function scheduleStickyUpdate() {
 }
 
 const stickyDisplay = computed(() => {
-  if (!stickyUserPromptEnabled.value || !shouldVirtualize.value) return null
+  if (!stickyUserPromptEnabled.value) return null
   for (let index = stickyGroupIndex.value; index >= 0; index--) {
     const group = conversationGroups.value[index]
-    if (group && visibleGroupUserSegments(group).length > 0 && groupHasVisibleResponse(group)) {
+    if (group && visibleGroupUserSegments(group).length > 0) {
       return { group, index }
     }
   }
@@ -456,7 +472,7 @@ const stickyTimeLabel = computed(() => {
 function stickyNeighborIndex(from: number, direction: 1 | -1): number {
   for (let index = from; index >= 0 && index < conversationGroups.value.length; index += direction) {
     const group = conversationGroups.value[index]
-    if (visibleGroupUserSegments(group).length > 0 && groupHasVisibleResponse(group)) return index
+    if (visibleGroupUserSegments(group).length > 0) return index
   }
   return -1
 }
@@ -469,13 +485,19 @@ const stickyNextIndex = computed(() => stickyDisplay.value
   : -1)
 
 function scrollToConversationGroup(index: number) {
-  if (index < 0 || !shouldVirtualize.value) return
+  if (index < 0) return
   stopTimelineFollow()
+  const viewport = viewportElement.value
+  if (!shouldVirtualize.value) {
+    const element = timelineContentElement.value?.querySelector<HTMLElement>(`[data-conversation-index="${index}"]`)
+    if (!viewport || !element) return
+    viewport.scrollTop = engineElementScrollTop(element, viewport, viewport.getBoundingClientRect().top)
+    return
+  }
   if (index < historicalGroups.value.length) {
     conversationVirtualizer.value.scrollToIndex(index, { align: 'start' })
     return
   }
-  const viewport = viewportElement.value
   const virtualBox = historicalVirtualBoxElement.value
   if (!viewport || !virtualBox) return
   const virtualTop = virtualBox.getBoundingClientRect().top
@@ -1490,6 +1512,7 @@ onUnmounted(() => {
             :key="String(virtualItem.key)"
             :ref="element => element && conversationVirtualizer.measureElement(element as Element)"
             :data-index="virtualItem.index"
+            :data-conversation-index="virtualItem.index"
             :style="{
               position: 'absolute',
               top: 0,
@@ -1510,24 +1533,28 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else class="space-y-4">
-          <EngineConversationGroup
-            v-for="group in historicalGroups"
+          <div
+            v-for="(group, index) in historicalGroups"
             :key="`${session.id}:${group.key}`"
-            :records="group.records"
-            :engine-name="enginePresentation.displayName"
-            :model="timelineModel"
-            :accent="engineAccent"
-            :show-thought-process="enginePresentation.showThoughtProcess"
-            :day-label="group.dayLabel"
-            :streaming="isTurnStreaming(group.turnId)"
-            sticky-user
-          />
+            :data-conversation-index="index"
+          >
+            <EngineConversationGroup
+              :records="group.records"
+              :engine-name="enginePresentation.displayName"
+              :model="timelineModel"
+              :accent="engineAccent"
+              :show-thought-process="enginePresentation.showThoughtProcess"
+              :day-label="group.dayLabel"
+              :streaming="isTurnStreaming(group.turnId)"
+            />
+          </div>
         </div>
         <div
           v-if="lastConversationGroup"
           :key="`${session.id}:${lastConversationGroup.key}`"
           :class="historicalGroups.length > 0 ? 'mt-4' : ''"
           :data-group-key="`${session.id}:${lastConversationGroup.key}`"
+          :data-conversation-index="conversationGroups.length - 1"
           ref="lastGroupElement"
         >
           <EngineConversationGroup
