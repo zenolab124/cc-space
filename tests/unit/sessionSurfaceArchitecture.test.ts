@@ -81,6 +81,8 @@ describe('unified session surface architecture', () => {
       standardController.indexOf('<SessionContentState v-if="error"'),
     )
     expect(standardTimeline).toContain('<SessionTypingIndicator')
+    expect(nativeController).not.toContain(':hide-user="shouldVirtualize && stickyDisplay?.index === lastGroupIndex"')
+    expect(standardController).not.toContain(':hide-user="shouldVirtualize && stickyDisplay?.index === conversationGroups.length - 1"')
     expect(sharedTyping).toContain('session-typing-dot')
     expect(nativeController).toContain('<SessionContentState')
     expect(standardController).toContain('<SessionContentState')
@@ -197,6 +199,11 @@ describe('unified session surface architecture', () => {
     expect(controller).toContain('v-if="lastConversationGroup"')
     expect(controller).toContain('class="engine-sticky-user-overlay"')
     expect(controller).toContain(':hide-user="stickyDisplay?.index === virtualItem.index"')
+    const lastGroupHandoff = controller.slice(
+      controller.indexOf('if (probe >= conversationVirtualizer.value.getTotalSize())'),
+      controller.indexOf('let index = -1'),
+    )
+    expect(lastGroupHandoff).toContain('stickyGroupIndex.value = -1')
     expect(controller).toContain('groupConversationRecords(allRecords.value)')
     expect(asyncPanel).toContain('groupConversationRecords(records.value)')
   })

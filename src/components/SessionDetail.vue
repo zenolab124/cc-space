@@ -2187,8 +2187,9 @@ function updateStickyGroup() {
   // 消除 scrollToIndex 落点 ±几 px 时选中前一组的边界抖动
   const probe = rel + 40
   if (probe >= messageVirtualizer.value.getTotalSize()) {
-    // 视口顶进入末组内容区:自绘层统一接管(末组合格吸末组,否则回溯上一条用户指令)
-    stickyGroupIndex.value = messageGroups.value.length - 1
+    // 末组在虚拟容器外，保留正文原件并交给原生 sticky；自绘克隆只补偿
+    // transform 虚拟项，不能把刚发送的用户消息从文档流里隐藏掉。
+    stickyGroupIndex.value = -1
     return
   }
   let idx = -1
@@ -3263,7 +3264,6 @@ async function onReload() {
           <MessageGroup
             :group="lastGroup"
             :gi="lastGroupIndex"
-            :hide-user="shouldVirtualize && stickyDisplay?.index === lastGroupIndex"
             :day-label="dayDividers[lastGroupIndex]"
             :time-label="groupTimeLabels[lastGroupIndex]"
             :response-meta="groupResponseMetas[lastGroupIndex]"

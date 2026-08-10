@@ -375,7 +375,8 @@ function updateStickyGroup() {
     return
   }
   if (probe >= conversationVirtualizer.value.getTotalSize()) {
-    stickyGroupIndex.value = conversationGroups.value.length - 1
+    // 最后一轮不受虚拟项 transform 影响，让正文节点继续承担原生 sticky。
+    stickyGroupIndex.value = -1
     return
   }
   let index = -1
@@ -1493,7 +1494,6 @@ onUnmounted(() => {
             :show-thought-process="enginePresentation.showThoughtProcess"
             :day-label="lastConversationGroup.dayLabel"
             :streaming="isTurnStreaming(lastConversationGroup.turnId)"
-            :hide-user="shouldVirtualize && stickyDisplay?.index === conversationGroups.length - 1"
           />
         </div>
         <SessionTypingIndicator :active="typingActive" />
