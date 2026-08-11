@@ -97,4 +97,16 @@ describe('macOS background service recovery', () => {
     expect(widgetEntitlements).toContain('com.apple.security.app-sandbox')
     expect(widgetEntitlements).not.toContain('temporary-exception')
   })
+
+  it('signs the managed Widget updater with the parent application identity', () => {
+    const build = source('../../src-widget/build.sh')
+    const updaterBranch = build.slice(
+      build.indexOf('elif [ "$NAME" = "widget-updater" ]'),
+      build.indexOf('else', build.indexOf('elif [ "$NAME" = "widget-updater" ]')),
+    )
+
+    expect(build).toContain('APP_IDENTIFIER="io.github.zenolab124.monet"')
+    expect(updaterBranch).toContain('--identifier "$APP_IDENTIFIER" "$BIN"')
+    expect(updaterBranch).not.toContain('--identifier "$APP_IDENTIFIER.$NAME"')
+  })
 })

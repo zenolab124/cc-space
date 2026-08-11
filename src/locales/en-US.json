@@ -1333,7 +1333,8 @@
       "failedAndPermission": "{count} failed · Waiting for permission",
       "background": "Background",
       "interrupted": "Interrupted",
-      "done": "Done"
+      "done": "Done",
+      "imageCount": "{count} images"
     }
   },
   "image": {

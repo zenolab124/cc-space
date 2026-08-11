@@ -1333,7 +1333,8 @@
       "failedAndPermission": "{count} 项失败 · 等待授权",
       "background": "后台运行",
       "interrupted": "已中断",
-      "done": "完成"
+      "done": "完成",
+      "imageCount": "{count} 张图片"
     }
   },
   "image": {

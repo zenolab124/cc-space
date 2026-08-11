@@ -7,6 +7,7 @@ cd "$SCRIPT_DIR"
 
 # --- 参数 ---
 SIGN_ID="${SIGN_ID:-Monet Signing}"
+APP_IDENTIFIER="io.github.zenolab124.monet"
 SIGNING_KEYCHAIN="$HOME/Library/Keychains/monet-signing.keychain-db"
 SIGNING_PASS_FILE="$HOME/.monet/signing/keychain-password"
 CONFIG="${1:-Release}"
@@ -71,10 +72,15 @@ for BIN in "$APP_BUNDLE/Contents/MacOS/"*; do
     if [ "$NAME" = "monet-routine-runner" ]; then
         codesign "${CODESIGN_ARGS[@]}" \
             --entitlements ../src-tauri/runner-entitlements.plist \
-            --identifier "io.github.zenolab124.monet.$NAME" "$BIN"
+            --identifier "$APP_IDENTIFIER.$NAME" "$BIN"
+    elif [ "$NAME" = "widget-updater" ]; then
+        # SMAppService 将 LaunchAgent 的受保护数据访问归属到主应用。
+        # updater 必须与主应用共享稳定 DR，否则每次周期刷新都会重新请求权限。
+        codesign "${CODESIGN_ARGS[@]}" \
+            --identifier "$APP_IDENTIFIER" "$BIN"
     else
         codesign "${CODESIGN_ARGS[@]}" \
-            --identifier "io.github.zenolab124.monet.$NAME" "$BIN"
+            --identifier "$APP_IDENTIFIER.$NAME" "$BIN"
     fi
 done
 # Helper App（独立 menubar 进程）：嵌套 bundle 必须先签内层再签外层

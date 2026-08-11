@@ -9,8 +9,8 @@
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco,
     Consolas, monospace;
   --message-block-gap: 6px;
-  --tool-row-height: 24px;
-  --tool-row-line-height: 16px;
+  --tool-row-height: 20px;
+  --tool-row-line-height: 15px;
 }
 
 /* === 应用基础样式（组件层只消费 token，全局只在此定义一次）=== */

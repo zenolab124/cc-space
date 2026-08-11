@@ -42,6 +42,8 @@ const resultImages = computed(() => {
   if (!content || typeof content === 'string') return []
   return content.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image')
 })
+const imageCount = computed(() => resultImages.value.length
+  + (result.value?.attachments?.filter(attachment => attachment.mediaType.startsWith('image/')).length ?? 0))
 const asyncState = computed<AsyncToolState | null>(() => context?.asyncStates?.value.get(props.tool.id) ?? null)
 const waitingPermission = computed(() => {
   const request = context?.permissionRequest?.value
@@ -127,32 +129,56 @@ watch(() => foldState.requestedToolId.value, requested => {
       />
       <span :class="[iconClass, 'tool-fold-icon']" />
       <span class="tool-fold-main">
-        <b>{{ title }}</b>
-        <span v-if="!orchestration && toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
-      </span>
-      <span
-        v-if="stateLabel"
-        class="tool-fold-state"
-        :class="`is-${state}`"
-      >
-        {{ stateLabel }}
-        <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
+        <span class="tool-fold-title">
+          <b>{{ title }}</b>
+          <span v-if="!orchestration && toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
+        </span>
+        <span
+          v-if="stateLabel"
+          class="tool-fold-state"
+          :class="`is-${state}`"
+        >
+          {{ stateLabel }}
+          <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
+        </span>
+        <span
+          v-if="imageCount > 0"
+          class="tool-fold-image-badge"
+          role="img"
+          :title="$t('block.toolFold.imageCount', { count: imageCount })"
+          :aria-label="$t('block.toolFold.imageCount', { count: imageCount })"
+        >
+          <span class="i-carbon-image" aria-hidden="true" />
+          <span v-if="imageCount > 1">{{ imageCount }}</span>
+        </span>
       </span>
     </button>
     <div v-else class="tool-fold-line tool-fold-line-static">
       <span class="tool-fold-chevron" aria-hidden="true" />
       <span :class="[iconClass, 'tool-fold-icon']" />
       <span class="tool-fold-main">
-        <b>{{ title }}</b>
-        <span v-if="!orchestration && toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
-      </span>
-      <span
-        v-if="stateLabel"
-        class="tool-fold-state"
-        :class="`is-${state}`"
-      >
-        {{ stateLabel }}
-        <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
+        <span class="tool-fold-title">
+          <b>{{ title }}</b>
+          <span v-if="!orchestration && toolSummary(tool) !== tool.name"> · {{ toolSummary(tool) }}</span>
+        </span>
+        <span
+          v-if="stateLabel"
+          class="tool-fold-state"
+          :class="`is-${state}`"
+        >
+          {{ stateLabel }}
+          <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
+        </span>
+        <span
+          v-if="imageCount > 0"
+          class="tool-fold-image-badge"
+          role="img"
+          :title="$t('block.toolFold.imageCount', { count: imageCount })"
+          :aria-label="$t('block.toolFold.imageCount', { count: imageCount })"
+        >
+          <span class="i-carbon-image" aria-hidden="true" />
+          <span v-if="imageCount > 1">{{ imageCount }}</span>
+        </span>
       </span>
     </div>
     <div
@@ -224,6 +250,14 @@ watch(() => foldState.requestedToolId.value, requested => {
 }
 .tool-fold-icon { width: 14px; height: 14px; flex: none; opacity: 0.78; }
 .tool-fold-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+.tool-fold-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -245,12 +279,28 @@ watch(() => foldState.requestedToolId.value, requested => {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.tool-fold-state { display: inline-flex; align-items: center; margin-left: auto; flex: none; font-size: 11px; line-height: var(--tool-row-line-height); }
+.tool-fold-state { display: inline-flex; align-items: center; flex: none; font-size: 10px; font-weight: 500; line-height: var(--tool-row-line-height); }
 .tool-fold-state.is-running { color: var(--claude); }
 .tool-fold-state.is-permission { color: var(--warning, var(--accent)); }
 .tool-fold-state.is-error,
 .tool-fold-state.is-interrupted { color: var(--destructive); }
 .tool-fold-state.is-background { color: var(--primary); }
+.tool-fold-image-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 15px;
+  padding: 0 3px;
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--codex) 24%, var(--border));
+  border-radius: 4px;
+  color: var(--codex);
+  background: color-mix(in srgb, var(--codex) 7%, transparent);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+.tool-fold-image-badge > :first-child { width: 11px; height: 11px; }
 .tool-fold-card { margin: 2px 0 6px 18px; }
 .tool-fold-card > :deep(*) { margin-top: 0; }
 .tool-fold-result {
