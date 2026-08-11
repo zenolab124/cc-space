@@ -322,6 +322,9 @@
       "resetConfirm": "Clear all lane conversations and start over?",
       "closeLane": "Close Lane",
       "laneLabel": "Lane {n}",
+      "switchEngine": "Switch engine (the new engine starts with an empty session)",
+      "engineSwitchLocked": "Engine switching is locked after the first message",
+      "engineSwitchUnavailable": "No other engine is available",
       "stopAll": "Stop All",
       "sharedInput": "Type a message to send to all lanes…",
       "noCwd": "Session has no working directory, cannot start race"

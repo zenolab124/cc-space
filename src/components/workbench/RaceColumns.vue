@@ -35,12 +35,14 @@ const {
   raceError,
   raceMutationLoading,
   broadcasting,
+  canSwitchRaceEngine,
   anyStreaming,
   streamingCount,
   broadcastSend,
   stopAll,
   forkNewLane,
   resetAllLanes,
+  switchLaneEngine,
 } = useRaceInput(activeTab)
 
 const containerRef = ref<HTMLElement>()
@@ -118,6 +120,8 @@ function onInputKeydown(e: KeyboardEvent) {
             :tab-id="activeTab.id"
             :index="i"
             :mutation-disabled="broadcasting || raceMutationLoading"
+            :engine-switch-available="canSwitchRaceEngine"
+            @switch-race-engine="switchLaneEngine"
           />
 
           <!-- 列右边缘 resize 手柄(与普通多列同款,Shift 调全局最小列宽) -->

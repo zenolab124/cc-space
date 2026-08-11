@@ -34,10 +34,12 @@ const props = defineProps<{
   index: number
   handleRef?: (el: any) => void
   mutationDisabled?: boolean
+  engineSwitchAvailable?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'startRace'): void
+  (e: 'switchRaceEngine', sessionId: string): void
 }>()
 
 const { t } = useI18n()
@@ -53,6 +55,12 @@ const { notifyTransient } = useNotifications()
 const tab = computed(() => state.value.tabs.find(t => t.id === props.tabId))
 const lane = computed(() => tab.value ? findLane(tab.value, props.column.sessionId) : null)
 const isRace = computed(() => !!lane.value)
+const raceEngineSwitchLocked = computed(() => tab.value?.race?.engineSwitchLocked ?? true)
+const raceEngineSwitchHint = computed(() => {
+  if (raceEngineSwitchLocked.value) return t('workbench.race.engineSwitchLocked')
+  if (!props.engineSwitchAvailable) return t('workbench.race.engineSwitchUnavailable')
+  return t('workbench.race.switchEngine')
+})
 
 const rcLoading = ref(false)
 const engineActionLoading = ref(false)
@@ -297,8 +305,24 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         class="w-1.5 h-1.5 rounded-full shrink-0"
         :class="[status.dotClass, { 'col-dot-pulse': status.pulse }]"
       />
+      <button
+        v-if="engineName && isRace"
+        type="button"
+        class="workbench-column-engine-badge workbench-column-engine-switch"
+        :disabled="mutationDisabled || raceEngineSwitchLocked || !engineSwitchAvailable"
+        :style="engineIdentityStyle"
+        v-tooltip="raceEngineSwitchHint"
+        :title="raceEngineSwitchHint"
+        :aria-label="raceEngineSwitchHint"
+        @pointerdown.stop
+        @click.stop="emit('switchRaceEngine', column.sessionId)"
+      >
+        <span v-if="engineId === 'codex'" class="i-simple-openai h-3.5 w-3.5" />
+        <span v-else-if="engineId === 'claude' || engineId === 'claude-code'" class="i-simple-anthropic h-3.5 w-3.5" />
+        <span v-else class="text-[9px]">{{ engineName.slice(0, 2) }}</span>
+      </button>
       <span
-        v-if="engineName"
+        v-else-if="engineName"
         class="workbench-column-engine-badge"
         :style="engineIdentityStyle"
         v-tooltip="engineName"
@@ -431,6 +455,20 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
+}
+.workbench-column-engine-switch {
+  appearance: none;
+  cursor: pointer;
+  transition: opacity 150ms ease, filter 150ms ease;
+}
+.workbench-column-engine-switch:hover:not(:disabled) { filter: brightness(0.94); }
+.workbench-column-engine-switch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.workbench-column-engine-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .workbench-column-title {
   min-width: 0;

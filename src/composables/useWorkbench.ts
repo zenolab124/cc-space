@@ -34,6 +34,8 @@ export interface RaceLane {
 export interface RaceConfig {
   cwd: string
   lanes: RaceLane[]
+  /** 首条赛马广播成功投递后锁定；已有会话不支持跨引擎热切换。 */
+  engineSwitchLocked: boolean
 }
 
 export interface WorkbenchTab {
@@ -218,6 +220,10 @@ function repairTab(t: WorkbenchTab): WorkbenchTab | null {
       stateRepairCount += 1
     } else {
       t.race.cwd = sanitizeCwd(t.race.cwd)
+      // 旧版本没有锁字段。恢复中的赛马无法判断是否已经广播过，按安全侧锁定。
+      t.race.engineSwitchLocked = typeof t.race.engineSwitchLocked === 'boolean'
+        ? t.race.engineSwitchLocked
+        : true
       const validLanes = t.race.lanes.filter(lane =>
         lane && typeof lane.id === 'string' && typeof lane.sessionId === 'string'
         && typeof lane.label === 'string'
@@ -445,7 +451,7 @@ function createRaceTab(sourceSessionId: string, cwd: string, forkedSessionId: st
   }
 
   tab.columnSizes = equalSizes(lanes.length)
-  tab.race = { cwd, lanes }
+  tab.race = { cwd, lanes, engineSwitchLocked: false }
 
   state.value.tabs.push(tab)
   state.value.activeTabId = tab.id
@@ -471,6 +477,31 @@ function addRaceLane(tabId: string, forkedSessionId: string) {
     label: i18n.global.t('workbench.race.laneLabel', { n: tab.race.lanes.length + 1 }),
   })
   tab.columnSizes = equalSizes(tab.columns.length)
+}
+
+/** 原位替换赛道会话：保留 lane/column 身份与列宽，用于首轮广播前切换引擎。 */
+function replaceRaceLaneSession(tabId: string, sessionId: string, replacementSessionId: string): boolean {
+  const tab = state.value.tabs.find(t => t.id === tabId)
+  if (!tab?.race || tab.race.engineSwitchLocked || sessionId === replacementSessionId) return false
+  if (tab.sessionIds.includes(replacementSessionId)) return false
+
+  const lane = tab.race.lanes.find(item => item.sessionId === sessionId)
+  const column = tab.columns.find(item => item.sessionId === sessionId)
+  const sessionIndex = tab.sessionIds.indexOf(sessionId)
+  if (!lane || !column || sessionIndex < 0) return false
+
+  lane.sessionId = replacementSessionId
+  column.sessionId = replacementSessionId
+  tab.sessionIds[sessionIndex] = replacementSessionId
+  teardownSession(sessionId)
+  delete state.value.drafts[sessionId]
+  delete state.value.forkIntents[sessionId]
+  return true
+}
+
+function lockRaceEngineSelection(tabId: string) {
+  const tab = state.value.tabs.find(t => t.id === tabId)
+  if (tab?.race) tab.race.engineSwitchLocked = true
 }
 
 /** 关闭赛马赛道:移除列 + lane;剩 1 条时自动解散为普通 Tab */
@@ -532,7 +563,7 @@ function resetRaceLanes(tabId: string, replacementSessionIds?: string[]) {
     }
   }
   tab.columnSizes = equalSizes(lanes.length)
-  tab.race = { cwd, lanes }
+  tab.race = { cwd, lanes, engineSwitchLocked: false }
   for (const lane of oldLanes) teardownSession(lane.sessionId)
 }
 
@@ -573,6 +604,20 @@ function createDraftSession(cwd: string): string {
   state.value.drafts[sessionId] = cwd
   openSession(sessionId)
   return sessionId
+}
+
+/** 登记原生引擎空白草稿但不改变 Tab；赛马切换会原位接管列归属。 */
+function stageDraftSession(cwd: string, sessionId = crypto.randomUUID()): string {
+  state.value.drafts[sessionId] = cwd
+  return sessionId
+}
+
+/** 回滚尚未进入任何 Tab 的草稿，并关闭已创建的通用引擎运行时。 */
+function discardStagedSession(sessionId: string) {
+  teardownSession(sessionId)
+  delete state.value.drafts[sessionId]
+  delete state.value.forkIntents[sessionId]
+  localStorage.removeItem(`monet:session-settings:${sessionId}`)
 }
 
 function registerEngineDraft(sessionId: string, draft: Omit<EngineDraft, 'runtimeScope'>) {
@@ -799,6 +844,8 @@ export function useWorkbench() {
     createTab,
     createRaceTab,
     addRaceLane,
+    replaceRaceLaneSession,
+    lockRaceEngineSelection,
     removeRaceLane,
     resetRaceLanes,
     findLane,
@@ -808,6 +855,8 @@ export function useWorkbench() {
     reorderSessions,
     openSession,
     createDraftSession,
+    stageDraftSession,
+    discardStagedSession,
     registerEngineDraft,
     stageEngineDraft,
     engineDraft,

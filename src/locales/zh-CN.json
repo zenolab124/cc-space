@@ -322,6 +322,9 @@
       "resetConfirm": "清空所有赛道的对话记录，重新开始？",
       "closeLane": "关闭赛道",
       "laneLabel": "赛道 {n}",
+      "switchEngine": "切换引擎（新引擎将从空白会话开始）",
+      "engineSwitchLocked": "首条消息已发出，无法切换引擎",
+      "engineSwitchUnavailable": "没有其他可用引擎",
       "stopAll": "全部停止",
       "sharedInput": "输入消息，同时发送到所有赛道…",
       "noCwd": "此会话无工作目录，无法发起赛马"

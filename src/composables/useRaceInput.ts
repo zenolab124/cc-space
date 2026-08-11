@@ -5,7 +5,8 @@ import { useWorkbench } from './useWorkbench'
 import { inheritRunSettings } from './useSessionSettings'
 import { useStreaming, getStream } from './useStreaming'
 import { useImageInput } from './useImageInput'
-import { refreshChannels, useChannels } from './useChannels'
+import { channelSupportsEngine, refreshChannels, useChannels } from './useChannels'
+import { useProjects } from './useProjects'
 import { refreshCliDefaults, readCliDefaults } from './useCliDefaults'
 import { resolveRunConfig } from './useRunConfig'
 import { getSessionSettings } from './useSessionSettings'
@@ -21,9 +22,12 @@ import {
 } from '@/engines/client'
 import { resolveSession } from '@/engines/directory'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
+import { instanceKey, sameInstance } from '@/engines/identity'
 import { engineRuntimeSnapshot } from '@/engines/runtimeState'
-import { engineRunConfig, engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
-import type { ProjectRef, RuntimeInputItem, RuntimeSnapshot, SessionRef } from '@/engines/types'
+import { engineRunConfig, engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig, setEngineRunConfig } from '@/engines/runConfig'
+import { useEngines } from '@/engines/useEngines'
+import type { EngineDescriptor, ProjectRef, RuntimeInputItem, RuntimeSnapshot, SessionRef } from '@/engines/types'
+import type { Project } from '@/types'
 
 function errorMessage(cause: unknown): string {
   if (typeof cause === 'string') return cause
@@ -45,12 +49,18 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
   const { sendMessage, stopStreaming } = useStreaming()
   const {
     addRaceLane,
+    discardStagedSession,
     engineDraft,
     forkSourceOf,
+    lockRaceEngineSelection,
+    replaceRaceLaneSession,
     resetRaceLanes,
+    stageDraftSession,
     stageEngineDraft,
   } = useWorkbench()
-  const { channels, defaultSessionChannel } = useChannels()
+  const { projects } = useProjects()
+  const { engines, health } = useEngines()
+  const { channels, defaultSessionChannel, defaultSessionChannels } = useChannels()
   const raceError = ref<string | null>(null)
   const raceMutationLoading = ref(false)
   const broadcasting = ref(false)
@@ -87,6 +97,108 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     return snapshot?.phase === 'running' || snapshot?.phase === 'awaitingInteraction'
   }
 
+  function projectCwd(project: Project): string | null {
+    return project.sessions.find(session => session.cwd)?.cwd ?? project.source_path ?? null
+  }
+
+  function projectForEngine(engine: EngineDescriptor, cwd: string): ProjectRef {
+    return projects.value.find(project => project.reference
+      && project.engine
+      && sameInstance(project.engine, engine.instance)
+      && projectCwd(project) === cwd)?.reference
+      ?? { engine: engine.instance, nativeId: cwd }
+  }
+
+  function defaultChannelForEngine(engine: EngineDescriptor): string | null {
+    const engineId = engine.instance.engineId
+    if (engineId !== 'claude-code' && engineId !== 'codex') return null
+    const channelId = defaultSessionChannels.value[engineId]
+    if (!channelId) return null
+    const channel = channels.value.find(item => item.id === channelId)
+    return channel?.enabled
+      && channel.scope !== 'agent-only'
+      && channelSupportsEngine(channel, engineId)
+      ? channelId
+      : null
+  }
+
+  const switchableEngines = computed(() => engines.value.filter(engine =>
+    engine.enabled
+    && !!engine.capabilities.runtime?.create
+    && health.value[instanceKey(engine.instance)]?.runtime.available === true))
+
+  const canSwitchRaceEngine = computed(() =>
+    !tab.value.race?.engineSwitchLocked && switchableEngines.value.length > 1)
+
+  function currentLaneEngine(sessionId: string, choices: EngineDescriptor[]): EngineDescriptor | null {
+    const context = laneContext(sessionId)
+    if (context.reference) {
+      return choices.find(engine => sameInstance(engine.instance, context.reference!.engine)) ?? null
+    }
+    if (context.native) {
+      return choices.find(engine => usesNativeSessionSurface(engine.instance)) ?? null
+    }
+    return null
+  }
+
+  async function switchLaneEngine(sessionId: string) {
+    if (raceMutationLoading.value || broadcasting.value) return
+    const race = tab.value.race
+    const choices = switchableEngines.value
+    if (!race || race.engineSwitchLocked || choices.length < 2) return
+    const current = currentLaneEngine(sessionId, choices)
+    const currentIndex = current
+      ? choices.findIndex(engine => sameInstance(engine.instance, current.instance))
+      : -1
+    const target = choices[(currentIndex + 1) % choices.length]
+    if (!target || (current && sameInstance(target.instance, current.instance))) return
+
+    raceError.value = null
+    raceMutationLoading.value = true
+    let replacementSessionId: string | null = null
+    try {
+      await refreshChannels()
+      if (usesNativeSessionSurface(target.instance)) {
+        replacementSessionId = stageDraftSession(race.cwd)
+      } else {
+        const project = projectForEngine(target, race.cwd)
+        const attachedChannel = defaultChannelForEngine(target)
+        const created = await createSession(
+          project,
+          race.cwd,
+          attachedChannel ? { channelId: attachedChannel } : {},
+        )
+        replacementSessionId = sessionUiId(created.session)
+        stageEngineDraft(replacementSessionId, {
+          reference: created.session,
+          project,
+          engineName: target.displayName,
+          cwd: race.cwd,
+          attachedChannel,
+        })
+        setEngineRunConfig(replacementSessionId, {
+          model: null,
+          effort: null,
+          channelId: attachedChannel,
+          modelOverridden: false,
+          effortOverridden: false,
+        })
+      }
+      if (!replaceRaceLaneSession(tab.value.id, sessionId, replacementSessionId)) {
+        discardStagedSession(replacementSessionId)
+        replacementSessionId = null
+        throw new Error(i18n.global.t('common.runtimeUnavailable'))
+      }
+    } catch (error) {
+      if (replacementSessionId && !tab.value.race?.lanes.some(lane => lane.sessionId === replacementSessionId)) {
+        discardStagedSession(replacementSessionId)
+      }
+      raceError.value = errorMessage(error)
+    } finally {
+      raceMutationLoading.value = false
+    }
+  }
+
   const anyStreaming = computed(() => {
     const race = tab.value.race
     if (!race) return false
@@ -111,6 +223,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       context: laneContext(lane.sessionId),
     }))
     const nativeRace = targets.every(target => target.context.native)
+    const hasNativeLane = targets.some(target => target.context.native)
     if (nativeRace) {
       const parsed = parseCommand(text)
       if (parsed.kind === 'invalid') {
@@ -162,7 +275,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
         throw new Error(i18n.global.t('common.runtimeUnavailable'))
       }
 
-      if (nativeRace) await Promise.all([refreshChannels(), refreshCliDefaults(race.cwd)])
+      if (hasNativeLane) await Promise.all([refreshChannels(), refreshCliDefaults(race.cwd)])
       const snapshot = {
         channels: channels.value,
         defaultSessionChannel: defaultSessionChannel.value,
@@ -210,6 +323,9 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       })
       const results = await Promise.allSettled(promises)
       const failures = results.filter(result => result.status === 'rejected')
+      if (results.some(result => result.status === 'fulfilled')) {
+        lockRaceEngineSelection(tab.value.id)
+      }
       if (results.length > 0 && failures.length === results.length) {
         inputText.value = text
         imageInput.images.value = [...pendingImages, ...imageInput.images.value]
@@ -285,36 +401,35 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     if (raceMutationLoading.value || broadcasting.value) return
     const race = tab.value.race
     if (!race || race.lanes.length === 0) return
-    const context = laneContext(race.lanes[0].sessionId)
     raceError.value = null
-    if (context.native) {
-      resetRaceLanes(tab.value.id)
-      return
-    }
-    if (!context.project) {
-      raceError.value = i18n.global.t('common.runtimeUnavailable')
-      return
-    }
     raceMutationLoading.value = true
+    const replacementSessionIds: string[] = []
     try {
-      const created = await Promise.all(
-        race.lanes.map(lane => createSession(context.project!, race.cwd, engineRuntimeOptions(lane.sessionId))),
-      )
-      const ids = created.map((runtime, index) => {
-        const sourceSessionId = race.lanes[index].sessionId
-        const sessionId = sessionUiId(runtime.session)
-        stageEngineDraft(sessionId, {
-          reference: runtime.session,
-          project: context.project!,
-          engineName: context.engineName,
-          cwd: race.cwd,
-          attachedChannel: engineRuntimeChannel(sourceSessionId),
-        })
-        inheritEngineRunConfig(sourceSessionId, sessionId)
-        return sessionId
-      })
-      resetRaceLanes(tab.value.id, ids)
+      const sourceLanes = [...race.lanes]
+      for (const lane of sourceLanes) {
+        const context = laneContext(lane.sessionId)
+        if (context.native) {
+          const sessionId = stageDraftSession(race.cwd)
+          inheritRunSettings(lane.sessionId, sessionId)
+          replacementSessionIds.push(sessionId)
+        } else {
+          if (!context.project) throw new Error(i18n.global.t('common.runtimeUnavailable'))
+          const runtime = await createSession(context.project, race.cwd, engineRuntimeOptions(lane.sessionId))
+          const sessionId = sessionUiId(runtime.session)
+          stageEngineDraft(sessionId, {
+            reference: runtime.session,
+            project: context.project,
+            engineName: context.engineName,
+            cwd: race.cwd,
+            attachedChannel: engineRuntimeChannel(lane.sessionId),
+          })
+          inheritEngineRunConfig(lane.sessionId, sessionId)
+          replacementSessionIds.push(sessionId)
+        }
+      }
+      resetRaceLanes(tab.value.id, replacementSessionIds)
     } catch (error) {
+      for (const sessionId of replacementSessionIds) discardStagedSession(sessionId)
       raceError.value = String(error)
     } finally {
       raceMutationLoading.value = false
@@ -330,11 +445,13 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     raceError,
     raceMutationLoading,
     broadcasting,
+    canSwitchRaceEngine,
     anyStreaming,
     streamingCount,
     broadcastSend,
     stopAll,
     forkNewLane,
     resetAllLanes,
+    switchLaneEngine,
   }
 }
