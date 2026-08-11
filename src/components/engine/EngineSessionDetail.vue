@@ -12,7 +12,6 @@ import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
 import { hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline } from '@/engines/runtimeTimeline'
-import { isRenderableEngineSegment } from '@/engines/processGroups'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
@@ -51,6 +50,7 @@ import { engineRunConfig, inheritEngineRunConfig, resolveInitialEngineChannel, s
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
 import { groupConversationRecords } from '@/engines/conversationGroups'
+import { isRenderableEngineSegment } from '@/engines/processGroups'
 import { measureElement as measureVirtualElement, useVirtualizer, type Virtualizer } from '@tanstack/vue-virtual'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
 import { shouldCompensateVirtualItemSizeChange } from '@/lib/sessionScrollPolicy'
@@ -323,6 +323,7 @@ function measureConversationGroup(
 }
 
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
+const { stickyUserPromptEnabled } = useStickyUserPrompt()
 const shouldVirtualize = computed(() => historicalGroups.value.length > virtualizationThreshold.value)
 const conversationVirtualizer = useVirtualizer(computed(() => ({
   count: historicalGroups.value.length,
@@ -363,12 +364,13 @@ watch(() => props.session.id, () => {
   historicalGroupHeights.clear()
   void nextTick(() => conversationVirtualizer.value.measure())
 })
-const { stickyUserPromptEnabled } = useStickyUserPrompt()
-const stickyGroupIndex = ref(-1)
 
-function engineElementScrollTop(element: HTMLElement, viewport: HTMLElement, viewportTop: number): number {
-  return element.getBoundingClientRect().top - viewportTop + viewport.scrollTop
-}
+const STICKY_CARD_GAP = 16
+const stickyOverlayElement = ref<HTMLElement | null>(null)
+const stickySurfaceElement = ref<HTMLElement | null>(null)
+const stickyGroupIndex = ref(-1)
+const stickyPushOffset = ref(0)
+let stickySurfaceResizeObserver: ResizeObserver | null = null
 
 function visibleGroupUserSegments(group: typeof conversationGroups.value[number]) {
   return group.records
@@ -380,74 +382,64 @@ function visibleGroupUserSegments(group: typeof conversationGroups.value[number]
     ))
 }
 
-function updateStickyGroup() {
-  if (!stickyUserPromptEnabled.value) {
-    stickyGroupIndex.value = -1
-    return
-  }
-  const viewport = viewportElement.value
-  if (!viewport) {
-    stickyGroupIndex.value = -1
-    return
-  }
-  const viewportTop = viewport.getBoundingClientRect().top
-  const probe = viewport.scrollTop + 40
+function enginePromptElement(owner: HTMLElement | null | undefined): HTMLElement | null {
+  return owner?.querySelector<HTMLElement>('.conversation-user-message') ?? null
+}
 
-  if (!shouldVirtualize.value) {
-    let index = -1
-    for (const element of timelineContentElement.value?.querySelectorAll<HTMLElement>('[data-conversation-index]') ?? []) {
-      const candidate = Number(element.dataset.conversationIndex)
-      if (Number.isInteger(candidate) && engineElementScrollTop(element, viewport, viewportTop) <= probe) {
-        index = candidate
-      }
-    }
-    stickyGroupIndex.value = index
-    return
-  }
+function engineStickySurfaceCard(): HTMLElement | null {
+  return enginePromptElement(stickySurfaceElement.value)
+}
 
-  const lastIndex = conversationGroups.value.length - 1
-  const lastElement = timelineContentElement.value?.querySelector<HTMLElement>(`[data-conversation-index="${lastIndex}"]`)
-  if (lastElement && probe >= engineElementScrollTop(lastElement, viewport, viewportTop)) {
-    stickyGroupIndex.value = lastIndex
-    return
-  }
+function stickyRestingClientTop(): number | null {
+  const card = engineStickySurfaceCard()
+  if (card) return card.getBoundingClientRect().top - stickyPushOffset.value
+  return stickyOverlayElement.value?.getBoundingClientRect().top ?? null
+}
 
-  const virtualBox = historicalVirtualBoxElement.value
-  if (!virtualBox) {
-    stickyGroupIndex.value = -1
-    return
+function groupHasVisibleUser(index: number): boolean {
+  const group = conversationGroups.value[index]
+  return !!group && visibleGroupUserSegments(group).length > 0
+}
+
+function stickyNeighborIndex(from: number, direction: 1 | -1): number {
+  for (let index = from; index >= 0 && index < conversationGroups.value.length; index += direction) {
+    if (groupHasVisibleUser(index)) return index
   }
-  const virtualTop = engineElementScrollTop(virtualBox, viewport, viewportTop)
-  const virtualProbe = viewport.scrollTop - virtualTop + 40
-  if (virtualProbe <= 0) {
-    stickyGroupIndex.value = -1
-    return
-  }
-  let index = -1
-  for (const item of conversationVirtualizer.value.getVirtualItems()) {
-    if (item.start <= virtualProbe) index = item.index
-    else break
-  }
+  return -1
+}
+
+function setStickyGroup(index: number) {
+  if (stickyGroupIndex.value === index) return
+  stickyPushOffset.value = 0
   stickyGroupIndex.value = index
 }
 
-function scheduleStickyUpdate() {
-  if (stickyUpdateFrame) return
-  stickyUpdateFrame = window.requestAnimationFrame(() => {
-    stickyUpdateFrame = 0
-    updateStickyGroup()
-  })
+function updateStickyGroup() {
+  if (!stickyUserPromptEnabled.value) {
+    setStickyGroup(-1)
+    return
+  }
+  const restingTop = stickyRestingClientTop()
+  if (restingTop === null) return
+
+  let latestPast = -1
+  let firstFuture = Number.POSITIVE_INFINITY
+  for (const owner of timelineContentElement.value?.querySelectorAll<HTMLElement>('[data-conversation-index]') ?? []) {
+    const index = Number(owner.dataset.conversationIndex)
+    const card = enginePromptElement(owner)
+    if (!Number.isInteger(index) || !card || !groupHasVisibleUser(index)) continue
+    if (card.getBoundingClientRect().top <= restingTop + 0.5) latestPast = Math.max(latestPast, index)
+    else firstFuture = Math.min(firstFuture, index)
+  }
+
+  if (latestPast >= 0) setStickyGroup(latestPast)
+  else if (Number.isFinite(firstFuture)) setStickyGroup(stickyNeighborIndex(firstFuture - 1, -1))
 }
 
 const stickyDisplay = computed(() => {
   if (!stickyUserPromptEnabled.value) return null
-  for (let index = stickyGroupIndex.value; index >= 0; index--) {
-    const group = conversationGroups.value[index]
-    if (group && visibleGroupUserSegments(group).length > 0) {
-      return { group, index }
-    }
-  }
-  return null
+  const index = stickyNeighborIndex(stickyGroupIndex.value, -1)
+  return index >= 0 ? { group: conversationGroups.value[index], index } : null
 })
 const stickyUserSegments = computed(() => stickyDisplay.value
   ? visibleGroupUserSegments(stickyDisplay.value.group)
@@ -468,21 +460,63 @@ const stickyTimeLabel = computed(() => {
   const timestamp = stickyDisplay.value?.group.records.find(record => record.role === 'user')?.timestamp
   return stickyDateTimeLabel(timestamp)
 })
-
-function stickyNeighborIndex(from: number, direction: 1 | -1): number {
-  for (let index = from; index >= 0 && index < conversationGroups.value.length; index += direction) {
-    const group = conversationGroups.value[index]
-    if (visibleGroupUserSegments(group).length > 0) return index
-  }
-  return -1
-}
-
 const stickyPreviousIndex = computed(() => stickyDisplay.value
   ? stickyNeighborIndex(stickyDisplay.value.index - 1, -1)
   : -1)
 const stickyNextIndex = computed(() => stickyDisplay.value
   ? stickyNeighborIndex(stickyDisplay.value.index + 1, 1)
   : -1)
+
+function engineGroupPromptCard(index: number): HTMLElement | null {
+  const owner = timelineContentElement.value?.querySelector<HTMLElement>(`[data-conversation-index="${index}"]`)
+  return enginePromptElement(owner)
+}
+
+function updateStickyPushOffset() {
+  const currentCard = engineStickySurfaceCard()
+  if (!stickyDisplay.value || !currentCard) {
+    stickyPushOffset.value = 0
+    return
+  }
+  const nextCard = stickyNextIndex.value >= 0
+    ? engineGroupPromptCard(stickyNextIndex.value)
+    : null
+  if (!nextCard) {
+    stickyPushOffset.value = 0
+    return
+  }
+  const restingBottom = currentCard.getBoundingClientRect().bottom - stickyPushOffset.value
+  stickyPushOffset.value = Math.min(
+    0,
+    nextCard.getBoundingClientRect().top - STICKY_CARD_GAP - restingBottom,
+  )
+}
+
+function scheduleStickyUpdate() {
+  if (stickyUpdateFrame) return
+  stickyUpdateFrame = window.requestAnimationFrame(() => {
+    stickyUpdateFrame = 0
+    updateStickyGroup()
+    updateStickyPushOffset()
+  })
+}
+
+watch(stickySurfaceElement, element => {
+  stickySurfaceResizeObserver?.disconnect()
+  stickySurfaceResizeObserver = null
+  if (!element) return
+  stickySurfaceResizeObserver = new ResizeObserver(scheduleStickyUpdate)
+  stickySurfaceResizeObserver.observe(element)
+  scheduleStickyUpdate()
+})
+
+watch([conversationGroups, stickyUserPromptEnabled, shouldVirtualize], () => {
+  void nextTick(scheduleStickyUpdate)
+})
+
+function engineElementScrollTop(element: HTMLElement, viewport: HTMLElement): number {
+  return element.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop
+}
 
 function scrollToConversationGroup(index: number) {
   if (index < 0) return
@@ -491,24 +525,11 @@ function scrollToConversationGroup(index: number) {
   if (!shouldVirtualize.value) {
     const element = timelineContentElement.value?.querySelector<HTMLElement>(`[data-conversation-index="${index}"]`)
     if (!viewport || !element) return
-    viewport.scrollTop = engineElementScrollTop(element, viewport, viewport.getBoundingClientRect().top)
+    viewport.scrollTop = engineElementScrollTop(element, viewport)
     return
   }
-  if (index < historicalGroups.value.length) {
-    conversationVirtualizer.value.scrollToIndex(index, { align: 'start' })
-    return
-  }
-  const virtualBox = historicalVirtualBoxElement.value
-  if (!viewport || !virtualBox) return
-  const virtualTop = virtualBox.getBoundingClientRect().top
-    - viewport.getBoundingClientRect().top
-    + viewport.scrollTop
-  viewport.scrollTop = virtualTop + conversationVirtualizer.value.getTotalSize()
+  if (index < historicalGroups.value.length) conversationVirtualizer.value.scrollToIndex(index, { align: 'start' })
 }
-
-watch([conversationGroups, stickyUserPromptEnabled, shouldVirtualize], () => {
-  void nextTick(scheduleStickyUpdate)
-})
 const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
 const imageDropArea = computed<HTMLElement | null | undefined>(() =>
@@ -1354,6 +1375,8 @@ onUnmounted(() => {
   timelineResizeObserver = null
   lastGroupResizeObserver?.disconnect()
   lastGroupResizeObserver = null
+  stickySurfaceResizeObserver?.disconnect()
+  stickySurfaceResizeObserver = null
   if (stickyUpdateFrame) window.cancelAnimationFrame(stickyUpdateFrame)
   stickyUpdateFrame = 0
   unlistenSnapshot?.()
@@ -1468,36 +1491,44 @@ onUnmounted(() => {
         />
       </template>
       <div
-        v-if="stickyDisplay"
+        v-if="stickyUserPromptEnabled"
+        ref="stickyOverlayElement"
         class="engine-sticky-user-overlay"
-        :title="t('session.stickyJumpHint')"
-        @click="scrollToConversationGroup(stickyDisplay.index)"
       >
-        <ConversationUserMessage :time-label="stickyTimeLabel">
-          <EngineSegmentBlock
-            v-for="(segment, index) in stickyUserSegments"
-            :key="index"
-            :segment="segment"
-          />
-          <template #actions>
-            <span class="flex items-center gap-0.5">
-              <button
-                type="button"
-                class="engine-sticky-nav-btn"
-                :disabled="stickyPreviousIndex < 0"
-                :title="t('session.stickyPrev')"
-                @click.stop="scrollToConversationGroup(stickyPreviousIndex)"
-              ><span class="i-carbon-chevron-up h-3.5 w-3.5" /></button>
-              <button
-                type="button"
-                class="engine-sticky-nav-btn"
-                :disabled="stickyNextIndex < 0"
-                :title="t('session.stickyNext')"
-                @click.stop="scrollToConversationGroup(stickyNextIndex)"
-              ><span class="i-carbon-chevron-down h-3.5 w-3.5" /></button>
-            </span>
-          </template>
-        </ConversationUserMessage>
+        <div
+          v-if="stickyDisplay"
+          ref="stickySurfaceElement"
+          class="engine-sticky-user-surface"
+          :style="{ transform: `translate3d(0, ${stickyPushOffset}px, 0)` }"
+          :title="t('session.stickyJumpHint')"
+          @click="scrollToConversationGroup(stickyDisplay.index)"
+        >
+          <ConversationUserMessage :time-label="stickyTimeLabel">
+            <EngineSegmentBlock
+              v-for="(segment, index) in stickyUserSegments"
+              :key="index"
+              :segment="segment"
+            />
+            <template #actions>
+              <span class="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  class="engine-sticky-nav-btn"
+                  :disabled="stickyPreviousIndex < 0"
+                  :title="t('session.stickyPrev')"
+                  @click.stop="scrollToConversationGroup(stickyPreviousIndex)"
+                ><span class="i-carbon-chevron-up h-3.5 w-3.5" /></button>
+                <button
+                  type="button"
+                  class="engine-sticky-nav-btn"
+                  :disabled="stickyNextIndex < 0"
+                  :title="t('session.stickyNext')"
+                  @click.stop="scrollToConversationGroup(stickyNextIndex)"
+                ><span class="i-carbon-chevron-down h-3.5 w-3.5" /></button>
+              </span>
+            </template>
+          </ConversationUserMessage>
+        </div>
       </div>
       <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
       <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
@@ -1513,6 +1544,7 @@ onUnmounted(() => {
             :ref="element => element && conversationVirtualizer.measureElement(element as Element)"
             :data-index="virtualItem.index"
             :data-conversation-index="virtualItem.index"
+            :class="{ 'sticky-source-hidden': stickyDisplay?.index === virtualItem.index }"
             :style="{
               position: 'absolute',
               top: 0,
@@ -1537,6 +1569,7 @@ onUnmounted(() => {
             v-for="(group, index) in historicalGroups"
             :key="`${session.id}:${group.key}`"
             :data-conversation-index="index"
+            :class="{ 'sticky-source-hidden': stickyDisplay?.index === index }"
           >
             <EngineConversationGroup
               :records="group.records"
@@ -1552,9 +1585,12 @@ onUnmounted(() => {
         <div
           v-if="lastConversationGroup"
           :key="`${session.id}:${lastConversationGroup.key}`"
-          :class="historicalGroups.length > 0 ? 'mt-4' : ''"
           :data-group-key="`${session.id}:${lastConversationGroup.key}`"
           :data-conversation-index="conversationGroups.length - 1"
+          :class="[
+            historicalGroups.length > 0 ? 'mt-4' : '',
+            { 'sticky-source-hidden': stickyDisplay?.index === conversationGroups.length - 1 },
+          ]"
           ref="lastGroupElement"
         >
           <EngineConversationGroup
@@ -1676,8 +1712,14 @@ onUnmounted(() => {
   z-index: 20;
   height: 0;
   overflow: visible;
-  cursor: pointer;
+  pointer-events: none;
 }
+.engine-sticky-user-surface {
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform;
+}
+.sticky-source-hidden :deep(.conversation-user-message) { visibility: hidden; }
 .engine-sticky-nav-btn {
   display: inline-flex;
   padding: 1px;

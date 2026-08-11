@@ -2034,14 +2034,14 @@ function onInputKeydown(e: KeyboardEvent) {
 const followStreaming = ref(true)
 let scrollFollowState = createScrollFollowState()
 let lastScrollTop = 0
-let scrollRafId = 0
+let stickyUpdateFrame = 0
 let scrollBottomRequestId = 0
 let scrollBottomQueuedEpoch: number | null = null
 
 interface ProgrammaticScrollWrite {
   target: number
   at: number
-  source: 'follow' | 'virtualizer' | 'anchor' | 'navigation'
+  source: 'follow' | 'virtualizer' | 'anchor'
 }
 
 let programmaticScrollWrite: ProgrammaticScrollWrite | null = null
@@ -2150,135 +2150,178 @@ function onScroll() {
     resumeFollow()
   }
 
-  if (scrollRafId) return
-  scrollRafId = requestAnimationFrame(() => {
-    scrollRafId = 0
-    const el = scrollContainer.value
-    if (!el) return
-    updateStickyGroup()
-  })
+  scheduleStickyUpdate()
+
 }
 
-// --- 独立吸顶层 ---
-// 用户消息正文始终留在正常文档流；这里只计算视口顶部所属提问，并渲染零高度克隆层。
-// 禁止再给正文节点加 position:sticky，否则流式增高时视觉顺序会脱离 DOM 顺序。
+// --- 用户提问吸顶层 ---
+// 虚拟项本身带 transform，内部原生 sticky 无法跨项工作。原消息保留占位，
+// 悬浮层只复制当前提问；选择、碰撞和推离全部使用真实卡片的 client rect。
+const STICKY_CARD_GAP = 16
 const pendingStickyRef = ref<HTMLElement>()
+const stickyOverlayElement = ref<HTMLElement | null>(null)
+const stickySurfaceElement = ref<HTMLElement | null>(null)
 const stickyGroupIndex = ref(-1)
 const stickyPending = ref(false)
+const stickyPushOffset = ref(0)
+let stickySurfaceResizeObserver: ResizeObserver | null = null
 
-function elementScrollTop(element: HTMLElement, sc: HTMLElement, scTop: number): number {
-  return element.getBoundingClientRect().top - scTop + sc.scrollTop
+function promptElement(owner: HTMLElement | null | undefined): HTMLElement | null {
+  return owner?.querySelector<HTMLElement>('.conversation-user-message') ?? null
 }
 
-function resetStickyPrompt() {
-  stickyGroupIndex.value = -1
-  stickyPending.value = false
+function stickySurfaceCard(): HTMLElement | null {
+  return promptElement(stickySurfaceElement.value)
+}
+
+function stickyRestingClientTop(): number | null {
+  const card = stickySurfaceCard()
+  if (card) return card.getBoundingClientRect().top - stickyPushOffset.value
+  return stickyOverlayElement.value?.getBoundingClientRect().top ?? null
+}
+
+function setStickySelection(index: number, pending: boolean) {
+  if (stickyGroupIndex.value === index && stickyPending.value === pending) return
+  stickyPushOffset.value = 0
+  stickyGroupIndex.value = index
+  stickyPending.value = pending
+}
+
+/** 吸顶合格判定：只接管真实、可见的用户提问。 */
+function groupQualifies(group: { user: any; responses: any[] } | null | undefined): boolean {
+  if (!group?.user || group.user.type !== 'user') return false
+  if (modelSwitchName(group.user) || isModelCommandRecord(group.user) || isSystemOnlyUser(group.user)) return false
+  return userHasVisibleContent(group.user)
+}
+
+function findQualifiedGroup(from: number, direction: 1 | -1): number {
+  for (let index = from; index >= 0 && index < messageGroups.value.length; index += direction) {
+    if (groupQualifies(messageGroups.value[index])) return index
+  }
+  return -1
 }
 
 function updateStickyGroup() {
-  if (!stickyUserPromptEnabled.value) { resetStickyPrompt(); return }
-  const sc = scrollContainer.value
-  if (!sc) { resetStickyPrompt(); return }
-  const scTop = sc.getBoundingClientRect().top
-  const probe = sc.scrollTop + 40
-
-  // pending 用户消息也只提供正文锚点；越过锚点后由同一克隆层接管。
-  const pel = pendingStickyRef.value
-  if (pel && probe >= elementScrollTop(pel, sc, scTop)) {
-    stickyPending.value = true
-    stickyGroupIndex.value = -1
+  if (!stickyUserPromptEnabled.value) {
+    setStickySelection(-1, false)
     return
   }
-  stickyPending.value = false
+  const restingTop = stickyRestingClientTop()
+  if (restingTop === null) return
 
-  if (!shouldVirtualize.value) {
-    let index = -1
-    for (const element of scrollContentEl.value?.querySelectorAll<HTMLElement>('[data-anchor-index]') ?? []) {
-      const candidate = Number(element.dataset.anchorIndex)
-      if (Number.isInteger(candidate) && elementScrollTop(element, sc, scTop) <= probe) index = candidate
-    }
-    stickyGroupIndex.value = index
+  const pendingCard = promptElement(pendingStickyRef.value)
+  if (pendingCard && pendingCard.getBoundingClientRect().top <= restingTop + 0.5) {
+    setStickySelection(-1, true)
     return
   }
 
-  const lastElement = scrollContentEl.value?.querySelector<HTMLElement>(`[data-anchor-index="${lastGroupIndex.value}"]`)
-  if (lastElement && probe >= elementScrollTop(lastElement, sc, scTop)) {
-    stickyGroupIndex.value = lastGroupIndex.value
-    return
+  let latestPast = -1
+  let firstFuture = Number.POSITIVE_INFINITY
+  for (const owner of scrollContentEl.value?.querySelectorAll<HTMLElement>('[data-anchor-index]') ?? []) {
+    const index = Number(owner.dataset.anchorIndex)
+    const card = promptElement(owner)
+    if (!Number.isInteger(index) || !card || !groupQualifies(messageGroups.value[index])) continue
+    if (card.getBoundingClientRect().top <= restingTop + 0.5) latestPast = Math.max(latestPast, index)
+    else firstFuture = Math.min(firstFuture, index)
   }
 
-  const vbox = virtualBoxRef.value
-  if (!vbox) { resetStickyPrompt(); return }
-  // 虚拟容器顶在滚动坐标系中的位置(前方有渠道横线等流内元素,起点非 0)
-  const vTop = elementScrollTop(vbox, sc, scTop)
-  const rel = sc.scrollTop - vTop
-  if (rel <= 0) { stickyGroupIndex.value = -1; return }
-  // 探针下移 40px:组选择以「视口顶下方正在阅读的内容」为准——
-  // 消除 scrollToIndex 落点 ±几 px 时选中前一组的边界抖动
-  const virtualProbe = rel + 40
-  let idx = -1
-  for (const it of messageVirtualizer.value.getVirtualItems()) {
-    if (it.start <= virtualProbe) idx = it.index
-    else break
+  if (latestPast >= 0) {
+    setStickySelection(latestPast, false)
+  } else if (Number.isFinite(firstFuture)) {
+    setStickySelection(findQualifiedGroup(firstFuture - 1, -1), false)
   }
-  stickyGroupIndex.value = idx
 }
 
-watch(stickyUserPromptEnabled, () => {
-  void nextTick(updateStickyGroup)
-})
-
-/** 吸顶合格判定：正常且有可见内容的用户消息；回答是否已开始不影响提问归属。 */
-function groupQualifies(g: { user: any; responses: any[] } | null | undefined): boolean {
-  if (!g?.user || g.user.type !== 'user') return false
-  if (modelSwitchName(g.user) || isModelCommandRecord(g.user) || isSystemOnlyUser(g.user)) return false
-  if (!userHasVisibleContent(g.user)) return false
-  return true
-}
-
-// 视口顶部组不合格(后台任务/自发轮无用户消息)时向前回溯最近的合格组:
-// 吸顶语义 = 当前内容隶属于哪条用户指令
 const stickyDisplay = computed(() => {
   if (!stickyUserPromptEnabled.value) return null
-  // 索引空间 = messageGroups(含末组):自绘层接管全滚动范围
-  for (let i = stickyGroupIndex.value; i >= 0; i--) {
-    const g = messageGroups.value[i]
-    if (groupQualifies(g)) return { group: g, index: i }
-  }
-  return null
+  const index = findQualifiedGroup(stickyGroupIndex.value, -1)
+  return index >= 0 ? { group: messageGroups.value[index], index } : null
 })
 const stickyGroup = computed(() => stickyDisplay.value?.group ?? null)
-
-/** 吸顶层的发送时间标注:与文档流原件同源(groupTimeLabels 按组下标) */
 const stickyTimeLabel = computed(() => {
-  const d = stickyDisplay.value
-  return d ? (groupTimeLabels.value[d.index] ?? '') : ''
+  const display = stickyDisplay.value
+  return display ? (groupTimeLabels.value[display.index] ?? '') : ''
 })
 
 /** 流式 pending 用户消息的发送时间标注(未落账,用前端发送时刻) */
 const pendingTimeLabel = computed(() => fullStamp(stream.value.pendingSentAt))
 
-function scrollToGroupIndex(i: number) {
-  if (i < 0) return
+const stickyPrevIndex = computed(() => stickyPending.value
+  ? findQualifiedGroup(messageGroups.value.length - 1, -1)
+  : stickyDisplay.value ? findQualifiedGroup(stickyDisplay.value.index - 1, -1) : -1)
+const stickyNextIndex = computed(() => stickyPending.value
+  ? -1
+  : stickyDisplay.value ? findQualifiedGroup(stickyDisplay.value.index + 1, 1) : -1)
+
+function groupPromptCard(index: number): HTMLElement | null {
+  const owner = scrollContentEl.value?.querySelector<HTMLElement>(`[data-anchor-index="${index}"]`)
+  return promptElement(owner)
+}
+
+function updateStickyPushOffset() {
+  const currentCard = stickySurfaceCard()
+  if ((!stickyDisplay.value && !stickyPending.value) || !currentCard) {
+    stickyPushOffset.value = 0
+    return
+  }
+  const nextCard = stickyPending.value
+    ? null
+    : stickyNextIndex.value >= 0
+      ? groupPromptCard(stickyNextIndex.value)
+      : promptElement(pendingStickyRef.value)
+  if (!nextCard) {
+    stickyPushOffset.value = 0
+    return
+  }
+
+  const restingBottom = currentCard.getBoundingClientRect().bottom - stickyPushOffset.value
+  stickyPushOffset.value = Math.min(
+    0,
+    nextCard.getBoundingClientRect().top - STICKY_CARD_GAP - restingBottom,
+  )
+}
+
+function scheduleStickyUpdate() {
+  if (stickyUpdateFrame) return
+  stickyUpdateFrame = window.requestAnimationFrame(() => {
+    stickyUpdateFrame = 0
+    updateStickyGroup()
+    updateStickyPushOffset()
+  })
+}
+
+watch(stickySurfaceElement, element => {
+  stickySurfaceResizeObserver?.disconnect()
+  stickySurfaceResizeObserver = null
+  if (!element) return
+  stickySurfaceResizeObserver = new ResizeObserver(scheduleStickyUpdate)
+  stickySurfaceResizeObserver.observe(element)
+  scheduleStickyUpdate()
+})
+
+watch([
+  renderGroups,
+  stickyUserPromptEnabled,
+  () => stream.value.pendingUserMessage,
+  () => stream.value.pendingImages?.length ?? 0,
+  pendingLandedUuid,
+], () => void nextTick(scheduleStickyUpdate))
+
+function elementScrollTop(element: HTMLElement, sc: HTMLElement): number {
+  return element.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
+}
+
+function scrollToGroupIndex(index: number) {
+  if (index < 0) return
   detachFollow()
   const sc = scrollContainer.value
   if (!shouldVirtualize.value) {
-    const element = scrollContentEl.value?.querySelector<HTMLElement>(`[data-anchor-index="${i}"]`)
+    const element = scrollContentEl.value?.querySelector<HTMLElement>(`[data-anchor-index="${index}"]`)
     if (!sc || !element) return
-    sc.scrollTop = elementScrollTop(element, sc, sc.getBoundingClientRect().top)
-    rememberProgrammaticScroll(sc, 'navigation')
+    sc.scrollTop = elementScrollTop(element, sc)
     return
   }
-  if (i >= renderGroups.value.length) {
-    // 末组:滚到虚拟容器底部即末组顶
-    const vbox = virtualBoxRef.value
-    if (!sc || !vbox) return
-    const vTop = vbox.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop
-    sc.scrollTop = vTop + messageVirtualizer.value.getTotalSize()
-    rememberProgrammaticScroll(sc, 'navigation')
-  } else {
-    messageVirtualizer.value.scrollToIndex(i, { align: 'start' })
-  }
+  if (index < renderGroups.value.length) messageVirtualizer.value.scrollToIndex(index, { align: 'start' })
 }
 
 function jumpToStickyPrompt() {
@@ -2288,38 +2331,19 @@ function jumpToStickyPrompt() {
   }
   detachFollow()
   const sc = scrollContainer.value
-  const element = pendingStickyRef.value
-  if (!sc || !element) return
-  sc.scrollTop = elementScrollTop(element, sc, sc.getBoundingClientRect().top)
-  rememberProgrammaticScroll(sc, 'navigation')
+  if (!sc || !pendingStickyRef.value) return
+  sc.scrollTop = elementScrollTop(pendingStickyRef.value, sc)
 }
-
-/** 从 from 沿 dir 方向找最近的合格用户消息组 */
-function findQualifiedGroup(from: number, dir: 1 | -1): number {
-  for (let i = from; i >= 0 && i < messageGroups.value.length; i += dir) {
-    if (groupQualifies(messageGroups.value[i])) return i
-  }
-  return -1
-}
-const stickyPrevIndex = computed(() =>
-  stickyPending.value
-    ? findQualifiedGroup(messageGroups.value.length - 1, -1)
-    : stickyDisplay.value ? findQualifiedGroup(stickyDisplay.value.index - 1, -1) : -1)
-const stickyNextIndex = computed(() =>
-  stickyPending.value
-    ? -1
-    : stickyDisplay.value ? findQualifiedGroup(stickyDisplay.value.index + 1, 1) : -1)
 
 function jumpStickyPrev() { scrollToGroupIndex(stickyPrevIndex.value) }
 function jumpStickyNext() { scrollToGroupIndex(stickyNextIndex.value) }
 
-// 组列表变化(落账/流式收尾)后组高与索引可能位移,DOM 稳定后重算吸顶
-watch([
-  renderGroups,
-  () => stream.value.pendingUserMessage,
-  () => stream.value.pendingImages?.length ?? 0,
-  pendingLandedUuid,
-], () => nextTick(updateStickyGroup))
+onUnmounted(() => {
+  stickySurfaceResizeObserver?.disconnect()
+  stickySurfaceResizeObserver = null
+  if (stickyUpdateFrame) window.cancelAnimationFrame(stickyUpdateFrame)
+  stickyUpdateFrame = 0
+})
 
 /** SessionAnchorNav 点击时的虚拟化前置:让目标组先进虚拟窗口渲染出来,再由 SessionAnchorNav 的 rAF 精调 offsetTop */
 function onAnchorScrollToIndex(index: number) {
@@ -3197,35 +3221,44 @@ async function onReload() {
       :hook-events="bannerHookEvents"
     />
       </template>
-    <!-- 独立吸顶层:只渲染用户消息克隆，正文原件永远留在正常文档流。 -->
-    <div v-if="stickyUserPromptEnabled && (stickyPending || stickyGroup?.user)" class="sticky-user-overlay" :title="$t('session.stickyJumpHint')" @click="jumpToStickyPrompt">
-      <ConversationUserMessage :time-label="stickyPending ? pendingTimeLabel : stickyTimeLabel">
-        <UserMsgContent
-          v-if="stickyPending"
-          :blocks="pendingUserBlocks"
-        />
-        <UserMsgContent
-          v-else-if="stickyGroup?.user"
-          :blocks="contentBlocks(stickyGroup.user as any)"
-          :record-uuid="stickyGroup.user.uuid ?? undefined"
-        />
-        <template #actions>
-          <span class="flex items-center gap-0.5">
-            <button
-              class="sticky-nav-btn"
-              :disabled="stickyPrevIndex < 0"
-              :title="$t('session.stickyPrev')"
-              @click.stop="jumpStickyPrev"
-            ><span class="i-carbon-chevron-up w-3.5 h-3.5" /></button>
-            <button
-              class="sticky-nav-btn"
-              :disabled="stickyNextIndex < 0"
-              :title="$t('session.stickyNext')"
-              @click.stop="jumpStickyNext"
-            ><span class="i-carbon-chevron-down w-3.5 h-3.5" /></button>
-          </span>
-        </template>
-      </ConversationUserMessage>
+    <div
+      v-if="stickyUserPromptEnabled"
+      ref="stickyOverlayElement"
+      class="sticky-user-overlay"
+    >
+      <div
+        v-if="stickyPending || stickyGroup?.user"
+        ref="stickySurfaceElement"
+        class="sticky-user-surface"
+        :style="{ transform: `translate3d(0, ${stickyPushOffset}px, 0)` }"
+        :title="$t('session.stickyJumpHint')"
+        @click="jumpToStickyPrompt"
+      >
+        <ConversationUserMessage :time-label="stickyPending ? pendingTimeLabel : stickyTimeLabel">
+          <UserMsgContent v-if="stickyPending" :blocks="pendingUserBlocks" />
+          <UserMsgContent
+            v-else-if="stickyGroup?.user"
+            :blocks="contentBlocks(stickyGroup.user as any)"
+            :record-uuid="stickyGroup.user.uuid ?? undefined"
+          />
+          <template #actions>
+            <span class="flex items-center gap-0.5">
+              <button
+                class="sticky-nav-btn"
+                :disabled="stickyPrevIndex < 0"
+                :title="$t('session.stickyPrev')"
+                @click.stop="jumpStickyPrev"
+              ><span class="i-carbon-chevron-up w-3.5 h-3.5" /></button>
+              <button
+                class="sticky-nav-btn"
+                :disabled="stickyNextIndex < 0"
+                :title="$t('session.stickyNext')"
+                @click.stop="jumpStickyNext"
+              ><span class="i-carbon-chevron-down w-3.5 h-3.5" /></button>
+            </span>
+          </template>
+        </ConversationUserMessage>
+      </div>
     </div>
 
     <!-- 内容包裹层:所有增高源(打字机/晚到turn/落账替换/图片/cv解冻/横幅)都反映为它的高度变化,
@@ -3257,7 +3290,7 @@ async function onReload() {
             :data-index="vitem.index"
             data-virtual-anchor="true"
             :style="{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vitem.start}px)` }"
-            class="space-y-4"
+            :class="['space-y-4', { 'sticky-source-hidden': !stickyPending && stickyDisplay?.index === vitem.index }]"
           >
             <MessageGroup
               :group="renderGroups[vitem.index]"
@@ -3282,7 +3315,7 @@ async function onReload() {
             :key="messageGroupKey(group, gi)"
             :data-anchor-index="gi"
             :data-group-key="messageGroupKey(group, gi)"
-            class="space-y-4"
+            :class="['space-y-4', { 'sticky-source-hidden': !stickyPending && stickyDisplay?.index === gi }]"
           >
             <MessageGroup
               :group="group"
@@ -3306,7 +3339,7 @@ async function onReload() {
           :key="messageGroupKey(lastGroup, lastGroupIndex)"
           :data-anchor-index="lastGroupIndex"
           :data-group-key="messageGroupKey(lastGroup, lastGroupIndex)"
-          class="space-y-4"
+          :class="['space-y-4', { 'sticky-source-hidden': !stickyPending && stickyDisplay?.index === lastGroupIndex }]"
         >
           <MessageGroup
             :group="lastGroup"
@@ -3339,6 +3372,7 @@ async function onReload() {
         <div
           v-if="(stream.pendingUserMessage || stream.pendingImages?.length) && !pendingLandedUuid"
           ref="pendingStickyRef"
+          :class="{ 'sticky-source-hidden': stickyPending }"
         >
           <ConversationUserMessage :time-label="pendingTimeLabel">
             <UserMsgContent :blocks="pendingUserBlocks" />
@@ -3582,16 +3616,20 @@ async function onReload() {
   content-visibility: auto;
   contain-intrinsic-size: auto 220px;
 }
-/* 独立吸顶层:零高 sticky 悬于内容之上，不改变正文消息的排版和顺序。 */
 .sticky-user-overlay {
   position: sticky;
   top: 0;
   z-index: 20;
   height: 0;
   overflow: visible;
-  cursor: pointer;
+  pointer-events: none;
 }
-/* 吸顶头部的上下条导航小按钮 */
+.sticky-user-surface {
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform;
+}
+.sticky-source-hidden :deep(.conversation-user-message) { visibility: hidden; }
 .sticky-nav-btn {
   border: none;
   background: none;
