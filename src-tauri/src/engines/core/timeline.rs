@@ -74,7 +74,11 @@ pub struct AssetRef {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Segment {
     Text {
         text: String,
@@ -278,6 +282,26 @@ mod tests {
                 "value": "x".repeat(SEGMENT_VALUE_MAX_BYTES)
             })),
             serde_json::json!({ "truncated": true })
+        );
+    }
+
+    #[test]
+    fn segment_struct_fields_follow_the_frontend_camel_case_contract() {
+        let segment = Segment::ToolResult {
+            call_id: "tool-1".into(),
+            content: Value::String("done".into()),
+            is_error: false,
+            attachments: Vec::new(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(segment).unwrap(),
+            serde_json::json!({
+                "kind": "toolResult",
+                "callId": "tool-1",
+                "content": "done",
+                "isError": false,
+            }),
         );
     }
 }

@@ -44,6 +44,23 @@ describe('macOS background service recovery', () => {
     expect(management).toContain('EX_CONFIG')
   })
 
+  it('re-registers only unhealthy routine agents after a runner signature change', () => {
+    const scheduler = source('../../src-tauri/src/scheduler.rs')
+    const needsUpdateStart = scheduler.indexOf(
+      'pub fn needs_update(routine: &RoutineDefinition, runner_path: &Path) -> bool',
+    )
+    const needsUpdate = scheduler.slice(
+      needsUpdateStart,
+      scheduler.indexOf('pub fn cleanup_orphans', needsUpdateStart),
+    )
+
+    expect(needsUpdate).toContain(
+      'crate::service_management::launchd_service_healthy(&label(&routine.id))',
+    )
+    expect(needsUpdate).toContain('existing.trim() != expected.trim()')
+    expect(scheduler).toContain('routine agent outdated, reinstalling')
+  })
+
   it('refreshes a missing or stale Widget snapshot before registering the scheduler', () => {
     const widget = source('../../src-tauri/src/widget.rs')
     const startup = widget.slice(

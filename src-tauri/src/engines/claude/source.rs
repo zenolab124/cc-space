@@ -453,17 +453,15 @@ pub(crate) fn map_block(
             tool_use_id,
             content,
             is_error,
-        } => Segment::ToolResult {
-            call_id: tool_use_id,
-            content: match content {
-                ToolResultContent::Text(text) => Value::String(bounded_segment_text(text)),
-                ToolResultContent::Blocks(blocks) => {
-                    bounded_segment_value(serde_json::to_value(blocks).unwrap_or(Value::Null))
-                }
-            },
-            is_error,
-            attachments: Vec::new(),
-        },
+        } => {
+            let (content, attachments) = split_tool_result_content(session, record_id, content);
+            Segment::ToolResult {
+                call_id: tool_use_id,
+                content,
+                is_error,
+                attachments,
+            }
+        }
         ContentBlock::Image { source } => Segment::Attachment {
             asset: AssetRef {
                 session: session.clone(),
@@ -485,6 +483,43 @@ pub(crate) fn map_block(
             summary: None,
         },
     })
+}
+
+fn split_tool_result_content(
+    session: &SessionRef,
+    record_id: &str,
+    content: ToolResultContent,
+) -> (Value, Vec<ToolResultAttachment>) {
+    let blocks = match content {
+        ToolResultContent::Text(text) => {
+            return (Value::String(bounded_segment_text(text)), Vec::new())
+        }
+        ToolResultContent::Blocks(blocks) => blocks,
+    };
+    let mut visible = Vec::with_capacity(blocks.len());
+    let mut attachments = Vec::new();
+    for block in blocks {
+        let ContentBlock::Image { source } = block else {
+            visible.push(block);
+            continue;
+        };
+        attachments.push(ToolResultAttachment {
+            asset: AssetRef {
+                session: session.clone(),
+                native_id: format!("{record_id}:{}", source.img_index),
+            },
+            media_type: if source.media_type.is_empty() {
+                "image/*".to_string()
+            } else {
+                source.media_type
+            },
+            title: None,
+        });
+    }
+    (
+        bounded_segment_value(serde_json::to_value(visible).unwrap_or(Value::Null)),
+        attachments,
+    )
 }
 
 #[cfg(test)]
@@ -519,6 +554,41 @@ mod tests {
                 summary: None
             }
         );
+    }
+
+    #[test]
+    fn extracts_nested_tool_result_images_as_lazy_attachments() {
+        let session = SessionRef::new(default_instance().unwrap(), "session").unwrap();
+        let segment = map_block(
+            &session,
+            "record",
+            ContentBlock::ToolResult {
+                tool_use_id: "tool-1".into(),
+                content: ToolResultContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: "done".into(),
+                    },
+                    ContentBlock::Image {
+                        source: crate::models::ImageSource {
+                            source_type: "base64".into(),
+                            media_type: "image/jpeg".into(),
+                            img_index: 3,
+                        },
+                    },
+                ]),
+                is_error: false,
+            },
+        )
+        .unwrap();
+
+        assert!(matches!(
+            segment,
+            Segment::ToolResult { content, attachments, .. }
+                if content.as_array().is_some_and(|items| items.len() == 1)
+                    && attachments.len() == 1
+                    && attachments[0].media_type == "image/jpeg"
+                    && attachments[0].asset.native_id == "record:3"
+        ));
     }
 
     #[test]

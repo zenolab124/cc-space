@@ -7,6 +7,7 @@ import type { AssistantResponseMeta } from '@/utils/assistantResponse'
 import { engineResponseMeta } from '@/engines/presentation'
 import {
   buildEngineResponseBlocks,
+  isEngineProcessSegment,
   isRenderableEngineSegment,
   projectEngineProcessEntries,
   type EngineProcessProjection,
@@ -63,6 +64,9 @@ const responseRecords = computed(() => props.records
   .filter(record => record.segments.length > 0))
 
 const responseTimeline = computed(() => props.records.filter(record => record.role !== 'user'))
+const responseProcessEntries = computed(() => responseRecords.value.flatMap(record => record.segments
+  .map((segment, index) => ({ key: `${record.id}:${index}`, segment }))
+  .filter(entry => isEngineProcessSegment(entry.segment))))
 type ResponseBlockView =
   | Extract<EngineResponseBlock, { kind: 'content' }>
   | (Extract<EngineResponseBlock, { kind: 'process' }> & { projection: EngineProcessProjection })
@@ -70,7 +74,7 @@ type ResponseBlockView =
 const responseBlocks = computed<ResponseBlockView[]>(() => buildEngineResponseBlocks(
   responseRecords.value,
 ).map(block => block.kind === 'process'
-  ? { ...block, projection: projectEngineProcessEntries(block.entries) }
+  ? { ...block, projection: projectEngineProcessEntries(block.entries, responseProcessEntries.value) }
   : block))
 
 const toolResults = computed(() => {

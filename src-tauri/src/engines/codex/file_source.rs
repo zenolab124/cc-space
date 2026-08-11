@@ -11,6 +11,7 @@ use super::{CodexThread, CodexTurn};
 
 const PREVIEW_MAX_CHARS: usize = 4_000;
 const SUMMARY_SCAN_LIMIT: usize = 512 * 1024;
+const SUMMARY_CANONICAL_LOOKAHEAD_ROWS: usize = 32;
 
 pub(super) fn list_threads() -> EngineResult<Vec<CodexThread>> {
     let paths = session_paths();
@@ -60,6 +61,48 @@ pub(super) fn thread_path(id: &str) -> Option<PathBuf> {
         if summary.id == id || path.file_stem().and_then(|value| value.to_str()) == Some(id) {
             return Some(path);
         }
+    }
+    None
+}
+
+/// 从 rollout 的 MCP 完成事件中按调用 ID 读取单个结果块。
+/// 这条路径不依赖 App Server，供历史图片按需恢复使用。
+pub(super) fn read_mcp_result_content_item(
+    thread_id: &str,
+    call_id: &str,
+    content_index: usize,
+) -> Option<Value> {
+    let path = thread_path(thread_id)?;
+    read_mcp_result_content_item_from_path(&path, call_id, content_index)
+}
+
+fn read_mcp_result_content_item_from_path(
+    path: &Path,
+    call_id: &str,
+    content_index: usize,
+) -> Option<Value> {
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let payload = value.get("payload").unwrap_or(&value);
+        if payload.get("type").and_then(Value::as_str) != Some("mcp_tool_call_end")
+            || payload.get("call_id").and_then(Value::as_str) != Some(call_id)
+        {
+            continue;
+        }
+        let result = payload.get("result")?;
+        let result = result.get("Ok").unwrap_or(result);
+        return result
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|content| content.get(content_index))
+            .cloned();
     }
     None
 }
@@ -118,7 +161,10 @@ pub(super) fn read_thread_summary(path: &Path) -> Option<CodexThread> {
     let mut line = String::new();
     let mut meta = None;
     let mut preview = None;
+    let mut fallback_preview = None;
+    let mut fallback_row = None;
     let mut scanned_bytes = 0usize;
+    let mut scanned_rows = 0usize;
     loop {
         line.clear();
         if reader.read_line(&mut line).ok()? == 0 {
@@ -131,13 +177,30 @@ pub(super) fn read_thread_summary(path: &Path) -> Option<CodexThread> {
             }
             continue;
         };
+        scanned_rows += 1;
         if value.get("type").and_then(Value::as_str) == Some("session_meta") {
             meta = value.get("payload").cloned();
         }
-        if preview.is_none() {
+        let canonical_user_message = value.get("type").and_then(Value::as_str) == Some("event_msg")
+            && value
+                .get("payload")
+                .and_then(|payload| payload.get("type"))
+                .and_then(Value::as_str)
+                == Some("user_message");
+        if canonical_user_message {
             preview = preview_from_value(&value);
+        } else if fallback_preview.is_none() {
+            fallback_preview = preview_from_value(&value);
+            if fallback_preview.is_some() {
+                fallback_row = Some(scanned_rows);
+            }
         }
-        if (meta.is_some() && preview.is_some()) || scanned_bytes >= SUMMARY_SCAN_LIMIT {
+        let canonical_lookahead_exhausted = fallback_row.is_some_and(|row| {
+            scanned_rows.saturating_sub(row) >= SUMMARY_CANONICAL_LOOKAHEAD_ROWS
+        });
+        if (meta.is_some() && (preview.is_some() || canonical_lookahead_exhausted))
+            || scanned_bytes >= SUMMARY_SCAN_LIMIT
+        {
             break;
         }
     }
@@ -157,7 +220,7 @@ pub(super) fn read_thread_summary(path: &Path) -> Option<CodexThread> {
     Some(CodexThread {
         id,
         name: None,
-        preview: preview.unwrap_or_default(),
+        preview: preview.or(fallback_preview).unwrap_or_default(),
         cwd: string_field(&payload, &["cwd"]).unwrap_or_default(),
         model_provider: string_field(&payload, &["model_provider"]).unwrap_or_default(),
         path: Some(path.to_string_lossy().into_owned()),
@@ -290,10 +353,11 @@ impl ThreadBuilder {
                     let item = json!({
                         "id": id,
                         "type": "userMessage",
-                        "content": [{"type": "text", "text": text}]
+                        "content": [{"type": "text", "text": text}],
+                        "canonicalUserMessage": true
                     });
                     let turn_id = self.current_turn_id();
-                    self.add_item_if_text_is_new(&turn_id, item, &text);
+                    self.add_item(&turn_id, item);
                 }
             }
             Some("agent_message") => {
@@ -307,7 +371,8 @@ impl ThreadBuilder {
                         "id": id,
                         "type": "agentMessage",
                         "text": text,
-                        "phase": payload.get("phase").cloned().unwrap_or(Value::Null)
+                        "phase": payload.get("phase").cloned().unwrap_or(Value::Null),
+                        "eventAgentMessage": true
                     });
                     let turn_id = self.current_turn_id();
                     self.add_item_if_text_is_new(&turn_id, item, &text);
@@ -344,8 +409,12 @@ impl ThreadBuilder {
     fn add_item(&mut self, turn_id: &str, item: Value) {
         self.ensure_turn(turn_id, None);
         let index = self.turn_indexes[turn_id];
+        let canonical_user_message = item
+            .get("canonicalUserMessage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if item.get("type").and_then(Value::as_str) == Some("userMessage")
-            && self.preview.is_empty()
+            && (self.preview.is_empty() || canonical_user_message)
         {
             self.preview = preview_from_value(&item).unwrap_or_default();
         }
@@ -364,7 +433,21 @@ impl ThreadBuilder {
         }
     }
 
-    fn finish(self) -> EngineResult<CodexThread> {
+    fn finish(mut self) -> EngineResult<CodexThread> {
+        for turn in &mut self.turns {
+            canonicalize_user_messages(&mut turn.items);
+            deduplicate_event_agent_messages(&mut turn.items);
+            clear_internal_message_markers(&mut turn.items);
+        }
+        if let Some(preview) = self
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("userMessage"))
+            .and_then(preview_from_value)
+        {
+            self.preview = preview;
+        }
         let id = self
             .id
             .or_else(|| {
@@ -388,6 +471,133 @@ impl ThreadBuilder {
             updated_at: self.updated_at.max(created_at),
             turns: self.turns,
         })
+    }
+}
+
+/// rollout 会同时记录宿主上下文和真正的人类输入为 user message；只有
+/// `event_msg.user_message` 与 App Server 的用户消息口径一致。若该权威事件存在，
+/// 丢弃同一 turn 里的原始 user 快照，并从匹配快照补回图片内容。
+fn canonicalize_user_messages(items: &mut Vec<Value>) {
+    let canonical_indexes: Vec<_> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            item.get("canonicalUserMessage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                .then_some(index)
+        })
+        .collect();
+    if canonical_indexes.is_empty() {
+        return;
+    }
+
+    let candidates = items.clone();
+    for index in canonical_indexes {
+        let Some(canonical_text) = items[index]
+            .get("content")
+            .map(content_text)
+            .filter(|text| !text.is_empty())
+        else {
+            continue;
+        };
+        let Some(source_content) = candidates.iter().find_map(|candidate| {
+            let is_raw_user = candidate.get("type").and_then(Value::as_str) == Some("userMessage")
+                && !candidate
+                    .get("canonicalUserMessage")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+            if !is_raw_user {
+                return None;
+            }
+            candidate
+                .get("content")
+                .and_then(Value::as_array)
+                .filter(|content| {
+                    content.iter().any(|part| {
+                        part.get("type").and_then(Value::as_str) == Some("text")
+                            && part.get("text").and_then(Value::as_str)
+                                == Some(canonical_text.as_str())
+                    })
+                })
+        }) else {
+            continue;
+        };
+        let images: Vec<_> = source_content
+            .iter()
+            .filter(|part| {
+                matches!(
+                    part.get("type").and_then(Value::as_str),
+                    Some("image" | "input_image")
+                )
+            })
+            .cloned()
+            .collect();
+        if let Some(content) = items[index]
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+        {
+            content.extend(images);
+        }
+    }
+
+    items.retain(|item| {
+        item.get("type").and_then(Value::as_str) != Some("userMessage")
+            || item
+                .get("canonicalUserMessage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    });
+}
+
+/// agent_message 事件与紧随其后的 assistant response_item 是同一条回复的两种落盘形态。
+/// 优先保留带稳定原生 ID 的 response_item；仅在快照缺失时保留事件兜底。
+fn deduplicate_event_agent_messages(items: &mut Vec<Value>) {
+    let response_messages: Vec<_> = items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("agentMessage")
+                && !item
+                    .get("eventAgentMessage")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .filter_map(|item| {
+            item.get("text").and_then(Value::as_str).map(|text| {
+                (
+                    text.to_string(),
+                    item.get("phase").and_then(Value::as_str).map(String::from),
+                )
+            })
+        })
+        .collect();
+    if response_messages.is_empty() {
+        return;
+    }
+    items.retain(|item| {
+        let event_message = item
+            .get("eventAgentMessage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let text = item.get("text").and_then(Value::as_str);
+        let phase = item.get("phase").and_then(Value::as_str);
+        !event_message
+            || !text.is_some_and(|text| {
+                response_messages
+                    .iter()
+                    .any(|(response_text, response_phase)| {
+                        response_text == text && response_phase.as_deref() == phase
+                    })
+            })
+    });
+}
+
+fn clear_internal_message_markers(items: &mut [Value]) {
+    for item in items {
+        if let Some(object) = item.as_object_mut() {
+            object.remove("canonicalUserMessage");
+            object.remove("eventAgentMessage");
+        }
     }
 }
 
@@ -616,6 +826,43 @@ mod tests {
     }
 
     #[test]
+    fn reads_one_mcp_image_block_from_rollout_event() {
+        let path = std::env::temp_dir().join(format!(
+            "monet-codex-mcp-image-{}-{}.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(
+            &path,
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "call_id": "exec-image-1",
+                    "result": {
+                        "Ok": {
+                            "content": [
+                                { "type": "text", "text": "done" },
+                                { "type": "image", "mimeType": "image/png", "data": "aW1hZ2U=" }
+                            ]
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let image = read_mcp_result_content_item_from_path(&path, "exec-image-1", 1).unwrap();
+        assert_eq!(image["mimeType"], "image/png");
+        assert_eq!(image["data"], "aW1hZ2U=");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn custom_tool_calls_preserve_pairing_id_and_program_source() {
         let item = normalize_response_item(
             &json!({
@@ -725,11 +972,143 @@ mod tests {
         assert_eq!(thread.preview, "hello");
         assert_eq!(thread.cwd, "/tmp/project");
         assert_eq!(thread.turns.len(), 1);
+        assert_eq!(thread.turns[0].items.len(), 4);
         assert_eq!(thread.turns[0].items[1]["type"], "dynamicToolCall");
         assert_eq!(thread.turns[0].items[1]["callId"], "call-1");
         assert_eq!(thread.turns[0].items[2]["type"], "toolResult");
         assert_eq!(thread.turns[0].items[3]["text"], "done");
         assert_eq!(thread.turns[0].items[3]["phase"], "final_answer");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn local_timeline_uses_canonical_user_events_instead_of_injected_context() {
+        let path = std::env::temp_dir().join(format!(
+            "monet-codex-canonical-user-{}-{}.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let rows = [
+            json!({
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-1",
+                    "cwd": "/tmp/project",
+                    "timestamp": "2026-08-11T00:00:00Z"
+                }
+            }),
+            json!({
+                "type": "event_msg",
+                "payload": { "type": "task_started", "turn_id": "turn-1" }
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "injected-context",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "<workspace_context>hidden</workspace_context>" }]
+                }
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "user-1",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "first prompt" },
+                        { "type": "input_text", "text": "hidden image annotation" },
+                        { "type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U=" }
+                    ]
+                }
+            }),
+            json!({
+                "type": "event_msg",
+                "payload": { "type": "user_message", "message": "first prompt" }
+            }),
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "phase": "final_answer",
+                    "message": "first reply"
+                }
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{ "type": "output_text", "text": "first reply" }]
+                }
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "user-2",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "second prompt" }]
+                }
+            }),
+            json!({
+                "type": "event_msg",
+                "payload": { "type": "user_message", "message": "second prompt" }
+            }),
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "phase": "final_answer",
+                    "message": "second reply"
+                }
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "assistant-2",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{ "type": "output_text", "text": "second reply" }]
+                }
+            }),
+        ];
+        fs::write(
+            &path,
+            rows.iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let summary = read_thread_summary(&path).unwrap();
+        assert_eq!(summary.preview, "first prompt");
+
+        let thread = read_thread_file(&path).unwrap();
+        assert_eq!(thread.preview, "first prompt");
+        assert_eq!(thread.turns.len(), 1);
+        let items = &thread.turns[0].items;
+        assert_eq!(items.len(), 4);
+        assert_eq!(content_text(&items[0]["content"]), "first prompt");
+        assert_eq!(items[0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(items[1]["text"], "first reply");
+        assert_eq!(content_text(&items[2]["content"]), "second prompt");
+        assert_eq!(items[3]["text"], "second reply");
+        assert!(items
+            .iter()
+            .all(|item| !item.to_string().contains("hidden")));
+        assert!(items.iter().all(|item| {
+            item.get("canonicalUserMessage").is_none() && item.get("eventAgentMessage").is_none()
+        }));
 
         let _ = fs::remove_file(path);
     }

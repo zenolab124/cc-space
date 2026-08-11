@@ -52,6 +52,16 @@ export function segmentToolBlocks(blocks: ContentBlock[]): ToolBlockSegment[] {
 
   blocks.forEach((block, index) => {
     if (isToolUseBlock(block)) {
+      if (isOrchestrationTool(block)) {
+        flushTools()
+        segments.push({
+          kind: 'tools',
+          key: `tools:${block.id}`,
+          blocks: [block],
+          tools: [block],
+        })
+        return
+      }
       pendingBlocks.push(block)
       pendingTools.push(block)
       return
@@ -105,6 +115,15 @@ export function toolSummary(tool: ToolUseBlock): string {
 
 export function isOrchestrationTool(tool: ToolUseBlock): boolean {
   return tool._presentation === 'orchestration'
+}
+
+export function toolDisplayTitle(tool: ToolUseBlock): string {
+  if (tool._title?.trim()) return tool._title.trim()
+  return tool.name
+}
+
+export function isOrchestrationToolSegment(tools: readonly ToolUseBlock[]): boolean {
+  return tools.length > 0 && tools.every(isOrchestrationTool)
 }
 
 function toolActionKind(tool: ToolUseBlock): ToolActionKind {

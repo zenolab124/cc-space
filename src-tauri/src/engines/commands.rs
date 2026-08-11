@@ -189,9 +189,12 @@ pub async fn engine_session_actions(session: SessionRef) -> EngineResult<Session
 }
 
 #[tauri::command]
-pub async fn engine_resolve_asset(asset: AssetRef) -> EngineResult<ResolvedAsset> {
+pub async fn engine_resolve_asset(
+    asset: AssetRef,
+    preview: Option<bool>,
+) -> EngineResult<ResolvedAsset> {
     const MAX_ASSET_BYTES: usize = 32 * 1024 * 1024;
-    let resolved = system::get()?
+    let mut resolved = system::get()?
         .registry()
         .source_for(&asset.session)?
         .resolve_asset(asset)
@@ -201,6 +204,13 @@ pub async fn engine_resolve_asset(asset: AssetRef) -> EngineResult<ResolvedAsset
             EngineErrorKind::Protocol,
             "resolved asset exceeds the transfer size limit",
         ));
+    }
+    if preview.unwrap_or(false) {
+        if let Some((media_type, bytes)) =
+            crate::image_protocol::make_engine_thumbnail(&resolved.media_type, &resolved.bytes)
+        {
+            resolved = ResolvedAsset { media_type, bytes };
+        }
     }
     Ok(resolved)
 }

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ContentBlock } from '@/types'
-import { isOrchestrationTool, isToolUseBlock, segmentToolBlocks } from '@/utils/toolDisplay'
+import {
+  isOrchestrationTool,
+  isOrchestrationToolSegment,
+  isToolUseBlock,
+  segmentToolBlocks,
+} from '@/utils/toolDisplay'
 import { useToolDisplayMode } from '@/composables/useToolDisplay'
 import MessageBlock from './MessageBlock.vue'
 import ToolProcessGroup from './ToolProcessGroup.vue'
@@ -37,6 +42,13 @@ const segments = computed(() => {
           :block="segment.block"
           :streaming="streaming"
           :record-uuid="segment.recordUuids[0]"
+        />
+      </div>
+      <div v-else-if="isOrchestrationToolSegment(segment.tools)" class="content-segment">
+        <ToolProcessItems
+          :blocks="segment.blocks"
+          :block-record-uuids="segment.recordUuids"
+          :streaming="streaming"
         />
       </div>
       <div v-else-if="toolDisplayMode === 'cards'" class="content-segment content-tool-cards">

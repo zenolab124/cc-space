@@ -400,7 +400,15 @@ mod platform {
             &routine.id,
             &calendar_intervals,
         );
-        existing.trim() != expected.trim()
+        if existing.trim() != expected.trim() {
+            return true;
+        }
+
+        // plist 内容不变不代表 launchd 仍能启动任务。软件更新替换同一路径下的
+        // runner 后，launchd 可能继续持有旧 LWCR（代码签名约束），服务仍可
+        // print 却在触发时以 OS_REASON_CODESIGNING 退出。只恢复真实异常的任务，
+        // 避免健康任务每次启动都重注册并反复触发系统后台项目通知。
+        !crate::service_management::launchd_service_healthy(&label(&routine.id))
     }
 
     pub fn cleanup_orphans(known_ids: &std::collections::HashSet<&str>) {

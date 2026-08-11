@@ -2,9 +2,9 @@
 import { computed, inject, watch, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ContentBlock } from '@/types'
-import type { ToolResultData } from '@/utils/toolPair'
+import { flattenResultText, type ToolResultData } from '@/utils/toolPair'
 import type { ToolUseBlock } from '@/utils/toolDisplay'
-import { isOrchestrationTool, toolSummary } from '@/utils/toolDisplay'
+import { isOrchestrationTool, toolDisplayTitle, toolSummary } from '@/utils/toolDisplay'
 import MessageBlock from './MessageBlock.vue'
 import BlockImage from './blocks/BlockImage.vue'
 import EngineAssetImage from './engine/EngineAssetImage.vue'
@@ -33,7 +33,10 @@ const legacyResults = inject<ComputedRef<Map<string, ToolResultData>>>('toolResu
 
 const result = computed(() => context?.results.value.get(props.tool.id) ?? legacyResults?.value.get(props.tool.id))
 const orchestration = computed(() => isOrchestrationTool(props.tool))
-const title = computed(() => props.tool._title || (orchestration.value ? t('block.toolFold.action.orchestration') : props.tool.name))
+const title = computed(() => toolDisplayTitle(props.tool))
+const canExpand = computed(() => !orchestration.value || result.value !== undefined)
+const resultText = computed(() => result.value ? flattenResultText(result.value.content).trim() : '')
+const resultContentId = computed(() => `tool-result-${props.tool.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`)
 const resultImages = computed(() => {
   const content = result.value?.content
   if (!content || typeof content === 'string') return []
@@ -73,6 +76,7 @@ const iconClass = computed(() => {
 })
 
 const stateLabel = computed(() => {
+  if (orchestration.value && state.value === 'done') return ''
   if (state.value === 'running') return t('block.toolFold.running')
   if (state.value === 'permission') return t('block.toolFold.permission')
   if (state.value === 'error') return t('block.toolFold.failed')
@@ -103,12 +107,17 @@ watch(() => foldState.requestedToolId.value, requested => {
 </script>
 
 <template>
-  <div class="tool-fold-item" :data-tool-use-id="tool.id">
+  <div
+    class="tool-fold-item"
+    :class="{ 'is-orchestration': orchestration }"
+    :data-tool-use-id="tool.id"
+  >
     <button
-      v-if="foldable && !orchestration"
+      v-if="foldable && canExpand"
       type="button"
       class="tool-fold-line"
       :aria-expanded="expanded"
+      :aria-controls="resultContentId"
       :title="$t('block.foldShiftHint')"
       @click="toggle"
     >
@@ -146,21 +155,40 @@ watch(() => foldState.requestedToolId.value, requested => {
         <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
       </span>
     </div>
-    <div v-if="!orchestration && (!foldable || expanded)" class="tool-fold-card">
+    <div
+      v-if="!orchestration && (!foldable || expanded)"
+      :id="resultContentId"
+      class="tool-fold-card"
+    >
       <MessageBlock :block="tool" />
     </div>
     <div
-      v-if="(orchestration && resultImages.length) || result?.attachments?.length"
-      class="tool-fold-assets"
+      v-if="orchestration && expanded && result"
+      :id="resultContentId"
+      class="tool-fold-result"
+      :class="{ 'is-error': result.is_error }"
     >
+      <pre v-if="resultText" class="tool-fold-result-text">{{ resultText }}</pre>
       <BlockImage
-        v-for="(image, index) in orchestration ? resultImages : []"
+        v-for="(image, index) in resultImages"
         :key="`inline:${index}`"
         :block="image"
-        :record-uuid="result?.recordUuid"
+        :record-uuid="result.recordUuid"
       />
       <EngineAssetImage
-        v-for="attachment in result?.attachments"
+        v-for="attachment in result.attachments"
+        :key="attachment.asset.nativeId"
+        :attachment="attachment"
+        auto-load
+        compact
+      />
+    </div>
+    <div
+      v-if="!orchestration && result?.attachments?.length"
+      class="tool-fold-assets"
+    >
+      <EngineAssetImage
+        v-for="attachment in result.attachments"
         :key="attachment.asset.nativeId"
         :attachment="attachment"
         auto-load
@@ -203,6 +231,20 @@ watch(() => foldState.requestedToolId.value, requested => {
   white-space: nowrap;
 }
 .tool-fold-main b { color: var(--foreground); font-weight: 600; }
+.tool-fold-item.is-orchestration .tool-fold-line {
+  color: color-mix(in srgb, var(--muted-foreground) 82%, transparent);
+  font-size: 11px;
+}
+.tool-fold-item.is-orchestration .tool-fold-main b {
+  color: inherit;
+  font-weight: 450;
+}
+.tool-fold-item.is-orchestration .tool-fold-icon { width: 12px; height: 12px; opacity: 0.68; }
+.tool-fold-line:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .tool-fold-state { display: inline-flex; align-items: center; margin-left: auto; flex: none; font-size: 11px; line-height: var(--tool-row-line-height); }
 .tool-fold-state.is-running { color: var(--claude); }
 .tool-fold-state.is-permission { color: var(--warning, var(--accent)); }
@@ -211,6 +253,21 @@ watch(() => foldState.requestedToolId.value, requested => {
 .tool-fold-state.is-background { color: var(--primary); }
 .tool-fold-card { margin: 2px 0 6px 18px; }
 .tool-fold-card > :deep(*) { margin-top: 0; }
+.tool-fold-result {
+  margin: 2px 0 6px 18px;
+  padding: 2px 0 2px 9px;
+  border-left: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+.tool-fold-result.is-error { color: var(--destructive); border-left-color: color-mix(in srgb, var(--destructive) 30%, transparent); }
+.tool-fold-result-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .tool-fold-assets { margin: 2px 0 6px 32px; }
 .tool-fold-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-fold-dots i {

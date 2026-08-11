@@ -195,7 +195,7 @@ describe('engine process groups', () => {
         segment: {
           kind: 'toolResult',
           callId: 'tool-1',
-          content: [],
+          content: 'Window: "Monet"',
           isError: false,
           attachments: [attachment],
         },
@@ -209,6 +209,70 @@ describe('engine process groups', () => {
       _presentation: 'orchestration',
     })
     expect(projection.blocks).toHaveLength(1)
+    expect(projection.results.get('tool-1')?.content).toBe('Window: "Monet"')
     expect(projection.results.get('tool-1')?.attachments).toEqual([attachment])
+  })
+
+  it('keeps an orchestration result embedded when visible content splits the process blocks', () => {
+    const blocks = buildEngineResponseBlocks([{
+      id: 'record',
+      segments: [
+        {
+          kind: 'toolCall' as const,
+          id: 'tool-1',
+          name: 'exec',
+          input: { value: 'work()' },
+          title: '识别窗口',
+          presentation: 'orchestration' as const,
+        },
+        { kind: 'reasoning' as const, text: '检查结果', visibility: 'summary' as const },
+        { kind: 'toolResult' as const, callId: 'tool-1', content: 'Window: Monet', isError: false },
+      ],
+    }])
+    const processBlocks = blocks.filter(block => block.kind === 'process')
+    const pairingEntries = processBlocks.flatMap(block => block.entries)
+    const projections = processBlocks.map(block =>
+      projectEngineProcessEntries(block.entries, pairingEntries),
+    )
+
+    expect(projections.flatMap(projection => projection.blocks)).toEqual([
+      expect.objectContaining({
+        type: 'tool_use',
+        id: 'tool-1',
+        _title: '识别窗口',
+        _presentation: 'orchestration',
+      }),
+    ])
+    expect(projections[1].blocks).toEqual([])
+    expect(projections[1].results.get('tool-1')?.content).toBe('Window: Monet')
+  })
+
+  it('does not infer orchestration from a title alone', () => {
+    const projection = projectEngineProcessEntries([
+      {
+        key: 'call',
+        segment: {
+          kind: 'toolCall',
+          id: 'regular-title',
+          name: 'custom',
+          input: { title: '普通标题' },
+          title: '普通标题',
+        },
+      },
+      {
+        key: 'result',
+        segment: {
+          kind: 'toolResult',
+          callId: 'regular-title',
+          content: 'visible',
+          isError: false,
+        },
+      },
+    ])
+
+    expect(projection.blocks).toEqual([
+      expect.objectContaining({ type: 'tool_use', id: 'regular-title' }),
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'regular-title' }),
+    ])
   })
 })

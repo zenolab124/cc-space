@@ -170,9 +170,10 @@ export function respondInteraction(request: InteractionRef, decision: string, pa
   })
 }
 
-export function resolveAsset(session: SessionRef, nativeId: string) {
+export function resolveAsset(session: SessionRef, nativeId: string, preview = false) {
   return invoke<{ mediaType: string; bytes: number[] }>('engine_resolve_asset', {
     asset: { session, nativeId },
+    preview,
   })
 }
 

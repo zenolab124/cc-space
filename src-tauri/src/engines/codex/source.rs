@@ -22,6 +22,7 @@ const USAGE_CACHE_LIMIT: usize = 2048;
 const ASSET_MAX_BYTES: usize = 32 * 1024 * 1024;
 const USER_INPUT_ASSET_MARKER: &str = ":user-input:";
 const TOOL_RESULT_ASSET_MARKER: &str = ":tool-result:";
+const MCP_RESULT_ASSET_MARKER: &str = ":mcp-result:";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -535,6 +536,16 @@ impl SessionSource for CodexSource {
 
     fn resolve_asset(&self, asset: AssetRef) -> EngineFuture<'_, ResolvedAsset> {
         Box::pin(async move {
+            let mcp_result = parse_mcp_result_asset_id(&asset.native_id);
+            if let Some((item_id, input_index)) = &mcp_result {
+                if let Some(image) = super::file_source::read_mcp_result_content_item(
+                    asset.session.native_id(),
+                    item_id,
+                    *input_index,
+                ) {
+                    return decode_mcp_result_image(&image);
+                }
+            }
             let primary_thread = self.read_thread_with_turns(&asset.session)?;
             let mut threads = vec![primary_thread];
             if let Ok(file_thread) = super::file_source::read_thread(asset.session.native_id()) {
@@ -614,6 +625,25 @@ impl SessionSource for CodexSource {
                                     )
                                 })?;
                             return decode_data_url_asset(url);
+                        }
+                        if let Some((item_id, input_index)) = &mcp_result {
+                            if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
+                                || item.get("type").and_then(Value::as_str) != Some("mcpToolCall")
+                            {
+                                continue;
+                            }
+                            let image = item
+                                .get("result")
+                                .and_then(|result| result.get("content"))
+                                .and_then(Value::as_array)
+                                .and_then(|content| content.get(*input_index))
+                                .ok_or_else(|| {
+                                    EngineError::new(
+                                        EngineErrorKind::Protocol,
+                                        "Codex MCP result has no image content",
+                                    )
+                                })?;
+                            return decode_mcp_result_image(image);
                         }
                     }
                 }
@@ -800,24 +830,51 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .then_some(ToolCallPresentation::Orchestration);
             let input = item.get("arguments").cloned().unwrap_or(Value::Null);
             let title = presentation.and_then(|_| programmatic_tool_title(&input));
-            vec![Segment::ToolCall {
-                id: item
-                    .get("callId")
-                    .or_else(|| item.get("call_id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(&id)
-                    .to_string(),
+            let call_id = item
+                .get("callId")
+                .or_else(|| item.get("call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .to_string();
+            let mut segments = vec![Segment::ToolCall {
+                id: call_id.clone(),
                 name,
                 input: bounded_segment_value(input),
                 title,
                 presentation,
-            }]
+            }];
+            if type_name == "mcpToolCall" {
+                if let Some(result) = item.get("result").filter(|result| !result.is_null()) {
+                    let (content, attachments) = split_mcp_result_content(
+                        session,
+                        &id,
+                        result.get("content").unwrap_or(&Value::Null),
+                    );
+                    segments.push(Segment::ToolResult {
+                        call_id,
+                        content: bounded_segment_value(content),
+                        is_error: item
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .is_some_and(|status| status == "failed"),
+                        attachments,
+                    });
+                } else if let Some(error) = item.get("error").filter(|error| !error.is_null()) {
+                    segments.push(Segment::ToolResult {
+                        call_id,
+                        content: bounded_segment_value(error.clone()),
+                        is_error: true,
+                        attachments: Vec::new(),
+                    });
+                }
+            }
+            segments
         }
         "toolResult" => {
             let (content, attachments) = split_tool_result_content(
                 session,
                 &id,
-                item.get("content").cloned().unwrap_or(Value::Null),
+                item.get("content").unwrap_or(&Value::Null),
             );
             vec![Segment::ToolResult {
                 call_id: item
@@ -922,6 +979,15 @@ fn parse_tool_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
     Some((item_id.to_string(), input_index.parse().ok()?))
 }
 
+fn mcp_result_asset_id(item_id: &str, input_index: usize) -> String {
+    format!("{item_id}{MCP_RESULT_ASSET_MARKER}{input_index}")
+}
+
+fn parse_mcp_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
+    let (item_id, input_index) = asset_id.rsplit_once(MCP_RESULT_ASSET_MARKER)?;
+    Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
 fn programmatic_tool_title(input: &Value) -> Option<String> {
     if let Some(title) = input.get("title").and_then(Value::as_str) {
         let title = title.trim();
@@ -1018,16 +1084,16 @@ fn tool_result_image_url(value: &Value) -> Option<&str> {
 fn split_tool_result_content(
     session: &SessionRef,
     item_id: &str,
-    content: Value,
+    content: &Value,
 ) -> (Value, Vec<ToolResultAttachment>) {
     let Value::Array(items) = content else {
-        return (content, Vec::new());
+        return (content.clone(), Vec::new());
     };
     let mut visible = Vec::with_capacity(items.len());
     let mut attachments = Vec::new();
-    for (index, item) in items.into_iter().enumerate() {
-        let Some(url) = tool_result_image_url(&item) else {
-            visible.push(item);
+    for (index, item) in items.iter().enumerate() {
+        let Some(url) = tool_result_image_url(item) else {
+            visible.push(item.clone());
             continue;
         };
         attachments.push(ToolResultAttachment {
@@ -1036,6 +1102,53 @@ fn split_tool_result_content(
                 native_id: tool_result_asset_id(item_id, index),
             },
             media_type: data_url_media_type(url).unwrap_or("image/*").to_string(),
+            title: None,
+        });
+    }
+    (Value::Array(visible), attachments)
+}
+
+fn mcp_result_image(value: &Value) -> Option<(&str, &str)> {
+    if value.get("type").and_then(Value::as_str) != Some("image") {
+        return None;
+    }
+    let media_type = value
+        .get("mimeType")
+        .or_else(|| value.get("mime_type"))
+        .and_then(Value::as_str)
+        .filter(|media_type| media_type.starts_with("image/"))?;
+    let encoded = value.get("data").and_then(Value::as_str)?;
+    Some((media_type, encoded))
+}
+
+fn split_mcp_result_content(
+    session: &SessionRef,
+    item_id: &str,
+    content: &Value,
+) -> (Value, Vec<ToolResultAttachment>) {
+    let Value::Array(items) = content else {
+        return (content.clone(), Vec::new());
+    };
+    let mut visible = Vec::with_capacity(items.len());
+    let mut attachments = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let media_type = mcp_result_image(item)
+            .map(|(media_type, _)| media_type)
+            .or_else(|| {
+                tool_result_image_url(item)
+                    .and_then(data_url_media_type)
+                    .filter(|media_type| media_type.starts_with("image/"))
+            });
+        let Some(media_type) = media_type else {
+            visible.push(item.clone());
+            continue;
+        };
+        attachments.push(ToolResultAttachment {
+            asset: AssetRef {
+                session: session.clone(),
+                native_id: mcp_result_asset_id(item_id, index),
+            },
+            media_type: media_type.to_string(),
             title: None,
         });
     }
@@ -1063,6 +1176,29 @@ fn decode_data_url_asset(url: &str) -> EngineResult<ResolvedAsset> {
                 "Codex image URL is not base64 encoded",
             )
         })?;
+    decode_base64_asset(media_type, encoded)
+}
+
+fn decode_mcp_result_image(value: &Value) -> EngineResult<ResolvedAsset> {
+    if let Some((media_type, encoded)) = mcp_result_image(value) {
+        return decode_base64_asset(media_type, encoded);
+    }
+    if let Some(url) = tool_result_image_url(value) {
+        return decode_data_url_asset(url);
+    }
+    Err(EngineError::new(
+        EngineErrorKind::Protocol,
+        "Codex MCP result image is invalid",
+    ))
+}
+
+fn decode_base64_asset(media_type: &str, encoded: &str) -> EngineResult<ResolvedAsset> {
+    if !media_type.starts_with("image/") {
+        return Err(EngineError::new(
+            EngineErrorKind::Protocol,
+            "Codex asset is not an image",
+        ));
+    }
     if encoded.len()
         > ASSET_MAX_BYTES
             .saturating_mul(4)
@@ -1826,6 +1962,50 @@ mod tests {
                     && attachments[0].media_type == "image/png"
                     && attachments[0].asset.native_id == "result-1:tool-result:1"
         ));
+    }
+
+    #[test]
+    fn extracts_mcp_result_images_without_exposing_base64_to_timeline() {
+        let session = SessionRef::new(default_instance().unwrap(), "parent").unwrap();
+        let segments = map_item_segments(
+            &session,
+            &json!({
+                "id": "exec-image-1",
+                "type": "mcpToolCall",
+                "tool": "js",
+                "status": "completed",
+                "arguments": { "title": "Take screenshot" },
+                "result": {
+                    "content": [
+                        { "type": "text", "text": "done" },
+                        { "type": "image", "mimeType": "image/jpeg", "data": "aW1hZ2U=" }
+                    ],
+                    "structuredContent": null,
+                    "_meta": null
+                }
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            segments.as_slice(),
+            [Segment::ToolCall { id, .. }, Segment::ToolResult { content, attachments, .. }]
+                if id == "exec-image-1"
+                    && content.as_array().is_some_and(|items| items.len() == 1)
+                    && !content.to_string().contains("aW1hZ2U=")
+                    && attachments.len() == 1
+                    && attachments[0].media_type == "image/jpeg"
+                    && attachments[0].asset.native_id == "exec-image-1:mcp-result:1"
+        ));
+
+        let asset = decode_mcp_result_image(&json!({
+            "type": "image",
+            "mimeType": "image/jpeg",
+            "data": "aW1hZ2U="
+        }))
+        .unwrap();
+        assert_eq!(asset.media_type, "image/jpeg");
+        assert_eq!(asset.bytes, b"image");
     }
 
     #[test]

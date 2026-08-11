@@ -101,6 +101,23 @@ function sharedToolName(name: string): string {
   return SHARED_TOOL_NAMES.get(name.toLowerCase()) ?? name
 }
 
+/**
+ * 结果是否应由对应工具项消费，只由标准引擎的显式展示契约决定。
+ * title 是文案，不是类型标记；不能用它猜测工具种类。
+ */
+function consumedResultCallIds(
+  entries: readonly EngineResponseSegmentEntry[],
+): Set<string> {
+  return new Set(entries.flatMap(entry => {
+    const segment = entry.segment
+    if (segment.kind !== 'toolCall') return []
+    const name = sharedToolName(segment.name)
+    return segment.presentation === 'orchestration' || usesInlineToolResult(name)
+      ? [segment.id]
+      : []
+  }))
+}
+
 function sharedToolInput(name: string, value: unknown): Record<string, unknown> {
   const input = objectInput(value)
   if (
@@ -142,22 +159,12 @@ function visualState(status: string): ToolVisualState {
  */
 export function projectEngineProcessEntries(
   entries: EngineResponseSegmentEntry[],
+  pairingEntries: readonly EngineResponseSegmentEntry[] = entries,
 ): EngineProcessProjection {
   const blocks: ContentBlock[] = []
   const results = new Map<string, ToolResultData>()
   const states = new Map<string, ToolVisualState>()
-  const pairedCallNames = new Map(entries.flatMap(entry => {
-    const segment = entry.segment
-    if (segment.kind === 'toolCall') return [[segment.id, sharedToolName(segment.name)] as const]
-    if (segment.kind === 'commandExecution') return [[segment.id, 'Bash'] as const]
-    return []
-  }))
-  const orchestrationCallIds = new Set(entries.flatMap(entry => {
-    const segment = entry.segment
-    return segment.kind === 'toolCall' && segment.presentation === 'orchestration'
-      ? [segment.id]
-      : []
-  }))
+  const consumedResultIds = consumedResultCallIds(pairingEntries)
 
   for (const entry of entries) {
     const segment = entry.segment
@@ -181,8 +188,7 @@ export function projectEngineProcessEntries(
         attachments: segment.attachments,
         recordUuid: null,
       })
-      const pairedName = pairedCallNames.get(segment.callId)
-      if (!orchestrationCallIds.has(segment.callId) && (!pairedName || !usesInlineToolResult(pairedName))) {
+      if (!consumedResultIds.has(segment.callId)) {
         blocks.push({
           type: 'tool_result',
           tool_use_id: segment.callId,

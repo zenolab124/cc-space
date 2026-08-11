@@ -365,6 +365,12 @@ fn make_thumbnail(media_type: &str, bytes: &[u8]) -> Option<CachedImage> {
     }
 }
 
+/// 为统一 Engine 附件生成轻量预览。返回 None 表示图片无需或不能安全降采样，
+/// 调用方应保守回退到原始字节。
+pub(crate) fn make_engine_thumbnail(media_type: &str, bytes: &[u8]) -> Option<(String, Vec<u8>)> {
+    make_thumbnail(media_type, bytes).map(|image| (image.media_type, image.bytes))
+}
+
 /// JPEG 是否含 EXIF APP1 段（marker 0xFFE1 + "Exif\0\0"）。只扫头部 marker 链。
 fn has_exif_app1(bytes: &[u8]) -> bool {
     if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {

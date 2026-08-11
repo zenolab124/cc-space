@@ -151,6 +151,8 @@ fn launchd_service_output_healthy(command_succeeded: bool, output: &str) -> bool
     command_succeeded
         && !output.contains("needs LWCR update")
         && !output.contains("job state = spawn failed")
+        && !output.contains("OS_REASON_CODESIGNING")
+        && !output.contains("Launch Constraint Violation")
         && !output.contains("EX_CONFIG")
 }
 
@@ -216,6 +218,10 @@ mod tests {
         assert!(!launchd_service_output_healthy(
             true,
             "properties = needs LWCR update | has LWCR"
+        ));
+        assert!(!launchd_service_output_healthy(
+            true,
+            "last exit reason = OS_REASON_CODESIGNING | Launch Constraint Violation"
         ));
         assert!(!launchd_service_output_healthy(
             true,

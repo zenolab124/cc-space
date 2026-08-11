@@ -2,15 +2,22 @@ import { describe, expect, it } from 'vitest'
 import type { ContentBlock } from '@/types'
 import {
   findPendingPermissionToolUseId,
+  isOrchestrationTool,
+  isOrchestrationToolSegment,
   isThinkingBlock,
   joinsToolRun,
   segmentToolBlocks,
   summarizeToolProcess,
+  toolDisplayTitle,
   toolSummary,
 } from '@/utils/toolDisplay'
 import { deriveToolVisualState } from '@/composables/useToolDisplay'
 
-function tool(id: string, name = 'Read', input: Record<string, unknown> = {}): ContentBlock {
+function tool(
+  id: string,
+  name = 'Read',
+  input: Record<string, unknown> = {},
+): Extract<ContentBlock, { type: 'tool_use' }> {
   return { type: 'tool_use', id, name, input }
 }
 
@@ -145,6 +152,37 @@ describe('tool display projection', () => {
     expect(summarizeToolProcess(tools)).toEqual([
       { kind: 'orchestration', name: 'js', count: 2, detail: '' },
     ])
+    expect(isOrchestrationToolSegment(tools)).toBe(true)
+    expect(isOrchestrationToolSegment([tools[0], tool('regular', 'Read')])).toBe(false)
+    expect(isOrchestrationToolSegment([])).toBe(false)
+    const runtimeShape = {
+      ...tool('runtime-shape', 'mcp__node_repl__js', { value: 'work()' }),
+      _title: '识别 Monet 窗口',
+      _presentation: 'orchestration' as const,
+    }
+    expect(isOrchestrationToolSegment([runtimeShape])).toBe(true)
+    expect(toolDisplayTitle(runtimeShape)).toBe('识别 Monet 窗口')
+    const archivedShape = {
+      ...tool('archived-shape', 'js', { value: 'work()' }),
+      _title: '检查 Monet 窗口',
+    }
+    expect(isOrchestrationTool(archivedShape)).toBe(false)
+    expect(toolDisplayTitle(archivedShape)).toBe('检查 Monet 窗口')
+    const plainTitle = tool('plain-title', 'custom', { title: '普通标题' })
+    expect(isOrchestrationTool(plainTitle)).toBe(false)
+    expect(toolDisplayTitle(plainTitle)).toBe('custom')
+
+    const mixedSegments = segmentToolBlocks([
+      tool('regular-before', 'Read'),
+      tools[0],
+      tool('regular-after', 'Bash'),
+    ])
+    expect(mixedSegments).toHaveLength(3)
+    expect(mixedSegments.every(segment => segment.kind === 'tools')).toBe(true)
+    expect(mixedSegments[1]).toMatchObject({
+      kind: 'tools',
+      tools: [expect.objectContaining({ id: 'a' })],
+    })
   })
 })
 
