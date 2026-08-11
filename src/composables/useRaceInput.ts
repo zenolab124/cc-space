@@ -75,6 +75,11 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     runtimeDraftChannel: string | null | undefined
   }
 
+  interface LaneTarget {
+    sessionId: string
+    context: LaneContext
+  }
+
   function laneContext(sessionId: string): LaneContext {
     const summary = resolveSession(sessionId)
     const draft = engineDraft(sessionId)
@@ -85,7 +90,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       engineName: summary?.engine_name ?? draft?.engineName ?? reference?.engine.engineId ?? 'Agent',
       cwd: summary?.cwd ?? draft?.cwd ?? tab.value.race?.cwd ?? '',
       native: !reference || usesNativeSessionSurface(reference.engine),
-      runtimeDraft: !!draft,
+      runtimeDraft: !!draft && !summary,
       runtimeDraftChannel: draft?.attachedChannel,
     }
   }
@@ -95,6 +100,37 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     if (context.native) return getStream(sessionId).streaming
     const snapshot = engineRuntimeSnapshot(sessionId)
     return snapshot?.phase === 'running' || snapshot?.phase === 'awaitingInteraction'
+  }
+
+  async function rebindRuntimeDraftChannel(target: LaneTarget): Promise<LaneTarget> {
+    const { sessionId, context } = target
+    if (context.native || !context.runtimeDraft) return target
+    const selectedChannel = engineRuntimeChannel(sessionId)
+    if (context.runtimeDraftChannel === selectedChannel) return target
+    if (tab.value.race?.engineSwitchLocked) {
+      throw new Error(i18n.global.t('engine.draftChannelLocked'))
+    }
+    if (!context.project) throw new Error(i18n.global.t('common.runtimeUnavailable'))
+
+    const config = engineRunConfig(sessionId)
+    const created = await createSession(context.project, context.cwd, engineRuntimeOptions(sessionId))
+    const replacementSessionId = sessionUiId(created.session)
+    stageEngineDraft(replacementSessionId, {
+      reference: created.session,
+      project: context.project,
+      engineName: context.engineName,
+      cwd: context.cwd,
+      attachedChannel: selectedChannel,
+    })
+    if (config) setEngineRunConfig(replacementSessionId, config)
+    if (!replaceRaceLaneSession(tab.value.id, sessionId, replacementSessionId)) {
+      discardStagedSession(replacementSessionId)
+      throw new Error(i18n.global.t('common.runtimeUnavailable'))
+    }
+    return {
+      sessionId: replacementSessionId,
+      context: laneContext(replacementSessionId),
+    }
   }
 
   function projectCwd(project: Project): string | null {
@@ -218,13 +254,12 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     const text = inputText.value.trim()
     if (!text && !imageInput.images.value.length) return
 
-    const targets = race.lanes.map(lane => ({
+    let targets: LaneTarget[] = race.lanes.map(lane => ({
       sessionId: lane.sessionId,
       context: laneContext(lane.sessionId),
     }))
-    const nativeRace = targets.every(target => target.context.native)
-    const hasNativeLane = targets.some(target => target.context.native)
-    if (nativeRace) {
+    const initialNativeRace = targets.every(target => target.context.native)
+    if (initialNativeRace) {
       const parsed = parseCommand(text)
       if (parsed.kind === 'invalid') {
         slashError.value = parsed.reason
@@ -236,6 +271,11 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     raceError.value = null
     broadcasting.value = true
     try {
+      // thread/start 已绑定渠道；首条消息前改渠道时，以新渠道重建空白 lane。
+      // 此时没有历史可丢失，原位替换也不会形成发送后的热切换。
+      targets = await Promise.all(targets.map(rebindRuntimeDraftChannel))
+      const nativeRace = targets.every(target => target.context.native)
+      const hasNativeLane = targets.some(target => target.context.native)
       const pendingImages = [...imageInput.images.value]
       const images = pendingImages.length ? await imageInput.toImageBlocks(pendingImages) : undefined
       const genericInput: RuntimeInputItem[] = []
@@ -253,9 +293,6 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       const runningStandardSnapshots = new Map<string, RuntimeSnapshot>()
       await Promise.all(targets.map(async ({ sessionId, context }) => {
         if (context.native || !context.reference) return
-        if (context.runtimeDraft && context.runtimeDraftChannel !== engineRuntimeChannel(sessionId)) {
-          throw new Error(i18n.global.t('engine.draftChannelLocked'))
-        }
         const runtime = engineRuntimeSnapshot(sessionId)
         const running = runtime?.phase === 'running' || runtime?.phase === 'awaitingInteraction'
         if (!running) return
@@ -370,8 +407,16 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     raceMutationLoading.value = true
     try {
       if (!context.native && context.reference && context.project) {
-        const attachedChannel = engineRuntimeChannel(sourceLane.sessionId)
-        const created = await forkSession(context.reference, null, engineRuntimeOptions(sourceLane.sessionId))
+        const attachedChannel = context.runtimeDraft
+          ? context.runtimeDraftChannel ?? null
+          : engineRuntimeChannel(sourceLane.sessionId)
+        const options = {
+          ...engineRuntimeOptions(sourceLane.sessionId),
+          ...(attachedChannel ? { channelId: attachedChannel } : {}),
+        }
+        const created = context.runtimeDraft
+          ? await createSession(context.project, context.cwd, options)
+          : await forkSession(context.reference, null, options)
         const sessionId = sessionUiId(created.session)
         stageEngineDraft(sessionId, {
           reference: created.session,

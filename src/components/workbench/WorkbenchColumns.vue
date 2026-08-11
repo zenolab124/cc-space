@@ -8,7 +8,7 @@ import { useProjects } from '@/composables/useProjects'
 import { useNotifications } from '@/composables/useNotifications'
 import { useHorizontalWheelScroll } from '@/composables/useHorizontalWheelScroll'
 import { useColumnResize } from '@/composables/useColumnResize'
-import { forkSession } from '@/engines/client'
+import { createSession, forkSession } from '@/engines/client'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
 import { engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
@@ -60,8 +60,18 @@ async function onStartRace(sessionId: string) {
         notifyTransient(t('common.forkSessionFailed'), t('common.runtimeUnavailable'))
         return
       }
-      const attachedChannel = engineRuntimeChannel(sessionId)
-      const created = await forkSession(reference, null, engineRuntimeOptions(sessionId))
+      const runtimeDraft = !!draft && !session
+      const attachedChannel = runtimeDraft
+        ? draft.attachedChannel
+        : engineRuntimeChannel(sessionId)
+      const options = {
+        ...engineRuntimeOptions(sessionId),
+        ...(attachedChannel ? { channelId: attachedChannel } : {}),
+      }
+      // Codex 的 thread/fork 只能读取已落盘线程；首条消息前的内存草稿改为同源新建。
+      const created = runtimeDraft
+        ? await createSession(project, cwd, options)
+        : await forkSession(reference, null, options)
       const forkedSessionId = sessionUiId(created.session)
       stageEngineDraft(forkedSessionId, {
         reference: created.session,
