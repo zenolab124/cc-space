@@ -54,7 +54,7 @@ import { groupConversationRecords } from '@/engines/conversationGroups'
 import { isRenderableEngineSegment } from '@/engines/processGroups'
 import { measureElement as measureVirtualElement, useVirtualizer, type Virtualizer } from '@tanstack/vue-virtual'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
-import { hasUpwardScrollRange, shouldCompensateVirtualItemSizeChange } from '@/lib/sessionScrollPolicy'
+import { hasUpwardScrollRange, shouldCompensateVirtualItemSizeChange, shouldDetachScrollFollowAfterMovement } from '@/lib/sessionScrollPolicy'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -102,6 +102,7 @@ let timelineScrollRequestId = 0
 let lastTimelineScrollTop = 0
 let timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
+let timelineUpwardSettleTimer: number | null = null
 let timelineResizeObserver: ResizeObserver | null = null
 const { getMeta, updateMeta } = useSessionMeta()
 const {
@@ -592,6 +593,7 @@ function isActiveWriterConflict(cause: unknown): boolean {
 
 function bindViewport(element: HTMLElement | null) {
   if (viewportElement.value !== element) {
+    clearTimelineUpwardSettleTimer()
     timelineFollowGeneration++
     timelineScrollRequestId++
     lastTimelineScrollTop = element?.scrollTop ?? 0
@@ -608,7 +610,30 @@ function invalidateTimelineScrollRequests() {
   timelineScrollRequestId++
 }
 
+function clearTimelineUpwardSettleTimer() {
+  if (timelineUpwardSettleTimer === null) return
+  window.clearTimeout(timelineUpwardSettleTimer)
+  timelineUpwardSettleTimer = null
+}
+
+function timelineUpwardIntentActive(now = performance.now()): boolean {
+  const age = now - timelineUpwardIntentAt
+  return timelineUpwardIntentAt > timelineDownwardIntentAt
+    && age >= 0
+    && age <= TIMELINE_SCROLL_INTENT_MS
+}
+
+function scheduleTimelineFollowAfterUpwardIntent(intentAt: number) {
+  clearTimelineUpwardSettleTimer()
+  timelineUpwardSettleTimer = window.setTimeout(() => {
+    timelineUpwardSettleTimer = null
+    if (!followTimeline.value || timelineUpwardIntentAt !== intentAt) return
+    requestTimelineFollow()
+  }, TIMELINE_SCROLL_INTENT_MS + 16)
+}
+
 function stopTimelineFollow() {
+  clearTimelineUpwardSettleTimer()
   followTimeline.value = false
   invalidateTimelineScrollRequests()
 }
@@ -629,17 +654,24 @@ function resumeTimelineFollowIfAtBottom(element: HTMLElement, intentAt: number):
 function onTimelineWheel(event: WheelEvent) {
   if (event.deltaY < 0) {
     const element = viewportElement.value
-    // 顶部或内容未溢出时没有产生阅读位移，不能让触控板噪声关闭跟随。
+    // wheel 只暂停写底；等 scroll 证明视口确实离开底部后才显示按钮。
     if (!element || !hasUpwardScrollRange(element)) return
-    timelineUpwardIntentAt = performance.now()
-    stopTimelineFollow()
+    const intentAt = performance.now()
+    timelineUpwardIntentAt = intentAt
+    invalidateTimelineScrollRequests()
+    scheduleTimelineFollowAfterUpwardIntent(intentAt)
     return
   }
   if (event.deltaY <= 0) return
   const intentAt = performance.now()
   timelineDownwardIntentAt = intentAt
+  clearTimelineUpwardSettleTimer()
   const element = viewportElement.value
-  if (followTimeline.value || !element) return
+  if (!element) return
+  if (followTimeline.value) {
+    requestTimelineFollow()
+    return
+  }
   // 已在底部时向下滚不会再触发 scroll，直接恢复后续内容跟随。
   if (resumeTimelineFollowIfAtBottom(element, intentAt)) return
 
@@ -656,14 +688,21 @@ function onTimelineScroll(event: Event) {
   scheduleStickyUpdate()
   const element = event.currentTarget as HTMLElement
   const nextScrollTop = element.scrollTop
-  const delta = nextScrollTop - lastTimelineScrollTop
+  const previousScrollTop = lastTimelineScrollTop
+  const delta = nextScrollTop - previousScrollTop
   const reachedBottom = timelineDistanceFromBottom(element) <= TIMELINE_BOTTOM_THRESHOLD
   lastTimelineScrollTop = nextScrollTop
 
-  // 覆盖滚动条拖拽和键盘上滚；宁可停止跟随，也不能让排队请求覆盖阅读位置。
-  if (delta < -0.5 && !reachedBottom && hasUpwardScrollRange(element)) {
-    timelineUpwardIntentAt = performance.now()
-    if (followTimeline.value) stopTimelineFollow()
+  if (followTimeline.value && shouldDetachScrollFollowAfterMovement({
+    geometry: element,
+    previousScrollTop,
+    upwardIntentAt: timelineUpwardIntentAt,
+    downwardIntentAt: timelineDownwardIntentAt,
+    now: performance.now(),
+    intentWindow: TIMELINE_SCROLL_INTENT_MS,
+    bottomThreshold: TIMELINE_BOTTOM_THRESHOLD,
+  })) {
+    stopTimelineFollow()
     return
   }
 
@@ -680,12 +719,16 @@ function onTimelineScroll(event: Event) {
 }
 
 function resumeTimelineFollow() {
+  clearTimelineUpwardSettleTimer()
+  timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
+  timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
   invalidateTimelineScrollRequests()
   followTimeline.value = true
   requestTimelineFollow()
 }
 
 function resetTimelineFollow() {
+  clearTimelineUpwardSettleTimer()
   invalidateTimelineScrollRequests()
   followTimeline.value = true
   timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
@@ -694,7 +737,7 @@ function resetTimelineFollow() {
 }
 
 function requestTimelineFollow(allowLayoutReset = false) {
-  if (!followTimeline.value) return
+  if (!followTimeline.value || (!allowLayoutReset && timelineUpwardIntentActive())) return
   const generation = timelineFollowGeneration
   const requestId = ++timelineScrollRequestId
   const scheduledElement = viewportElement.value
@@ -710,14 +753,15 @@ function requestTimelineFollow(allowLayoutReset = false) {
         || (scheduledElement !== null && element !== scheduledElement)
       ) return
       // scroll 事件尚未分发时，也用位置变化识别已经开始的向上阅读。
-      if (
-        !allowLayoutReset
-        && element.scrollTop < scheduledScrollTop - 0.5
-        && timelineDistanceFromBottom(element) > TIMELINE_BOTTOM_THRESHOLD
-        && hasUpwardScrollRange(element)
-        && performance.now() - timelineUpwardIntentAt <= TIMELINE_SCROLL_INTENT_MS
-      ) {
-        timelineUpwardIntentAt = performance.now()
+      if (!allowLayoutReset && shouldDetachScrollFollowAfterMovement({
+        geometry: element,
+        previousScrollTop: scheduledScrollTop,
+        upwardIntentAt: timelineUpwardIntentAt,
+        downwardIntentAt: timelineDownwardIntentAt,
+        now: performance.now(),
+        intentWindow: TIMELINE_SCROLL_INTENT_MS,
+        bottomThreshold: TIMELINE_BOTTOM_THRESHOLD,
+      })) {
         stopTimelineFollow()
         return
       }
@@ -1467,6 +1511,7 @@ onUnmounted(() => {
   resetSessionBanner()
   cancelTurnSettlements()
   invalidateTimelineScrollRequests()
+  clearTimelineUpwardSettleTimer()
   timelineResizeObserver?.disconnect()
   timelineResizeObserver = null
   lastGroupResizeObserver?.disconnect()

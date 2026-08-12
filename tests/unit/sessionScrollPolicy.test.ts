@@ -5,6 +5,7 @@ import {
   createScrollFollowState,
   hasUpwardScrollRange,
   shouldCompensateVirtualItemSizeChange,
+  shouldDetachScrollFollowAfterMovement,
   stableMessageGroupKey,
   transitionScrollFollow,
   type VirtualItemSizeChange,
@@ -58,6 +59,52 @@ describe('session scroll follow policy', () => {
       scrollHeight: 900,
       clientHeight: 600,
     })).toBe(true)
+  })
+
+  it('detaches only after recent upward intent produces real movement away from bottom', () => {
+    const check = {
+      geometry: { scrollTop: 260, scrollHeight: 900, clientHeight: 600 },
+      previousScrollTop: 280,
+      upwardIntentAt: 100,
+      downwardIntentAt: 0,
+      now: 120,
+      intentWindow: 500,
+      bottomThreshold: 24,
+    }
+
+    expect(shouldDetachScrollFollowAfterMovement(check)).toBe(true)
+    expect(shouldDetachScrollFollowAfterMovement({
+      ...check,
+      downwardIntentAt: Number.NEGATIVE_INFINITY,
+    })).toBe(true)
+    expect(shouldDetachScrollFollowAfterMovement({
+      ...check,
+      geometry: { ...check.geometry, scrollTop: check.previousScrollTop },
+    })).toBe(false)
+    expect(shouldDetachScrollFollowAfterMovement({
+      ...check,
+      geometry: { ...check.geometry, scrollTop: 280 },
+      previousScrollTop: 300,
+    })).toBe(false)
+  })
+
+  it('rejects reverse layout movement after a newer downward gesture', () => {
+    const check = {
+      geometry: { scrollTop: 240, scrollHeight: 900, clientHeight: 600 },
+      previousScrollTop: 260,
+      upwardIntentAt: 100,
+      downwardIntentAt: 110,
+      now: 120,
+      intentWindow: 500,
+      bottomThreshold: 24,
+    }
+
+    expect(shouldDetachScrollFollowAfterMovement(check)).toBe(false)
+    expect(shouldDetachScrollFollowAfterMovement({
+      ...check,
+      downwardIntentAt: 0,
+      now: 700,
+    })).toBe(false)
   })
 })
 

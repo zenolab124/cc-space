@@ -53,8 +53,8 @@ export interface ScrollViewportGeometry {
 }
 
 /**
- * wheel 只有在视口确实能继续向上移动时，才足以表达“离开底部阅读”的意图。
- * 内容未溢出或仍停在顶部时，触控板噪声不应关闭流式跟随。
+ * 判断视口是否确实还有向上阅读的空间。
+ * 内容未溢出或仍停在顶部时，触控板噪声不应影响流式跟随。
  */
 export function hasUpwardScrollRange(
   geometry: ScrollViewportGeometry,
@@ -69,6 +69,56 @@ export function hasUpwardScrollRange(
     || tolerance < 0
   ) return false
   return scrollHeight - clientHeight > tolerance && scrollTop > tolerance
+}
+
+export interface ScrollFollowDetachCheck {
+  geometry: ScrollViewportGeometry
+  previousScrollTop: number
+  upwardIntentAt: number
+  downwardIntentAt: number
+  now: number
+  intentWindow: number
+  bottomThreshold: number
+}
+
+/**
+ * wheel 只记录方向，不直接关闭跟随。只有最新的用户意图是向上、
+ * 视口确实向上移动且已离开底部阈值时，才进入阅读状态。
+ */
+export function shouldDetachScrollFollowAfterMovement(
+  check: ScrollFollowDetachCheck,
+): boolean {
+  const {
+    geometry,
+    previousScrollTop,
+    upwardIntentAt,
+    downwardIntentAt,
+    now,
+    intentWindow,
+    bottomThreshold,
+  } = check
+  if (
+    !Number.isFinite(previousScrollTop)
+    || !Number.isFinite(upwardIntentAt)
+    || (!Number.isFinite(downwardIntentAt) && downwardIntentAt !== Number.NEGATIVE_INFINITY)
+    || !Number.isFinite(now)
+    || !Number.isFinite(intentWindow)
+    || !Number.isFinite(bottomThreshold)
+    || intentWindow < 0
+    || bottomThreshold < 0
+  ) return false
+
+  const intentAge = now - upwardIntentAt
+  const distanceFromBottom = Math.max(
+    0,
+    geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight,
+  )
+  return geometry.scrollTop < previousScrollTop - 0.5
+    && distanceFromBottom > bottomThreshold
+    && hasUpwardScrollRange(geometry)
+    && upwardIntentAt > downwardIntentAt
+    && intentAge >= 0
+    && intentAge <= intentWindow
 }
 
 interface MessageGroupKeyRecord {
