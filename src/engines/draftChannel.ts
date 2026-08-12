@@ -7,6 +7,7 @@ export interface RuntimeEngineDraft {
   engineName: string
   cwd: string
   attachedChannel: string | null
+  attachedCapabilityFingerprint?: string
 }
 
 export interface DraftChannelReplacement {
@@ -14,6 +15,7 @@ export interface DraftChannelReplacement {
   reference: SessionRef
   runtimeId: unknown
   attachedChannel: string | null
+  attachedCapabilityFingerprint: string
 }
 
 function canonicalChannel(channelId: string | null): string | null {
@@ -29,6 +31,7 @@ interface RebindDraftChannelRequest {
   sessionId: string
   draft: RuntimeEngineDraft
   selectedChannel: string | null
+  selectedCapabilityFingerprint: string
   options: Record<string, unknown>
   config: EngineRunConfig | null
 }
@@ -38,7 +41,7 @@ interface RebindDraftChannelDependencies {
     project: ProjectRef,
     cwd: string,
     options: Record<string, unknown>,
-  ) => Promise<{ session: SessionRef; runtimeId: unknown }>
+  ) => Promise<{ session: SessionRef; runtimeId: unknown; capabilityFingerprint: string }>
   sessionId: (session: SessionRef) => string
   stageDraft: (sessionId: string, draft: RuntimeEngineDraft) => void
   saveConfig: (sessionId: string, config: EngineRunConfig) => void
@@ -49,14 +52,16 @@ interface RebindDraftChannelDependencies {
 }
 
 /**
- * thread/start 已绑定运行渠道。空线程在首条消息前切换渠道时，通过新建线程并
- * 原位替换草稿完成重绑定；任何一步失败都回滚新线程，原草稿继续可用。
+ * thread/start 已绑定运行渠道与会话能力。空线程在首条消息前切换配置时，
+ * 通过新建线程并原位替换草稿完成重绑定；任何一步失败都回滚新线程。
  */
 export async function rebindDraftChannel(
   request: RebindDraftChannelRequest,
   dependencies: RebindDraftChannelDependencies,
 ): Promise<DraftChannelReplacement | null> {
-  if (sameRuntimeChannel(request.draft.attachedChannel, request.selectedChannel)) {
+  const sameCapabilities = request.draft.attachedCapabilityFingerprint === undefined
+    || request.draft.attachedCapabilityFingerprint === request.selectedCapabilityFingerprint
+  if (sameRuntimeChannel(request.draft.attachedChannel, request.selectedChannel) && sameCapabilities) {
     return null
   }
 
@@ -71,6 +76,7 @@ export async function rebindDraftChannel(
     reference: created.session,
     runtimeId: created.runtimeId,
     attachedChannel: request.selectedChannel,
+    attachedCapabilityFingerprint: created.capabilityFingerprint,
   }
 
   try {
@@ -80,6 +86,7 @@ export async function rebindDraftChannel(
       engineName: request.draft.engineName,
       cwd: request.draft.cwd,
       attachedChannel: request.selectedChannel,
+      attachedCapabilityFingerprint: created.capabilityFingerprint,
     })
     if (request.config) dependencies.saveConfig(replacementSessionId, request.config)
     dependencies.beforeReplace?.(replacement)

@@ -213,6 +213,7 @@ async function onFork() {
         engineName: session.engine_name || engineName.value,
         cwd: session.cwd,
         attachedChannel,
+        attachedCapabilityFingerprint: created.capabilityFingerprint,
       })
       inheritEngineRunConfig(props.column.sessionId, sessionId)
       notifyTransient(t('workbench.column.forkCreated'))
@@ -253,6 +254,7 @@ async function onNewSession() {
         engineName: session.engine_name || engineName.value,
         cwd,
         attachedChannel,
+        attachedCapabilityFingerprint: created.capabilityFingerprint,
       })
       inheritEngineRunConfig(props.column.sessionId, sessionId)
       notifyTransient(t('workbench.rail.newSessionReady'), t('workbench.rail.newSessionHint'))

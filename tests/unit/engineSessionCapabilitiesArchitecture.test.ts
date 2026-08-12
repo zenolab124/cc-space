@@ -10,10 +10,9 @@ describe('standard engine session capabilities', () => {
   it('adds controlled capability IDs to every thread lifecycle request', () => {
     const client = source('../../src/engines/client.ts')
 
-    expect(client).toContain('sessionCapabilities: collectSessionCapabilities()')
-    expect(client).toMatch(/engine_attach_session[\s\S]{0,220}withSessionCapabilities\(options\)/)
-    expect(client).toMatch(/engine_create_session[\s\S]{0,220}withSessionCapabilities\(options\)/)
-    expect(client).toMatch(/engine_fork_session[\s\S]{0,220}withSessionCapabilities\(options\)/)
+    expect(client).toContain('sessionCapabilities: capabilities')
+    expect(client.match(/withSessionCapabilities\(options\)/g)).toHaveLength(3)
+    expect(client).toContain('capabilityFingerprint: configured.capabilityFingerprint')
   })
 
   it('reattaches when the capability fingerprint changes and reports the feature', () => {
@@ -21,6 +20,7 @@ describe('standard engine session capabilities', () => {
 
     expect(detail).toContain('attachedCapabilityFingerprint.value === capabilityFingerprint')
     expect(detail).toContain('attachedCapabilityFingerprint.value !== capabilityFingerprint')
+    expect(detail).toContain('draft.attachedCapabilityFingerprint\n          ?? capabilityFingerprint')
     expect(detail).toContain(':features="htmlVisualEnabled ? [t(\'settings.htmlVisual\')] : []"')
   })
 })

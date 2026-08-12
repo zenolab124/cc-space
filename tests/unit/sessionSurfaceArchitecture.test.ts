@@ -186,12 +186,13 @@ describe('unified session surface architecture', () => {
     expect(controller).toContain("if (choice === 'fork') return await forkAndSend(inputItems)")
   })
 
-  it('rebinds a blank standard session when its channel changes before the first turn', () => {
+  it('rebinds a blank standard session when its runtime configuration changes before the first turn', () => {
     const controller = source('../../src/components/engine/EngineSessionDetail.vue')
     const draftChannel = source('../../src/engines/draftChannel.ts')
 
     expect(controller).toContain('async function rebindCurrentDraftChannel()')
-    expect(controller).toContain('while (draft && !sameRuntimeChannel(draft.attachedChannel, selectedChannel.value))')
+    expect(controller).toContain('draft.attachedCapabilityFingerprint !== capabilityFingerprint')
+    expect(controller).toContain('!sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)')
     expect(controller).toContain('beforeReplace: value => { pendingDraftReplacement = value }')
     expect(controller).toContain('replaceSession: replaceWorkbenchSession')
     expect(controller).not.toContain("error.value = t('engine.draftChannelLocked')")

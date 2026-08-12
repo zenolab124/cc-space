@@ -970,7 +970,17 @@ type AttachOutcome = 'attached' | 'writer-conflict' | 'failed'
 async function rebindCurrentDraftChannel(): Promise<boolean> {
   const sessionId = props.session.id
   const draft = engineDraft(sessionId)
-  if (!draft || sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)) return true
+  const capabilityFingerprint = collectSessionCapabilityFingerprint()
+  if (
+    !draft
+    || (
+      sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)
+      && (
+        draft.attachedCapabilityFingerprint === undefined
+        || draft.attachedCapabilityFingerprint === capabilityFingerprint
+      )
+    )
+  ) return true
 
   const config = {
     model: selectedModel.value,
@@ -984,6 +994,7 @@ async function rebindCurrentDraftChannel(): Promise<boolean> {
     sessionId,
     draft,
     selectedChannel: selectedChannel.value,
+    selectedCapabilityFingerprint: capabilityFingerprint,
     options: {
       ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
       ...(selectedModel.value ? { model: selectedModel.value } : {}),
@@ -1013,7 +1024,7 @@ async function rebindCurrentDraftChannel(): Promise<boolean> {
   }
   runtimeId.value = replacement.runtimeId
   attachedChannel.value = replacement.attachedChannel
-  attachedCapabilityFingerprint.value = collectSessionCapabilityFingerprint()
+  attachedCapabilityFingerprint.value = replacement.attachedCapabilityFingerprint
   return true
 }
 
@@ -1025,19 +1036,32 @@ async function ensureAttached(): Promise<AttachOutcome> {
   try {
     await loadRuntimeConfiguration()
     let draft = engineDraft(props.session.id)
-    while (draft && !sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)) {
+    const capabilityFingerprint = collectSessionCapabilityFingerprint()
+    while (
+      draft
+      && (
+        !sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)
+        || (
+          draft.attachedCapabilityFingerprint !== undefined
+          && draft.attachedCapabilityFingerprint !== capabilityFingerprint
+        )
+      )
+    ) {
       if (!(await rebindCurrentDraftChannel())) return 'failed'
       draft = engineDraft(props.session.id)
     }
-    if (runtimeId.value && attachedChannel.value === undefined) {
+    if (runtimeId.value && draft) {
       // create/fork 草稿记录的是实际附着渠道；空线程首条消息前尚无
       // rollout，不能重复 resume。已落盘会话没有这份可靠记录，必须走
       // attach 来应用当前渠道，不能把 UI 选择误当成 runtime 真实状态。
-      if (draft) {
-        attachedChannel.value = draft.attachedChannel
+      if (attachedChannel.value === undefined) attachedChannel.value = draft.attachedChannel
+      // 旧版运行期草稿没有该字段。它由同一 capability 收集器创建，按当前值
+      // 接管可避免在首轮 rollout 生成前发出必然失败的 thread/resume。
+      if (attachedCapabilityFingerprint.value === undefined) {
+        attachedCapabilityFingerprint.value = draft.attachedCapabilityFingerprint
+          ?? capabilityFingerprint
       }
     }
-    const capabilityFingerprint = collectSessionCapabilityFingerprint()
     if (
       runtimeId.value
       && sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)
@@ -1062,7 +1086,7 @@ async function ensureAttached(): Promise<AttachOutcome> {
       })
       runtimeId.value = attached.runtimeId
       attachedChannel.value = selectedChannel.value
-      attachedCapabilityFingerprint.value = capabilityFingerprint
+      attachedCapabilityFingerprint.value = attached.capabilityFingerprint
       showSessionBanner(!engineDraft(props.session.id))
     }
     return 'attached'
@@ -1113,6 +1137,7 @@ async function forkAndSend(inputItems: RuntimeInputItem[]): Promise<boolean> {
       engineName: props.session.engine_name || enginePresentation.value.displayName,
       cwd,
       attachedChannel: selectedChannel.value,
+      attachedCapabilityFingerprint: created.capabilityFingerprint,
     })
     await startTurnWithFastFallback(created.session, inputItems)
     input.value = ''
@@ -1483,7 +1508,7 @@ watch(() => props.session.id, async () => {
     runtimeId.value = replacement?.runtimeId ?? null
     if (replacement) {
       attachedChannel.value = replacement.attachedChannel
-      attachedCapabilityFingerprint.value = collectSessionCapabilityFingerprint()
+      attachedCapabilityFingerprint.value = replacement.attachedCapabilityFingerprint
     } else {
       models.value = []
       selectedModel.value = null

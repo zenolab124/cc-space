@@ -29,6 +29,7 @@ import { rebindDraftChannel, sameRuntimeChannel } from '@/engines/draftChannel'
 import { useEngines } from '@/engines/useEngines'
 import type { EngineDescriptor, ProjectRef, RuntimeInputItem, RuntimeSnapshot, SessionRef } from '@/engines/types'
 import type { Project } from '@/types'
+import { collectSessionCapabilityFingerprint } from '@/features'
 
 function errorMessage(cause: unknown): string {
   if (typeof cause === 'string') return cause
@@ -108,7 +109,17 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     if (context.native || !context.runtimeDraft) return target
     const selectedChannel = engineRuntimeChannel(sessionId)
     const draft = engineDraft(sessionId)
-    if (!draft || sameRuntimeChannel(draft.attachedChannel, selectedChannel)) return target
+    const selectedCapabilityFingerprint = collectSessionCapabilityFingerprint()
+    if (
+      !draft
+      || (
+        sameRuntimeChannel(draft.attachedChannel, selectedChannel)
+        && (
+          draft.attachedCapabilityFingerprint === undefined
+          || draft.attachedCapabilityFingerprint === selectedCapabilityFingerprint
+        )
+      )
+    ) return target
     if (tab.value.race?.engineSwitchLocked) {
       throw new Error(i18n.global.t('engine.draftChannelLocked'))
     }
@@ -119,6 +130,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       sessionId,
       draft,
       selectedChannel,
+      selectedCapabilityFingerprint,
       options: engineRuntimeOptions(sessionId),
       config,
     }, {
@@ -215,6 +227,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
           engineName: target.displayName,
           cwd: race.cwd,
           attachedChannel,
+          attachedCapabilityFingerprint: created.capabilityFingerprint,
         })
         setEngineRunConfig(replacementSessionId, {
           model: null,
@@ -430,6 +443,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
           engineName: context.engineName,
           cwd: context.cwd,
           attachedChannel,
+          attachedCapabilityFingerprint: created.capabilityFingerprint,
         })
         inheritEngineRunConfig(sourceLane.sessionId, sessionId)
         addRaceLane(tab.value.id, sessionId)
@@ -473,6 +487,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
             engineName: context.engineName,
             cwd: race.cwd,
             attachedChannel: engineRuntimeChannel(lane.sessionId),
+            attachedCapabilityFingerprint: runtime.capabilityFingerprint,
           })
           inheritEngineRunConfig(lane.sessionId, sessionId)
           replacementSessionIds.push(sessionId)

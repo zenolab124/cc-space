@@ -58,6 +58,8 @@ export interface EngineDraft {
   cwd: string
   /** thread/start / fork 时实际附着的渠道；避免空线程被重复 resume。 */
   attachedChannel: string | null
+  /** thread/start / fork 时实际附着的受控能力；避免空线程被重复 resume。 */
+  attachedCapabilityFingerprint?: string
   /** 仅当前 WebView/后端运行期有效；空线程尚未落盘，跨重启无法 resume。 */
   runtimeScope: string
 }
@@ -278,6 +280,9 @@ function loadState(): WorkbenchState | null {
             ...draft,
             cwd: sanitizeCwd(draft.cwd),
             attachedChannel: typeof draft.attachedChannel === 'string' ? draft.attachedChannel : null,
+            attachedCapabilityFingerprint: typeof draft.attachedCapabilityFingerprint === 'string'
+              ? draft.attachedCapabilityFingerprint
+              : undefined,
             runtimeScope: typeof draft.runtimeScope === 'string' ? draft.runtimeScope : '',
           } as EngineDraft
         }

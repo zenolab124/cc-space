@@ -18,7 +18,7 @@ import type {
   TurnHandle,
 } from './types'
 import { configureUiIntegrations } from './integration'
-import { collectSessionCapabilities } from '@/features'
+import { collectSessionCapabilities, sessionCapabilityFingerprint } from '@/features'
 
 interface Page<T> {
   projects?: T[]
@@ -29,11 +29,19 @@ interface Page<T> {
 const PAGE_LIMIT = 200
 const MAX_PAGES = 10_000
 
-function withSessionCapabilities(options: Record<string, unknown>): Record<string, unknown> {
+function withSessionCapabilities(options: Record<string, unknown>) {
+  const capabilities = collectSessionCapabilities()
   return {
-    ...options,
-    sessionCapabilities: collectSessionCapabilities(),
+    options: { ...options, sessionCapabilities: capabilities },
+    capabilityFingerprint: sessionCapabilityFingerprint(capabilities),
   }
+}
+
+interface AttachedSessionResult {
+  session: SessionRef
+  runtimeId: unknown
+  generation: number
+  capabilityFingerprint: string
 }
 
 export async function listEngines(): Promise<EngineDescriptor[]> {
@@ -124,23 +132,29 @@ export async function listAssets(instance: EngineInstanceId, kind: string): Prom
   throw new Error('Asset pagination exceeded the safety limit')
 }
 
-export function attachSession(session: SessionRef, options: Record<string, unknown> = {}) {
-  return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_attach_session', {
+export async function attachSession(session: SessionRef, options: Record<string, unknown> = {}): Promise<AttachedSessionResult> {
+  const configured = withSessionCapabilities(options)
+  const attached = await invoke<Omit<AttachedSessionResult, 'capabilityFingerprint'>>('engine_attach_session', {
     session,
-    options: { options: withSessionCapabilities(options) },
+    options: { options: configured.options },
   })
+  return { ...attached, capabilityFingerprint: configured.capabilityFingerprint }
 }
 
-export function createSession(project: ProjectRef, cwd: string | null, options: Record<string, unknown> = {}) {
-  return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_create_session', {
-    request: { project, cwd, options: withSessionCapabilities(options) },
+export async function createSession(project: ProjectRef, cwd: string | null, options: Record<string, unknown> = {}): Promise<AttachedSessionResult> {
+  const configured = withSessionCapabilities(options)
+  const created = await invoke<Omit<AttachedSessionResult, 'capabilityFingerprint'>>('engine_create_session', {
+    request: { project, cwd, options: configured.options },
   })
+  return { ...created, capabilityFingerprint: configured.capabilityFingerprint }
 }
 
-export function forkSession(session: SessionRef, lastTurnId: string | null = null, options: Record<string, unknown> = {}) {
-  return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_fork_session', {
-    request: { session, lastTurnId, options: withSessionCapabilities(options) },
+export async function forkSession(session: SessionRef, lastTurnId: string | null = null, options: Record<string, unknown> = {}): Promise<AttachedSessionResult> {
+  const configured = withSessionCapabilities(options)
+  const forked = await invoke<Omit<AttachedSessionResult, 'capabilityFingerprint'>>('engine_fork_session', {
+    request: { session, lastTurnId, options: configured.options },
   })
+  return { ...forked, capabilityFingerprint: configured.capabilityFingerprint }
 }
 
 export function startTurn(session: SessionRef, text: string, options: Record<string, unknown> = {}) {

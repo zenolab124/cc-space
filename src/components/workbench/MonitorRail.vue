@@ -174,6 +174,7 @@ async function createForEngine(engine: EngineDescriptor, project: ProjectRef, cw
       engineName: engine.displayName,
       cwd,
       attachedChannel,
+      attachedCapabilityFingerprint: created.capabilityFingerprint,
     })
   }
   notifyTransient(t('workbench.rail.newSessionReady'), t('workbench.rail.newSessionHint'))

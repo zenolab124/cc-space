@@ -12,6 +12,7 @@ const draft: RuntimeEngineDraft = {
   engineName: 'Codex',
   cwd: '/workspace/project',
   attachedChannel: 'channel-a',
+  attachedCapabilityFingerprint: '["html_visual"]',
 }
 const config: EngineRunConfig = {
   model: 'gpt-test',
@@ -24,7 +25,11 @@ const config: EngineRunConfig = {
 
 function dependencies(replaceSession = vi.fn(() => true)) {
   return {
-    createSession: vi.fn(async () => ({ session: replacementReference, runtimeId: 'runtime-new' })),
+    createSession: vi.fn(async () => ({
+      session: replacementReference,
+      runtimeId: 'runtime-new',
+      capabilityFingerprint: '[]',
+    })),
     sessionId: vi.fn(() => 'session-new'),
     stageDraft: vi.fn(),
     saveConfig: vi.fn(),
@@ -42,6 +47,7 @@ describe('standard-engine draft channel rebinding', () => {
       sessionId: 'session-old',
       draft,
       selectedChannel: 'channel-a',
+      selectedCapabilityFingerprint: '["html_visual"]',
       options: { channelId: 'channel-a' },
       config,
     }, deps)
@@ -56,6 +62,7 @@ describe('standard-engine draft channel rebinding', () => {
       sessionId: 'session-old',
       draft: { ...draft, attachedChannel: 'official' },
       selectedChannel: null,
+      selectedCapabilityFingerprint: '["html_visual"]',
       options: {},
       config: { ...config, channelId: null },
     }, deps)
@@ -70,6 +77,7 @@ describe('standard-engine draft channel rebinding', () => {
       sessionId: 'session-old',
       draft,
       selectedChannel: 'channel-b',
+      selectedCapabilityFingerprint: '["html_visual"]',
       options: { channelId: 'channel-b', model: 'gpt-test' },
       config,
     }, deps)
@@ -93,7 +101,23 @@ describe('standard-engine draft channel rebinding', () => {
       reference: replacementReference,
       runtimeId: 'runtime-new',
       attachedChannel: 'channel-b',
+      attachedCapabilityFingerprint: '[]',
     })
+  })
+
+  it('replaces an empty thread instead of resuming before rollout when capabilities change', async () => {
+    const deps = dependencies()
+    const result = await rebindDraftChannel({
+      sessionId: 'session-old',
+      draft,
+      selectedChannel: 'channel-a',
+      selectedCapabilityFingerprint: '[]',
+      options: { channelId: 'channel-a' },
+      config,
+    }, deps)
+
+    expect(deps.createSession).toHaveBeenCalledOnce()
+    expect(result?.attachedCapabilityFingerprint).toBe('[]')
   })
 
   it('discards the replacement thread when workbench takeover fails', async () => {
@@ -102,6 +126,7 @@ describe('standard-engine draft channel rebinding', () => {
       sessionId: 'session-old',
       draft,
       selectedChannel: 'channel-b',
+      selectedCapabilityFingerprint: '["html_visual"]',
       options: { channelId: 'channel-b' },
       config,
     }, deps)).rejects.toThrow('replace failed')

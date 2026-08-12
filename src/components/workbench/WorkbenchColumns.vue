@@ -79,6 +79,7 @@ async function onStartRace(sessionId: string) {
         engineName: session?.engine_name ?? draft?.engineName ?? reference.engine.engineId,
         cwd,
         attachedChannel,
+        attachedCapabilityFingerprint: created.capabilityFingerprint,
       })
       inheritEngineRunConfig(sessionId, forkedSessionId)
       createRaceTab(sessionId, cwd, forkedSessionId)
