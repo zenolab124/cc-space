@@ -77,6 +77,10 @@ impl SessionCapabilityBundle {
         self.append_system_prompt.as_deref()
     }
 
+    pub fn developer_instructions(&self) -> Option<&str> {
+        self.append_system_prompt.as_deref()
+    }
+
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
@@ -109,6 +113,7 @@ mod tests {
 
         assert_eq!(empty.append_system_prompt(), None);
         assert!(html.append_system_prompt().is_some());
+        assert_eq!(html.developer_instructions(), html.append_system_prompt());
         assert_ne!(empty.fingerprint(), html.fingerprint());
     }
 

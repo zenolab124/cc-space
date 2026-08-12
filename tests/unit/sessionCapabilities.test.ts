@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   resolveSessionCapabilities,
+  sessionCapabilityFingerprint,
   SESSION_CAPABILITY_IDS,
 } from '@/features/sessionCapabilities'
 
@@ -18,5 +19,12 @@ describe('resolveSessionCapabilities', () => {
 
     expect(resolved).toEqual(SESSION_CAPABILITY_IDS)
     expect(new Set(resolved).size).toBe(resolved.length)
+  })
+})
+
+describe('sessionCapabilityFingerprint', () => {
+  it('serializes the ordered capability set for runtime attachment identity', () => {
+    expect(sessionCapabilityFingerprint([])).toBe('[]')
+    expect(sessionCapabilityFingerprint(['html_visual', 'html_visual'])).toBe('["html_visual"]')
   })
 })

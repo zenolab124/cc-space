@@ -8,6 +8,7 @@ use super::app_server::{IncomingMessage, RequestId};
 use super::source::{map_item_segments, message_text_phase};
 use super::{default_instance, CodexSupervisor};
 use crate::engines::core::*;
+use crate::session_capabilities::{SessionCapabilityBundle, SessionCapabilityId};
 
 #[derive(Clone)]
 struct SessionState {
@@ -539,6 +540,7 @@ impl AgentRuntime for CodexRuntime {
                 ],
             );
             apply_channel_options(&request.options, &mut params)?;
+            apply_session_capabilities(&request.options, &mut params)?;
             let response = self
                 .supervisor
                 .request("thread/start", Value::Object(params))?;
@@ -602,6 +604,7 @@ impl AgentRuntime for CodexRuntime {
                 ],
             );
             apply_channel_options(&options.options, &mut params)?;
+            apply_session_capabilities(&options.options, &mut params)?;
             self.supervisor
                 .request("thread/resume", Value::Object(params))?;
             let runtime = self.runtime_session(session.native_id(), true)?;
@@ -827,6 +830,25 @@ fn apply_channel_options(
     Ok(())
 }
 
+fn apply_session_capabilities(
+    source: &BTreeMap<String, Value>,
+    target: &mut Map<String, Value>,
+) -> EngineResult<()> {
+    let Some(value) = source.get("sessionCapabilities") else {
+        return Ok(());
+    };
+    let capabilities = serde_json::from_value::<Vec<SessionCapabilityId>>(value.clone())
+        .map_err(|error| EngineError::new(EngineErrorKind::Protocol, error.to_string()))?;
+    let bundle = SessionCapabilityBundle::new(capabilities);
+    target.insert(
+        "developerInstructions".into(),
+        bundle
+            .developer_instructions()
+            .map_or(Value::Null, |instructions| Value::String(instructions.to_string())),
+    );
+    Ok(())
+}
+
 fn fork_params(request: &ForkSessionRequest) -> EngineResult<Map<String, Value>> {
     let mut params = Map::from_iter([(
         "threadId".into(),
@@ -850,6 +872,7 @@ fn fork_params(request: &ForkSessionRequest) -> EngineResult<Map<String, Value>>
         ],
     );
     apply_channel_options(&request.options, &mut params)?;
+    apply_session_capabilities(&request.options, &mut params)?;
     Ok(params)
 }
 
@@ -985,6 +1008,7 @@ mod tests {
             last_turn_id: Some("turn-2".into()),
             options: BTreeMap::from([
                 ("model".into(), Value::String("gpt-test".into())),
+                ("sessionCapabilities".into(), json!(["html_visual"])),
                 ("ignored".into(), Value::Bool(true)),
             ]),
         })
@@ -992,7 +1016,37 @@ mod tests {
         assert_eq!(params["threadId"], "source-thread");
         assert_eq!(params["lastTurnId"], "turn-2");
         assert_eq!(params["model"], "gpt-test");
+        assert!(params["developerInstructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.contains("HTML")));
         assert!(!params.contains_key("ignored"));
+    }
+
+    #[test]
+    fn maps_only_registered_session_capabilities_to_developer_instructions() {
+        let mut params = Map::new();
+        apply_session_capabilities(
+            &BTreeMap::from([("sessionCapabilities".into(), json!(["html_visual"]))]),
+            &mut params,
+        )
+        .unwrap();
+        assert!(params["developerInstructions"]
+            .as_str()
+            .is_some_and(|instructions| instructions.contains("Monet")));
+
+        let mut empty = Map::new();
+        apply_session_capabilities(
+            &BTreeMap::from([("sessionCapabilities".into(), json!([]))]),
+            &mut empty,
+        )
+        .unwrap();
+        assert_eq!(empty["developerInstructions"], Value::Null);
+
+        let error = apply_session_capabilities(
+            &BTreeMap::from([("sessionCapabilities".into(), json!(["arbitrary_prompt"]))]),
+            &mut Map::new(),
+        );
+        assert!(error.is_err());
     }
 
     #[test]

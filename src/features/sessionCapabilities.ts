@@ -12,3 +12,8 @@ export function resolveSessionCapabilities(state: SessionCapabilityState): Sessi
   if (state.htmlVisual) enabled.add('html_visual')
   return SESSION_CAPABILITY_IDS.filter(id => enabled.has(id))
 }
+
+export function sessionCapabilityFingerprint(ids: readonly SessionCapabilityId[]): string {
+  const enabled = new Set(ids)
+  return JSON.stringify(SESSION_CAPABILITY_IDS.filter(id => enabled.has(id)))
+}

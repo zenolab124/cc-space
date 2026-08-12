@@ -55,6 +55,7 @@ import { isRenderableEngineSegment } from '@/engines/processGroups'
 import { measureElement as measureVirtualElement, useVirtualizer, type Virtualizer } from '@tanstack/vue-virtual'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
 import { hasUpwardScrollRange, shouldCompensateVirtualItemSizeChange, shouldDetachScrollFollowAfterMovement } from '@/lib/sessionScrollPolicy'
+import { collectSessionCapabilityFingerprint, useHtmlVisual } from '@/features'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -89,6 +90,7 @@ const modelOverridden = ref(false)
 const effortOverridden = ref(false)
 const selectedChannel = ref<string | null>(null)
 const attachedChannel = ref<string | null | undefined>(undefined)
+const attachedCapabilityFingerprint = ref<string | undefined>(undefined)
 const runConfigSyncing = ref(false)
 const asyncPanelOpen = ref(false)
 const menuOpen = ref(false)
@@ -105,6 +107,7 @@ let timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineUpwardSettleTimer: number | null = null
 let timelineResizeObserver: ResizeObserver | null = null
 const { getMeta, updateMeta } = useSessionMeta()
+const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const {
   openSession,
   removeSession,
@@ -980,6 +983,7 @@ async function rebindCurrentDraftChannel(): Promise<boolean> {
   }
   runtimeId.value = replacement.runtimeId
   attachedChannel.value = replacement.attachedChannel
+  attachedCapabilityFingerprint.value = collectSessionCapabilityFingerprint()
   return true
 }
 
@@ -1003,7 +1007,12 @@ async function ensureAttached(): Promise<AttachOutcome> {
         attachedChannel.value = draft.attachedChannel
       }
     }
-    if (runtimeId.value && sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)) {
+    const capabilityFingerprint = collectSessionCapabilityFingerprint()
+    if (
+      runtimeId.value
+      && sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)
+      && attachedCapabilityFingerprint.value === capabilityFingerprint
+    ) {
       announceCurrentRuntime()
       return 'attached'
     }
@@ -1012,13 +1021,18 @@ async function ensureAttached(): Promise<AttachOutcome> {
       error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
       return 'failed'
     }
-    if (!runtimeId.value || !sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)) {
+    if (
+      !runtimeId.value
+      || !sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)
+      || attachedCapabilityFingerprint.value !== capabilityFingerprint
+    ) {
       const attached = await attachSession(reference.value, {
         ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
       })
       runtimeId.value = attached.runtimeId
       attachedChannel.value = selectedChannel.value
+      attachedCapabilityFingerprint.value = capabilityFingerprint
       showSessionBanner(!engineDraft(props.session.id))
     }
     return 'attached'
@@ -1416,6 +1430,7 @@ watch(() => props.session.id, async () => {
     runtimeId.value = replacement?.runtimeId ?? null
     if (replacement) {
       attachedChannel.value = replacement.attachedChannel
+      attachedCapabilityFingerprint.value = collectSessionCapabilityFingerprint()
     } else {
       models.value = []
       selectedModel.value = null
@@ -1424,6 +1439,7 @@ watch(() => props.session.id, async () => {
       effortOverridden.value = false
       selectedChannel.value = null
       attachedChannel.value = undefined
+      attachedCapabilityFingerprint.value = undefined
     }
     asyncPanelOpen.value = false
     menuOpen.value = false
@@ -1627,7 +1643,7 @@ onUnmounted(() => {
           :cwd="session.cwd || ''"
           :model="selectedModel"
           :effort="selectedEffort"
-          :features="[]"
+          :features="htmlVisualEnabled ? [t('settings.htmlVisual')] : []"
           :hook-events="[]"
         />
       </template>

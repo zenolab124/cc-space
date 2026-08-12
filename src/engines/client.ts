@@ -18,6 +18,7 @@ import type {
   TurnHandle,
 } from './types'
 import { configureUiIntegrations } from './integration'
+import { collectSessionCapabilities } from '@/features'
 
 interface Page<T> {
   projects?: T[]
@@ -27,6 +28,13 @@ interface Page<T> {
 
 const PAGE_LIMIT = 200
 const MAX_PAGES = 10_000
+
+function withSessionCapabilities(options: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...options,
+    sessionCapabilities: collectSessionCapabilities(),
+  }
+}
 
 export async function listEngines(): Promise<EngineDescriptor[]> {
   const result = await invoke<{ engines: EngineDescriptor[] }>('engine_list')
@@ -119,19 +127,19 @@ export async function listAssets(instance: EngineInstanceId, kind: string): Prom
 export function attachSession(session: SessionRef, options: Record<string, unknown> = {}) {
   return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_attach_session', {
     session,
-    options: { options },
+    options: { options: withSessionCapabilities(options) },
   })
 }
 
 export function createSession(project: ProjectRef, cwd: string | null, options: Record<string, unknown> = {}) {
   return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_create_session', {
-    request: { project, cwd, options },
+    request: { project, cwd, options: withSessionCapabilities(options) },
   })
 }
 
 export function forkSession(session: SessionRef, lastTurnId: string | null = null, options: Record<string, unknown> = {}) {
   return invoke<{ session: SessionRef; runtimeId: unknown; generation: number }>('engine_fork_session', {
-    request: { session, lastTurnId, options },
+    request: { session, lastTurnId, options: withSessionCapabilities(options) },
   })
 }
 
