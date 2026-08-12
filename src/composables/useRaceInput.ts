@@ -219,6 +219,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
         setEngineRunConfig(replacementSessionId, {
           model: null,
           effort: null,
+          serviceTier: null,
           channelId: attachedChannel,
           modelOverridden: false,
           effortOverridden: false,
@@ -353,6 +354,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
         return sendMessage(sessionId, race.cwd, text, {
           model: rc.launch.model,
           effort: rc.launch.effort ?? null,
+          fastMode: rc.launch.fastMode,
           channel: rc.channelId,
           advisor: settings.advisor,
           chrome: settings.chrome,

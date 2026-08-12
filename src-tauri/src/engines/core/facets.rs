@@ -48,6 +48,14 @@ pub struct ModelEffortOption {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelDescriptor {
     pub id: String,
     pub model: String,
@@ -57,6 +65,8 @@ pub struct ModelDescriptor {
     pub hidden: bool,
     pub default_effort: Option<String>,
     pub efforts: Vec<ModelEffortOption>,
+    pub default_service_tier: Option<String>,
+    pub service_tiers: Vec<ModelServiceTier>,
 }
 
 pub trait ModelCatalogProvider: Send + Sync {

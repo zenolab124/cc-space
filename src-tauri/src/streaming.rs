@@ -24,6 +24,8 @@ struct SessionProcess {
     request_counter: u64,
     channel: Option<String>,
     effort: Option<String>,
+    /// spawn 时的快速模式覆盖(None = 跟随 CLI/项目配置)
+    fast_mode: Option<bool>,
     /// 进程当前生效的模型(spawn --model / set_model 下达值;None = CLI 默认)。
     /// 复用判定用:意图回落 None 而进程钉着旧值时必须重启,set_model 无法"切回默认"
     model: Option<String>,
@@ -679,6 +681,24 @@ fn normalized_override(value: Option<&str>) -> Option<&str> {
     value.filter(|value| !value.is_empty())
 }
 
+pub(crate) fn fast_mode_unavailable_error(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    (text.contains("fast mode") || text.contains("fast-mode") || text.contains("fast_mode"))
+        && [
+            "unavailable",
+            "not available",
+            "not enabled",
+            "not eligible",
+            "disabled",
+            "requires",
+            "rejected",
+            "exhausted",
+            "limit reached",
+        ]
+        .iter()
+        .any(|reason| text.contains(reason))
+}
+
 fn permission_change_requires_restart(current: Option<&str>, requested: Option<&str>) -> bool {
     current.is_some() && normalized_override(requested).is_none()
 }
@@ -702,7 +722,9 @@ fn append_explicit_run_args(
 
 #[cfg(test)]
 mod explicit_run_args_tests {
-    use super::{append_explicit_run_args, permission_change_requires_restart};
+    use super::{
+        append_explicit_run_args, fast_mode_unavailable_error, permission_change_requires_restart,
+    };
 
     #[test]
     fn empty_overrides_add_no_cli_flags() {
@@ -745,6 +767,19 @@ mod explicit_run_args_tests {
         ));
         assert!(!permission_change_requires_restart(None, None));
     }
+
+    #[test]
+    fn classifies_only_explicit_fast_mode_rejections() {
+        assert!(fast_mode_unavailable_error(
+            "Fast mode requires a paid subscription"
+        ));
+        assert!(fast_mode_unavailable_error(
+            "Fast-mode unavailable during evaluation"
+        ));
+        assert!(!fast_mode_unavailable_error(
+            "Server is temporarily unavailable"
+        ));
+    }
 }
 
 /// 打开会话进程：spawn 长活 CLI + 初始化握手 + 启动 stdout 读取线程
@@ -755,6 +790,7 @@ fn open_session(
     cwd: &str,
     model: Option<&str>,
     effort: Option<&str>,
+    fast_mode: Option<bool>,
     channel: Option<&str>,
     advisor: bool,
     chrome: bool,
@@ -876,21 +912,26 @@ fn open_session(
 
     let ultracode = effort == Some("ultracode");
 
-    // 5. 渠道/ultracode/顾问注入（合成 --settings）
+    // 5. 渠道/ultracode/顾问/快速模式注入（合成 --settings）
     let channel_opt = channel.filter(|s| !s.is_empty() && *s != crate::channels::OFFICIAL_ID);
-    let channel_injection =
-        match crate::channels::prepare_injection(channel_opt, session_id, ultracode, advisor) {
-            Ok(Some(inj)) => {
-                args.push("--settings".to_string());
-                args.push(inj.settings_arg.clone());
-                Some(inj)
-            }
-            Ok(None) => None,
-            Err(e) => {
-                PermissionService::stop_for(session_id);
-                return Err(format!("会话配置加载失败:{}", e));
-            }
-        };
+    let channel_injection = match crate::channels::prepare_injection(
+        channel_opt,
+        session_id,
+        ultracode,
+        advisor,
+        fast_mode,
+    ) {
+        Ok(Some(inj)) => {
+            args.push("--settings".to_string());
+            args.push(inj.settings_arg.clone());
+            Some(inj)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            PermissionService::stop_for(session_id);
+            return Err(format!("会话配置加载失败:{}", e));
+        }
+    };
 
     append_explicit_run_args(&mut args, model, effort, permission_mode);
     if let Some(prompt) = capability_bundle.append_system_prompt() {
@@ -1015,7 +1056,7 @@ fn open_session(
             if t == Some("system") {
                 if let Some(sub) = v.get("subtype").and_then(|s| s.as_str()) {
                     if sub == "hook_started" || sub == "hook_response" {
-                        let mut payload = v;
+                        let mut payload = v.clone();
                         payload
                             .as_object_mut()
                             .map(|o| o.insert("session_id".to_string(), json!(session_id)));
@@ -1023,6 +1064,7 @@ fn open_session(
                     }
                 }
             }
+            emit_fast_mode_status(app, session_id, &v);
         }
     }
 
@@ -1063,6 +1105,7 @@ fn open_session(
         request_counter: 1,
         channel: channel.map(|s| s.to_string()),
         effort: effort.map(|s| s.to_string()),
+        fast_mode,
         model: normalized_override(model).map(str::to_owned),
         permission_mode: normalized_override(permission_mode).map(str::to_owned),
         advisor,
@@ -1101,6 +1144,7 @@ pub fn send_message(
     message: &str,
     model: Option<&str>,
     effort: Option<&str>,
+    fast_mode: Option<bool>,
     channel: Option<&str>,
     advisor: bool,
     chrome: bool,
@@ -1128,6 +1172,8 @@ pub fn send_message(
                 let sp = arc.lock().unwrap();
                 sp.channel.as_deref() != channel
                     || sp.effort.as_deref() != effort
+                    // fastMode 经 --settings 注入，显式开关或恢复继承都需重启。
+                    || sp.fast_mode != fast_mode
                     // advisor 经 --settings 注入,变更只能重启生效(否则只有主模型锁定生效、顾问没挂上)
                     || sp.advisor != advisor
                     // 模型意图回落默认(None)而进程钉着上次 set_model 的具体值:
@@ -1162,6 +1208,7 @@ pub fn send_message(
             cwd,
             model,
             effort,
+            fast_mode,
             channel,
             advisor,
             chrome,
@@ -1236,6 +1283,7 @@ pub fn toggle_remote_control(
     cwd: &str,
     model: Option<&str>,
     effort: Option<&str>,
+    fast_mode: Option<bool>,
     channel: Option<&str>,
     advisor: bool,
     chrome: bool,
@@ -1260,7 +1308,11 @@ pub fn toggle_remote_control(
             .and_then(|m| m.get(session_id).cloned())
             .is_some_and(|arc| {
                 let sp = arc.lock().unwrap();
-                permission_change_requires_restart(sp.permission_mode.as_deref(), permission_mode)
+                sp.fast_mode != fast_mode
+                    || permission_change_requires_restart(
+                        sp.permission_mode.as_deref(),
+                        permission_mode,
+                    )
                     || capability_needs_restart(&sp.capability_fingerprint, &capability_bundle)
             });
         if needs_restart {
@@ -1280,6 +1332,7 @@ pub fn toggle_remote_control(
             cwd,
             model,
             effort,
+            fast_mode,
             channel,
             advisor,
             chrome,
@@ -1662,6 +1715,94 @@ fn find_mcp_binary() -> Option<PathBuf> {
 
 /// 读取长活进程 stdout——逐行解析流式事件，result 立即 emit + stream-done 标记轮次结束，
 /// 循环仅在 stdout EOF（进程退出）时终止
+fn fast_mode_status_notification(value: &Value) -> Option<bool> {
+    if value.get("type").and_then(Value::as_str) != Some("system")
+        || value.get("subtype").and_then(Value::as_str) != Some("notification")
+    {
+        return None;
+    }
+    // CLI 目前把原因放在 notification 的文本字段中；序列化整条事件兼容字段名演进，
+    // 但仍限定 system/notification + Fast mode，避免误认普通模型输出。
+    let text = value.to_string().to_ascii_lowercase();
+    if !text.contains("fast mode") && !text.contains("fast-mode") {
+        return None;
+    }
+    if text.contains("re-enabling fast mode")
+        || text.contains("fast-mode-cooldown-expired")
+        || text.contains("fast mode enabled")
+        || text.contains("fast mode active")
+    {
+        return Some(true);
+    }
+    if text.contains("disabled")
+        || text.contains("unavailable")
+        || text.contains("not available")
+        || text.contains("not enabled")
+        || text.contains("requires")
+        || text.contains("rejected")
+        || text.contains("fast-mode-cooldown-started")
+        || text.contains("fast-mode-overage-rejected")
+        || text.contains("exhausted")
+        || text.contains("limit reached")
+    {
+        return Some(false);
+    }
+    None
+}
+
+fn emit_fast_mode_status(app: &AppHandle, session_id: &str, value: &Value) {
+    if let Some(active) = fast_mode_status_notification(value) {
+        dispatch_stream_signal(
+            app,
+            "fast-mode-status",
+            json!({ "session_id": session_id, "active": active }),
+        );
+    }
+}
+
+#[cfg(test)]
+mod fast_mode_status_tests {
+    use super::fast_mode_status_notification;
+    use serde_json::json;
+
+    #[test]
+    fn decodes_fast_mode_fallback_notifications() {
+        assert_eq!(
+            fast_mode_status_notification(&json!({
+                "type": "system",
+                "subtype": "notification",
+                "notification_type": "fast-mode-overage-rejected",
+                "message": "Fast mode disabled — usage credits exhausted"
+            })),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn decodes_fast_mode_reenable_notifications() {
+        assert_eq!(
+            fast_mode_status_notification(&json!({
+                "type": "system",
+                "subtype": "notification",
+                "message": "Fast mode cooldown expired, re-enabling fast mode"
+            })),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_notifications() {
+        assert_eq!(
+            fast_mode_status_notification(&json!({
+                "type": "system",
+                "subtype": "notification",
+                "message": "Background task completed"
+            })),
+            None
+        );
+    }
+}
+
 fn read_stream(
     reader: BufReader<std::process::ChildStdout>,
     stderr: Option<std::process::ChildStderr>,
@@ -1701,6 +1842,7 @@ fn read_stream(
                 }
             }
         }
+        emit_fast_mode_status(app, session_id, &value);
 
         // Remote Control 判决回报：success/error 都上报，前端 rcActive 完全由本事件驱动
         // （不能乐观置位——判决与 invoke 返回并发，先到的判决会被晚写的乐观值覆盖）。

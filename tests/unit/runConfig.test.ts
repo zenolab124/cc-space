@@ -28,6 +28,7 @@ function settings(patch: Partial<SessionSettings> = {}): SessionSettings {
   return {
     modelId: null,
     effort: null,
+    fastMode: null,
     channelId: null,
     channelMarks: [],
     advisor: false,
@@ -46,6 +47,8 @@ function snapshot(patch: Partial<RunConfigSnapshot> = {}): RunConfigSnapshot {
       model: 'cli-model',
       effort_level: 'high',
       ultracode: false,
+      fast_mode: false,
+      fast_mode_per_session_opt_in: false,
       permission_mode: 'plan',
     },
     ...patch,
@@ -60,22 +63,27 @@ describe('resolveRunConfig', () => {
       modelSource: 'cli',
       effort: 'high',
       effortSource: 'cli',
+      fastMode: false,
+      fastModeSource: 'cli',
       permissionMode: 'plan',
       permissionModeSource: 'cli',
     })
     expect(result.launch).toEqual({
       model: undefined,
       effort: undefined,
+      fastMode: undefined,
       permissionMode: null,
     })
     expect(result.cliDefaultModel).toBe('cli-model')
     expect(result.cliDefaultEffort).toBe('high')
+    expect(result.cliDefaultFastMode).toBe(false)
   })
 
   it('会话显式选择同时进入 display 与 launch', () => {
     const result = resolveRunConfig(settings({
       modelId: 'session-model',
       effort: 'xhigh',
+      fastMode: true,
       permissionMode: 'dontAsk',
     }), snapshot())
     expect(result.display).toMatchObject({
@@ -89,6 +97,7 @@ describe('resolveRunConfig', () => {
     expect(result.launch).toEqual({
       model: 'session-model',
       effort: 'xhigh',
+      fastMode: true,
       permissionMode: 'dontAsk',
     })
   })
@@ -127,10 +136,27 @@ describe('resolveRunConfig', () => {
         model: null,
         effort_level: null,
         ultracode: false,
+        fast_mode: false,
+        fast_mode_per_session_opt_in: false,
         permission_mode: 'future-mode',
       },
     }))
     expect(result.display.permissionMode).toBe('default')
     expect(result.launch.permissionMode).toBeNull()
+  })
+
+  it('逐会话 opt-in 策略不把已保存的快速模式带进新进程', () => {
+    const result = resolveRunConfig(settings(), snapshot({
+      cliSettings: {
+        model: null,
+        effort_level: null,
+        ultracode: false,
+        fast_mode: true,
+        fast_mode_per_session_opt_in: true,
+        permission_mode: null,
+      },
+    }))
+    expect(result.display.fastMode).toBe(false)
+    expect(result.launch.fastMode).toBeUndefined()
   })
 })

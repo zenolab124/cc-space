@@ -18,6 +18,8 @@ export interface SendOptions {
   model?: string
   /** null/缺省 = 跟随 CLI(不附加 --effort);'ultracode' 经 --settings 注入 */
   effort?: EffortSetting
+  /** 缺省 = 跟随 CLI/项目配置；boolean 经临时 --settings 覆盖本会话 */
+  fastMode?: boolean
   /**
    * 已解析的最终渠道 id(resolveChannel 产物):null/缺省 = 零注入走官方。
    * 解析值进 lastSent 一起缓存——重试必须复用发送时的渠道,不受期间默认值变化影响
@@ -1252,6 +1254,7 @@ async function sendMessage(
       message,
       model: opts.model ?? null,
       effort: opts.effort ?? null,
+      fastMode: opts.fastMode ?? null,
       channel: opts.channel ?? null,
       advisor: opts.advisor ?? false,
       chrome: opts.chrome ?? false,

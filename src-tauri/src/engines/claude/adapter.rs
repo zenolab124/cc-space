@@ -264,6 +264,8 @@ impl ModelCatalogProvider for ClaudeEngine {
                     hidden: false,
                     default_effort: None,
                     efforts: Vec::new(),
+                    default_service_tier: None,
+                    service_tiers: Vec::new(),
                 })
                 .collect())
         })

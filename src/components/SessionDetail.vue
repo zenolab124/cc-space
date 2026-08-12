@@ -724,7 +724,18 @@ async function onStop() {
 }
 
 // --- 会话级设置(模型 / 努力等级 / 渠道) ---
-const { settings, setModel, setEffort, setChannel, setChrome, setExtraArgs, setPermissionMode: persistPermissionMode } = useSessionSettings(effectiveSessionId)
+const { settings, setModel, setEffort, setFastMode, setChannel, setChrome, setExtraArgs, setPermissionMode: persistPermissionMode } = useSessionSettings(effectiveSessionId)
+const fastModeNotice = ref<string | null>(null)
+let unlistenFastModeStatus: (() => void) | null = null
+
+listen<{ session_id: string; active: boolean }>('fast-mode-status', event => {
+  if (event.payload.session_id !== effectiveSessionId.value) return
+  setFastMode(event.payload.active)
+  fastModeNotice.value = event.payload.active ? null : t('topbar.fastModeFallback')
+}).then(unlisten => { unlistenFastModeStatus = unlisten })
+
+watch(effectiveSessionId, () => { fastModeNotice.value = null })
+onUnmounted(() => unlistenFastModeStatus?.())
 
 // 运行配置同源解析：CLI/项目值只供 display，Monet 显式意图才进入 launch
 const runConfigCwd = computed(() => {
@@ -741,6 +752,11 @@ function onModelChange(modelId: string | null) {
 
 function onEffortChange(effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode' | null) {
   setEffort(effort)
+}
+
+function onFastModeChange(fastMode: boolean) {
+  fastModeNotice.value = null
+  setFastMode(fastMode)
 }
 
 // --- 渠道(per-session 选择 + 切换横线记账) ---
@@ -2008,6 +2024,7 @@ async function handleSend() {
   const opts = {
     model: rc.launch.model,
     effort: rc.launch.effort ?? null,
+    fastMode: rc.launch.fastMode,
     channel: rc.channelId,
     advisor,
     chrome: settings.value.chrome,
@@ -3111,6 +3128,8 @@ async function onReload() {
       :last-modified="currentSession.summary.last_modified"
       :selected-model-id="settings.modelId"
       :selected-effort="settings.effort"
+      :selected-fast-mode="settings.fastMode"
+      :fast-mode-notice="fastModeNotice"
       :selected-channel-id="settings.channelId"
       :resolved-channel-id="resolvedChannelId"
       :run-config="runConfig"
@@ -3120,6 +3139,7 @@ async function onReload() {
       :selected-permission-mode="settings.permissionMode"
       @model-change="onModelChange"
       @effort-change="onEffortChange"
+      @fast-mode-change="onFastModeChange"
       @channel-change="onChannelChange"
       @chrome-change="onChromeChange"
       @extra-args-change="onExtraArgsChange"

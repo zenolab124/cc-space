@@ -14,6 +14,8 @@ pub struct CliSettings {
     pub model: Option<String>,
     pub effort_level: Option<String>,
     pub ultracode: bool,
+    pub fast_mode: bool,
+    pub fast_mode_per_session_opt_in: bool,
     pub permission_mode: Option<String>,
 }
 
@@ -22,6 +24,8 @@ struct CliSettingsLayer {
     model: Option<String>,
     effort_level: Option<String>,
     ultracode: Option<bool>,
+    fast_mode: Option<bool>,
+    fast_mode_per_session_opt_in: Option<bool>,
     permission_mode: Option<String>,
 }
 
@@ -44,6 +48,14 @@ fn read_settings_layer(path: &Path) -> CliSettingsLayer {
             .as_ref()
             .and_then(|value| value.get("ultracode"))
             .and_then(Value::as_bool),
+        fast_mode: json
+            .as_ref()
+            .and_then(|value| value.get("fastMode"))
+            .and_then(Value::as_bool),
+        fast_mode_per_session_opt_in: json
+            .as_ref()
+            .and_then(|value| value.get("fastModePerSessionOptIn"))
+            .and_then(Value::as_bool),
         permission_mode: json
             .as_ref()
             .and_then(|value| value.get("permissions"))
@@ -65,6 +77,12 @@ fn merge_settings_layers(layers: impl IntoIterator<Item = CliSettingsLayer>) -> 
         if layer.ultracode.is_some() {
             merged.ultracode = layer.ultracode;
         }
+        if layer.fast_mode.is_some() {
+            merged.fast_mode = layer.fast_mode;
+        }
+        if layer.fast_mode_per_session_opt_in.is_some() {
+            merged.fast_mode_per_session_opt_in = layer.fast_mode_per_session_opt_in;
+        }
         if layer.permission_mode.is_some() {
             merged.permission_mode = layer.permission_mode;
         }
@@ -73,6 +91,8 @@ fn merge_settings_layers(layers: impl IntoIterator<Item = CliSettingsLayer>) -> 
         model: merged.model,
         effort_level: merged.effort_level,
         ultracode: merged.ultracode.unwrap_or(false),
+        fast_mode: merged.fast_mode.unwrap_or(false),
+        fast_mode_per_session_opt_in: merged.fast_mode_per_session_opt_in.unwrap_or(false),
         permission_mode: merged.permission_mode,
     }
 }
@@ -200,6 +220,8 @@ mod settings_summary_tests {
                 model: Some("user-model".into()),
                 effort_level: Some("medium".into()),
                 ultracode: Some(true),
+                fast_mode: Some(true),
+                fast_mode_per_session_opt_in: Some(false),
                 permission_mode: Some("default".into()),
             },
             CliSettingsLayer {
@@ -210,6 +232,7 @@ mod settings_summary_tests {
             CliSettingsLayer {
                 effort_level: Some("high".into()),
                 ultracode: Some(false),
+                fast_mode_per_session_opt_in: Some(true),
                 ..Default::default()
             },
         ]);
@@ -219,6 +242,8 @@ mod settings_summary_tests {
                 model: Some("project-model".into()),
                 effort_level: Some("high".into()),
                 ultracode: false,
+                fast_mode: true,
+                fast_mode_per_session_opt_in: true,
                 permission_mode: Some("plan".into()),
             }
         );
@@ -227,20 +252,26 @@ mod settings_summary_tests {
     #[test]
     fn invalid_json_and_wrong_types_leave_fields_unset() {
         let invalid = temp_file("invalid.json", "{oops");
-        assert_eq!(read_settings_layer(invalid.path()), CliSettingsLayer::default());
+        assert_eq!(
+            read_settings_layer(invalid.path()),
+            CliSettingsLayer::default()
+        );
 
         let wrong = temp_file(
             "wrong.json",
-            r#"{"model":3,"effortLevel":false,"ultracode":"yes","permissions":{"defaultMode":[]}}"#,
+            r#"{"model":3,"effortLevel":false,"ultracode":"yes","fastMode":"yes","fastModePerSessionOptIn":1,"permissions":{"defaultMode":[]}}"#,
         );
-        assert_eq!(read_settings_layer(wrong.path()), CliSettingsLayer::default());
+        assert_eq!(
+            read_settings_layer(wrong.path()),
+            CliSettingsLayer::default()
+        );
     }
 
     #[test]
     fn reads_supported_fields_only() {
         let path = temp_file(
             "settings.json",
-            r#"{"model":"opus","effortLevel":"max","ultracode":true,"permissions":{"defaultMode":"dontAsk","allow":["Bash"]},"env":{"SECRET":"ignored"}}"#,
+            r#"{"model":"opus","effortLevel":"max","ultracode":true,"fastMode":true,"fastModePerSessionOptIn":false,"permissions":{"defaultMode":"dontAsk","allow":["Bash"]},"env":{"SECRET":"ignored"}}"#,
         );
         assert_eq!(
             read_settings_layer(path.path()),
@@ -248,6 +279,8 @@ mod settings_summary_tests {
                 model: Some("opus".into()),
                 effort_level: Some("max".into()),
                 ultracode: Some(true),
+                fast_mode: Some(true),
+                fast_mode_per_session_opt_in: Some(false),
                 permission_mode: Some("dontAsk".into()),
             }
         );

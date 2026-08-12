@@ -33,6 +33,8 @@ export interface SessionSettings {
   /** null 表示未设置(回退使用 session 自带 model 字段) */
   modelId: string | null
   effort: EffortSetting
+  /** 快速模式:null = 跟随 CLI/项目配置；boolean = 本会话显式覆盖 */
+  fastMode: boolean | null
   /** 渠道选择:null = 跟随应用默认渠道;'official' = 强制官方;其他 = 渠道 id */
   channelId: string | null
   /** 渠道切换横线记账(按发生顺序) */
@@ -56,6 +58,7 @@ const VALID_PERMISSION_MODES: PermissionMode[] = ['default', 'plan', 'acceptEdit
 export const DEFAULT_SETTINGS: SessionSettings = {
   modelId: null,
   effort: null,
+  fastMode: null,
   channelId: null,
   channelMarks: [],
   advisor: false,
@@ -121,6 +124,7 @@ function loadFromStorage(sid: string): SessionSettings {
     return {
       modelId,
       effort,
+      fastMode: typeof parsed.fastMode === 'boolean' ? parsed.fastMode : null,
       channelId,
       channelMarks: sanitizeMarks(parsed.channelMarks),
       advisor: parsed.advisor === true,
@@ -162,7 +166,7 @@ export function readStoredChannelId(sid: string): string | null {
 }
 
 /**
- * 新会话继承源会话的模型选择(渠道/模型/努力等级/顾问)——列头加号新建与各分叉
+ * 新会话继承源会话的模型选择(渠道/模型/努力等级/快速模式/顾问)——列头加号新建与各分叉
  * 入口调用,延续「当前在用什么模型」的直觉。渠道必须随模型走:渠道语境外的
  * 模型 ID 可能无效(官方 alias vs 第三方映射)。工作方式类设置(chrome/extraArgs/
  * permissionMode)与渠道切换横线记账(channelMarks)不继承,新会话从默认开始
@@ -170,11 +174,12 @@ export function readStoredChannelId(sid: string): string | null {
 export function inheritRunSettings(fromSid: string, toSid: string): void {
   const src = loadFromStorage(fromSid)
   // 源全默认:不写冗余存储条目
-  if (src.modelId === null && src.effort === null && src.channelId === null && !src.advisor) return
+  if (src.modelId === null && src.effort === null && src.fastMode === null && src.channelId === null && !src.advisor) return
   saveToStorage(toSid, {
     ...structuredClone(DEFAULT_SETTINGS),
     modelId: src.modelId,
     effort: src.effort,
+    fastMode: src.fastMode,
     channelId: src.channelId,
     advisor: src.advisor,
   })
@@ -187,6 +192,8 @@ export interface UseSessionSettingsReturn {
   setModel: (modelId: string | null) => void
   /** 设置努力等级(null 表示跟随 CLI,'ultracode' 为超档) */
   setEffort: (effort: EffortSetting) => void
+  /** 设置快速模式；null 表示恢复跟随 CLI/项目配置 */
+  setFastMode: (fastMode: boolean | null) => void
   /**
    * 切换渠道并记一条横线账(afterUuid = 切换时历史区最后一条消息 uuid)。
    * 与当前值相同的切换为 no-op,不产生横线
@@ -243,6 +250,10 @@ export function useSessionSettings(sessionId: Ref<string | null>): UseSessionSet
     internal.value = { ...internal.value, effort }
   }
 
+  function setFastMode(fastMode: boolean | null) {
+    internal.value = { ...internal.value, fastMode }
+  }
+
   function setChannel(channelId: string | null, afterUuid: string | null) {
     if (channelId === internal.value.channelId) return
     // 切渠道 = 换整套运行预设:清空本会话的模型/effort 覆盖,回落新渠道默认——
@@ -283,5 +294,5 @@ export function useSessionSettings(sessionId: Ref<string | null>): UseSessionSet
 
   const settings = computed<SessionSettings>(() => internal.value)
 
-  return { settings, setModel, setEffort, setChannel, setAdvisor, setChrome, setExtraArgs, setPermissionMode, reset }
+  return { settings, setModel, setEffort, setFastMode, setChannel, setAdvisor, setChrome, setExtraArgs, setPermissionMode, reset }
 }

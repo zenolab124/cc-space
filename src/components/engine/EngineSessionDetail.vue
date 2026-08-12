@@ -46,7 +46,7 @@ import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
-import { engineRunConfig, inheritEngineRunConfig, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
+import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { rebindDraftChannel, sameRuntimeChannel, type DraftChannelReplacement } from '@/engines/draftChannel'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
@@ -86,6 +86,8 @@ const models = ref<ModelDescriptor[]>([])
 const actions = ref<SessionActions | null>(null)
 const selectedModel = ref<string | null>(null)
 const selectedEffort = ref<string | null>(null)
+const selectedServiceTier = ref<string | null>(null)
+const fastModeNotice = ref<string | null>(null)
 const modelOverridden = ref(false)
 const effortOverridden = ref(false)
 const selectedChannel = ref<string | null>(null)
@@ -256,6 +258,8 @@ const capsuleModels = computed(() => {
     hidden: model.hidden,
     defaultEffort: model.defaultEffort,
     efforts: model.efforts,
+    defaultServiceTier: model.defaultServiceTier,
+    serviceTiers: model.serviceTiers,
   }))
   const configured = activeChannelBinding.value
   const extras = [configured?.defaultModel, ...(configured?.availableModels ?? [])]
@@ -267,17 +271,33 @@ const capsuleModels = computed(() => {
       hidden: false,
       defaultEffort: configured?.defaultEffort ?? null,
       efforts: ['low', 'medium', 'high', 'xhigh'].map(id => ({ id, description: null })),
+      defaultServiceTier: null,
+      serviceTiers: [],
     }))
   return [...descriptors, ...extras]
+})
+const selectedCapsuleModel = computed(() => capsuleModels.value.find(model => model.id === selectedModel.value))
+const selectedFastTier = computed(() => {
+  if (effectiveChannel.value) return null
+  return resolveFastServiceTier(selectedCapsuleModel.value)
+})
+const fastModeUnavailableReason = computed(() => {
+  if (effectiveChannel.value) return t('topbar.fastModeUnavailableChannel')
+  if (!selectedFastTier.value) return t('topbar.fastModeUnavailableModel')
+  return null
 })
 const capsuleConfig = computed<EngineCapsuleConfig>(() => ({
   engineId: sessionEngineId.value,
   engineName: enginePresentation.value.displayName,
+  showFastMode: sessionEngineId.value === 'codex',
   channelId: selectedChannel.value,
   model: selectedModel.value,
   effort: selectedEffort.value,
   modelOverridden: modelOverridden.value,
   effortOverridden: effortOverridden.value,
+  serviceTier: selectedServiceTier.value,
+  fastTier: selectedFastTier.value,
+  fastModeUnavailableReason: fastModeUnavailableReason.value,
   defaultModel: activeChannelBinding.value?.defaultModel ?? null,
   defaultEffort: activeChannelBinding.value?.defaultEffort ?? null,
   models: capsuleModels.value,
@@ -931,6 +951,15 @@ async function loadRuntimeConfiguration() {
         ?? defaultModel?.defaultEffort
         ?? null
     effortOverridden.value = !!stored?.effortOverridden && storedEffortSupported
+    const availableServiceTiers = new Set(defaultModel?.serviceTiers.map(tier => tier.id) ?? [])
+    const requestedServiceTier = stored
+      ? stored.serviceTier
+      : defaultModel?.defaultServiceTier ?? null
+    selectedServiceTier.value = !effectiveChannel.value
+      && requestedServiceTier
+      && availableServiceTiers.has(requestedServiceTier)
+      ? requestedServiceTier
+      : null
   } catch (_) {
     if (isCurrentTarget(target, generation)) models.value = []
   }
@@ -946,6 +975,7 @@ async function rebindCurrentDraftChannel(): Promise<boolean> {
   const config = {
     model: selectedModel.value,
     effort: selectedEffort.value,
+    serviceTier: selectedServiceTier.value,
     channelId: selectedChannel.value,
     modelOverridden: modelOverridden.value,
     effortOverridden: effortOverridden.value,
@@ -1084,10 +1114,7 @@ async function forkAndSend(inputItems: RuntimeInputItem[]): Promise<boolean> {
       cwd,
       attachedChannel: selectedChannel.value,
     })
-    await startTurnWithInput(created.session, inputItems, {
-      ...(selectedModel.value ? { model: selectedModel.value } : {}),
-      ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
-    })
+    await startTurnWithFastFallback(created.session, inputItems)
     input.value = ''
     return true
   } catch (cause) {
@@ -1139,6 +1166,27 @@ async function serializeRuntimeInput(text: string, images: readonly PendingImage
   ]
 }
 
+function selectedTurnOptions(serviceTier: string | null = selectedServiceTier.value) {
+  return {
+    ...(selectedModel.value ? { model: selectedModel.value } : {}),
+    ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
+    serviceTier,
+  }
+}
+
+async function startTurnWithFastFallback(session: SessionRef, inputItems: RuntimeInputItem[]) {
+  const requestedServiceTier = selectedServiceTier.value
+  try {
+    return await startTurnWithInput(session, inputItems, selectedTurnOptions(requestedServiceTier))
+  } catch (cause) {
+    if (!requestedServiceTier || !isFastServiceTierUnavailableError(cause)) throw cause
+    // turn/start 被服务端拒绝时尚未创建 turn，可安全按标准档重放一次。
+    selectedServiceTier.value = null
+    fastModeNotice.value = t('topbar.fastModeFallback')
+    return await startTurnWithInput(session, inputItems, selectedTurnOptions(null))
+  }
+}
+
 async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolean): Promise<boolean> {
   if (!reference.value || sending.value) return false
   sending.value = true
@@ -1160,10 +1208,7 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
     },
   })
   try {
-    const turn = await startTurnWithInput(reference.value, item.input, {
-      ...(selectedModel.value ? { model: selectedModel.value } : {}),
-      ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
-    })
+    const turn = await startTurnWithFastFallback(reference.value, item.input)
     liveRecords.value = bindOptimisticUserTurn(
       liveRecords.value,
       optimisticId,
@@ -1260,6 +1305,7 @@ async function interrupt() {
 }
 
 function onEngineChannelChange(channelId: string | null) {
+  fastModeNotice.value = null
   selectedChannel.value = channelId === OFFICIAL_CHANNEL_ID ? null : channelId
   const channel = selectedChannel.value
     ? channels.value.find(item => item.id === selectedChannel.value) ?? null
@@ -1276,6 +1322,7 @@ function onEngineChannelChange(channelId: string | null) {
 }
 
 function onEngineModelChange(model: string | null) {
+  fastModeNotice.value = null
   if (model) {
     selectedModel.value = model
     modelOverridden.value = true
@@ -1294,6 +1341,11 @@ function onEngineEffortChange(effort: string | null) {
     ?? activeChannelBinding.value?.defaultEffort
     ?? models.value.find(item => item.model === selectedModel.value)?.defaultEffort
     ?? null
+}
+
+function onEngineFastModeChange(enabled: boolean) {
+  fastModeNotice.value = null
+  selectedServiceTier.value = enabled ? selectedFastTier.value?.id ?? null : null
 }
 
 async function decide(request: RuntimeSnapshot['pendingInteractions'][number], decision: string) {
@@ -1422,6 +1474,7 @@ watch(() => props.session.id, async () => {
   runConfigSyncing.value = true
   try {
     resetSessionBanner()
+    fastModeNotice.value = null
     records.value = []
     liveRecords.value = []
     queuedInputs.value = []
@@ -1435,6 +1488,7 @@ watch(() => props.session.id, async () => {
       models.value = []
       selectedModel.value = null
       selectedEffort.value = null
+      selectedServiceTier.value = null
       modelOverridden.value = false
       effortOverridden.value = false
       selectedChannel.value = null
@@ -1453,6 +1507,7 @@ watch(() => props.session.id, async () => {
     setEngineRunConfig(sessionId, {
       model: selectedModel.value,
       effort: selectedEffort.value,
+      serviceTier: selectedServiceTier.value,
       channelId: selectedChannel.value,
       modelOverridden: modelOverridden.value,
       effortOverridden: effortOverridden.value,
@@ -1481,16 +1536,25 @@ watch(timelineContentElement, element => {
 
 watch(selectedModel, (model) => {
   const descriptor = models.value.find(item => item.model === model)
-  if (descriptor?.efforts.some(item => item.id === selectedEffort.value)) return
-  selectedEffort.value = descriptor?.defaultEffort ?? null
-  effortOverridden.value = false
+  if (!descriptor?.efforts.some(item => item.id === selectedEffort.value)) {
+    selectedEffort.value = descriptor?.defaultEffort ?? null
+    effortOverridden.value = false
+  }
+  if (!descriptor?.serviceTiers.some(tier => tier.id === selectedServiceTier.value)) {
+    selectedServiceTier.value = null
+  }
 })
 
-watch([selectedModel, selectedEffort, selectedChannel, modelOverridden, effortOverridden], ([model, effort, channelId, modelIsOverridden, effortIsOverridden]) => {
+watch(effectiveChannel, channel => {
+  if (channel) selectedServiceTier.value = null
+})
+
+watch([selectedModel, selectedEffort, selectedServiceTier, selectedChannel, modelOverridden, effortOverridden], ([model, effort, serviceTier, channelId, modelIsOverridden, effortIsOverridden]) => {
   if (runConfigSyncing.value) return
   setEngineRunConfig(props.session.id, {
     model,
     effort,
+    serviceTier,
     channelId,
     modelOverridden: modelIsOverridden,
     effortOverridden: effortIsOverridden,
@@ -1564,9 +1628,11 @@ onUnmounted(() => {
           <RunConfigCapsule
             v-if="interactive"
             :engine-config="capsuleConfig"
+            :fast-mode-notice="fastModeNotice"
             :narrow="containerWidth < 280"
             @model-change="onEngineModelChange"
             @effort-change="onEngineEffortChange"
+            @fast-mode-change="onEngineFastModeChange"
             @channel-change="onEngineChannelChange"
           />
           <span v-if="snapshot" class="shrink-0 text-[10px] text-muted-foreground">{{ t(`engine.phase.${snapshot.phase}`) }}</span>

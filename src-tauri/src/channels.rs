@@ -3,7 +3,7 @@
 //! - `settings.json`        应用设置:默认会话/Agent 渠道 + 渠道展示元数据
 //! - `channels/<id>.json`   纯净 Claude Code settings 格式(顶层 env 块等),
 //!   终端可直接 `claude --settings <路径>` 复用同一渠道
-//! - `runtime/<sid>-<ns>.json` per-spawn 合成产物(渠道内容 + 防御空值 + ultracode),
+//! - `runtime/<sid>-<ns>.json` per-spawn 合成产物(渠道内容 + 防御空值 + 会话覆盖),
 //!   进程结束即删,应用启动兜底清空
 //!
 //! 红线:authToken 等敏感值不回传前端(list 仅给掩码)、不进 argv(经 --settings 文件
@@ -1638,13 +1638,20 @@ pub struct ChannelInjection {
 const ADVISOR_MODEL: &str = "claude-fable-5";
 const ADVISOR_ENABLE_ENV: &str = "CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL";
 
+fn apply_fast_mode_override(obj: &mut Map<String, Value>, fast_mode: Option<bool>) {
+    if let Some(enabled) = fast_mode {
+        obj.insert("fastMode".to_string(), json!(enabled));
+    }
+}
+
 pub fn prepare_injection(
     channel_id: Option<&str>,
     session_id: &str,
     ultracode: bool,
     advisor: bool,
+    fast_mode: Option<bool>,
 ) -> Result<Option<ChannelInjection>, String> {
-    if channel_id.is_none() && !ultracode && !advisor {
+    if channel_id.is_none() && !ultracode && !advisor && fast_mode.is_none() {
         return Ok(None);
     }
 
@@ -1703,6 +1710,7 @@ pub fn prepare_injection(
         // 渠道文件自带的 ultracode=true 不放行(否则超档压过会话选择)
         obj.remove("ultracode");
     }
+    apply_fast_mode_override(obj, fast_mode);
     obj.remove("_ccSpace");
 
     fs::create_dir_all(runtime_dir()).map_err(|e| e.to_string())?;
@@ -2102,6 +2110,19 @@ mod tests {
         let extension = ChannelExt::default();
         assert!(extension.supports_engine("claude-code"));
         assert!(!extension.supports_engine("codex"));
+    }
+
+    #[test]
+    fn session_fast_mode_override_accepts_both_boolean_states() {
+        let mut enabled = Map::new();
+        enabled.insert("fastMode".into(), json!(true));
+        apply_fast_mode_override(&mut enabled, Some(false));
+        assert_eq!(enabled.get("fastMode"), Some(&json!(false)));
+
+        let mut inherited = Map::new();
+        inherited.insert("fastMode".into(), json!(true));
+        apply_fast_mode_override(&mut inherited, None);
+        assert_eq!(inherited.get("fastMode"), Some(&json!(true)));
     }
 
     #[test]

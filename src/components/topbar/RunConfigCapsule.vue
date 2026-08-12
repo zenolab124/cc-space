@@ -28,11 +28,13 @@ import type { EngineCapsuleConfig } from '@/engines/runConfig'
  */
 const props = defineProps<{
   /** 会话覆盖原值(重置钮显隐/顾问开关状态判定) */
-  settings?: Pick<SessionSettings, 'modelId' | 'effort' | 'channelId' | 'chrome' | 'extraArgs'>
+  settings?: Pick<SessionSettings, 'modelId' | 'effort' | 'fastMode' | 'channelId' | 'chrome' | 'extraArgs'>
   runConfig?: ResolvedRunConfig
   cwd?: string | null
   /** 标准引擎会话使用同一胶囊，仅由引擎 adapter 提供候选和值。 */
   engineConfig?: EngineCapsuleConfig
+  /** 快速模式被供应商自动降级后的非阻断提示。 */
+  fastModeNotice?: string | null
   /** 设置页的默认智能增强配置；仍复用会话三段式交互，但不显示高级参数。 */
   defaultConfig?: {
     channelId: string | null
@@ -46,6 +48,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'modelChange', modelId: string | null): void
   (e: 'effortChange', effort: EffortSetting): void
+  (e: 'fastModeChange', fastMode: boolean): void
   (e: 'channelChange', channelId: string | null): void
   (e: 'chromeChange', chrome: boolean): void
   (e: 'extraArgsChange', extraArgs: string): void
@@ -298,6 +301,24 @@ function pickEffort(value: NonNullable<EffortSetting>) {
   emit('effortChange', value)
 }
 
+function onFastModeChange(event: Event) {
+  emit('fastModeChange', (event.target as HTMLInputElement).checked)
+}
+
+const showFastMode = computed(() => !standaloneMode.value && (
+  !engineMode.value || props.engineConfig?.showFastMode === true
+))
+const fastModeChecked = computed(() => props.engineConfig
+  ? !!props.engineConfig.fastTier
+    && props.engineConfig.serviceTier === props.engineConfig.fastTier.id
+  : props.runConfig?.display.fastMode ?? false)
+const fastModeDisabled = computed(() => !!props.engineConfig && !props.engineConfig.fastTier)
+const fastModeTitle = computed(() => props.engineConfig
+  ? props.engineConfig.fastModeUnavailableReason
+    ?? props.engineConfig.fastTier?.description
+    ?? t('topbar.fastModeTip')
+  : t('topbar.fastModeTip'))
+
 // ---- 胶囊段显示 ----
 
 const channelSegLabel = computed(() => {
@@ -501,6 +522,23 @@ function openSettings() {
 
       <!-- 强度列 -->
       <div v-if="visibleCols.includes('effort')" class="rc-col">
+        <div v-if="showFastMode" class="rc-fast-block">
+          <label
+            class="rc-fast-option"
+            :class="{ 'is-disabled': fastModeDisabled }"
+            :title="fastModeTitle"
+          >
+            <input
+              type="checkbox"
+              :checked="fastModeChecked"
+              :disabled="fastModeDisabled"
+              :aria-label="$t('topbar.fastMode')"
+              @change="onFastModeChange"
+            />
+            <span>{{ $t('topbar.fastMode') }}</span>
+          </label>
+          <p v-if="fastModeNotice" class="rc-fast-notice" role="status">{{ fastModeNotice }}</p>
+        </div>
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.effortLabel') }}</span>
           <span class="rc-src">{{ engineConfig ? engineEffortSrcLabel : standaloneMode ? $t('topbar.srcApp') : srcLabel(runConfig?.display.effortSource) }}</span>
@@ -585,6 +623,24 @@ function openSettings() {
 
 .rc-col { width: 152px; padding: 8px 8px 6px; display: flex; flex-direction: column; }
 .rc-col + .rc-col { border-left: 1px solid var(--border); }
+.rc-fast-block {
+  margin: -2px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--border);
+}
+.rc-fast-option {
+  display: flex; align-items: center; gap: 7px; min-height: 28px;
+  padding: 3px 8px;
+  color: var(--muted-foreground); font-size: 12px; cursor: pointer;
+}
+.rc-fast-option:hover { color: var(--foreground); }
+.rc-fast-option:focus-within { color: var(--foreground); }
+.rc-fast-option input { accent-color: var(--primary); cursor: pointer; }
+.rc-fast-option input:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.rc-fast-option.is-disabled { opacity: .5; cursor: not-allowed; }
+.rc-fast-option.is-disabled:hover { color: var(--muted-foreground); }
+.rc-fast-option input:disabled { cursor: not-allowed; }
+.rc-fast-notice {
+  margin: 1px 8px 0; color: var(--muted-foreground); font-size: 9px; line-height: 1.35;
+}
 .rc-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; padding: 0 2px; }
 .rc-label { font-size: 11px; color: var(--muted-foreground); font-weight: 500; }
 .rc-src { font-size: 9px; color: var(--muted-foreground); opacity: .7; margin-left: auto; }

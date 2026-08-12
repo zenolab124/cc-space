@@ -487,6 +487,7 @@ pub async fn start_streaming(
     message: String,
     model: Option<String>,
     effort: Option<String>,
+    fast_mode: Option<bool>,
     channel: Option<String>,
     advisor: bool,
     chrome: Option<bool>,
@@ -498,13 +499,16 @@ pub async fn start_streaming(
     force_new: Option<bool>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        streaming::send_message(
+        let session_capabilities = session_capabilities.unwrap_or_default();
+        let force_new = force_new.unwrap_or(false);
+        let first = streaming::send_message(
             &app,
             &session_id,
             &cwd,
             &message,
             model.as_deref(),
             effort.as_deref(),
+            fast_mode,
             channel.as_deref(),
             advisor,
             chrome.unwrap_or(false),
@@ -512,9 +516,40 @@ pub async fn start_streaming(
             extra_args.as_deref(),
             images.as_deref(),
             permission_mode.as_deref(),
-            session_capabilities.unwrap_or_default(),
-            force_new.unwrap_or(false),
-        )
+            session_capabilities.clone(),
+            force_new,
+        );
+        match first {
+            Err(error_message)
+                if fast_mode == Some(true)
+                    && streaming::fast_mode_unavailable_error(&error_message) =>
+            {
+                use tauri::Emitter;
+                let _ = app.emit(
+                    "fast-mode-status",
+                    serde_json::json!({ "session_id": session_id, "active": false }),
+                );
+                streaming::send_message(
+                    &app,
+                    &session_id,
+                    &cwd,
+                    &message,
+                    model.as_deref(),
+                    effort.as_deref(),
+                    Some(false),
+                    channel.as_deref(),
+                    advisor,
+                    chrome.unwrap_or(false),
+                    fork_source.as_deref(),
+                    extra_args.as_deref(),
+                    images.as_deref(),
+                    permission_mode.as_deref(),
+                    session_capabilities,
+                    force_new,
+                )
+            }
+            result => result,
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -547,6 +582,7 @@ pub async fn toggle_remote_control(
     cwd: String,
     model: Option<String>,
     effort: Option<String>,
+    fast_mode: Option<bool>,
     channel: Option<String>,
     advisor: bool,
     chrome: Option<bool>,
@@ -563,6 +599,7 @@ pub async fn toggle_remote_control(
             &cwd,
             model.as_deref(),
             effort.as_deref(),
+            fast_mode,
             channel.as_deref(),
             advisor,
             chrome.unwrap_or(false),

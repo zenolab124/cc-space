@@ -16,6 +16,7 @@ const draft: RuntimeEngineDraft = {
 const config: EngineRunConfig = {
   model: 'gpt-test',
   effort: 'high',
+  serviceTier: null,
   channelId: 'channel-b',
   modelOverridden: true,
   effortOverridden: true,

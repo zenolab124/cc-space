@@ -7,6 +7,20 @@ function source(path: string): string {
 }
 
 describe('unified session surface architecture', () => {
+  it('places the shared fast-mode checkbox above effort for Claude and supported Codex models', () => {
+    const capsule = source('../../src/components/topbar/RunConfigCapsule.vue')
+    const standardController = source('../../src/components/engine/EngineSessionDetail.vue')
+    const fastModePosition = capsule.indexOf("$t('topbar.fastMode')")
+    const effortPosition = capsule.indexOf("$t('topbar.effortLabel')")
+
+    expect(fastModePosition).toBeGreaterThan(-1)
+    expect(fastModePosition).toBeLessThan(effortPosition)
+    expect(capsule).toContain('v-if="showFastMode"')
+    expect(capsule).toContain('props.engineConfig?.showFastMode === true')
+    expect(standardController).toContain("showFastMode: sessionEngineId.value === 'codex'")
+    expect(capsule).toContain('type="checkbox"')
+  })
+
   it('keeps page-level entry points independent of engine controllers', () => {
     const workbench = source('../../src/components/workbench/WorkbenchColumn.vue')
     const archive = source('../../src/views/SessionsView.vue')
@@ -129,7 +143,8 @@ describe('unified session surface architecture', () => {
     expect(engineClient).toContain('sendInputWhileRunning')
     expect(standardController).toContain('queuedInputs.value.push(queuedItem)')
     expect(standardController).toContain('if (event.payload.phase === \'idle\') void consumeQueuedInput()')
-    expect(standardController).toContain('startTurnWithInput(reference.value, item.input')
+    expect(standardController).toContain('startTurnWithFastFallback(reference.value, item.input)')
+    expect(standardController).toContain('startTurnWithInput(session, inputItems, selectedTurnOptions(requestedServiceTier))')
     expect(standardController).not.toContain('sendInputWhileRunning(')
     expect(standardController).toContain("if (isBusy.value) return runtimeId.value !== null ? 'attached' : 'failed'")
     expect(standardController).toContain('void send()')

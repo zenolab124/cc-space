@@ -223,4 +223,6 @@ export interface ModelDescriptor {
   hidden: boolean
   defaultEffort: string | null
   efforts: Array<{ id: string; description: string | null }>
+  defaultServiceTier: string | null
+  serviceTiers: Array<{ id: string; name: string; description: string | null }>
 }

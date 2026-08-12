@@ -113,6 +113,7 @@ fn spawn_agent_with(model: &str, effort: &str, official_direct: bool) -> Result<
             &injection_id,
             true,
             false,
+            None,
         )?;
         if let Some(injection) = injection {
             args.extend(["--settings".to_string(), injection.settings_arg]);

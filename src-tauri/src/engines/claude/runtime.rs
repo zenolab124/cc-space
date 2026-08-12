@@ -482,6 +482,7 @@ impl AgentRuntime for ClaudeRuntime {
                     &message,
                     option_string(&options, "model").as_deref(),
                     option_string(&options, "effort").as_deref(),
+                    options.get("fastMode").and_then(Value::as_bool),
                     option_string(&options, "channel").as_deref(),
                     option_bool(&options, "advisor"),
                     option_bool(&options, "chrome"),

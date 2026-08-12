@@ -109,6 +109,23 @@ impl CodexRuntime {
                             })
                         })
                         .collect(),
+                    default_service_tier: model
+                        .get("defaultServiceTier")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                    service_tiers: model
+                        .get("serviceTiers")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|tier| {
+                            Some(ModelServiceTier {
+                                id: string_field(tier, "id")?,
+                                name: string_field(tier, "name")?,
+                                description: string_field(tier, "description"),
+                            })
+                        })
+                        .collect(),
                 });
             }
             cursor = response
@@ -630,7 +647,14 @@ impl AgentRuntime for CodexRuntime {
             copy_options(
                 &request.options,
                 &mut params,
-                &["model", "effort", "summary", "approvalPolicy", "cwd"],
+                &[
+                    "model",
+                    "effort",
+                    "summary",
+                    "approvalPolicy",
+                    "cwd",
+                    "serviceTier",
+                ],
             );
             let response = self
                 .supervisor

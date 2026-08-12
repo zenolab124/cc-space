@@ -5,6 +5,8 @@ export interface CliSettings {
   model: string | null
   effort_level: string | null
   ultracode: boolean
+  fast_mode: boolean
+  fast_mode_per_session_opt_in: boolean
   permission_mode: string | null
 }
 
@@ -12,6 +14,8 @@ const EMPTY_CLI_SETTINGS: CliSettings = {
   model: null,
   effort_level: null,
   ultracode: false,
+  fast_mode: false,
+  fast_mode_per_session_opt_in: false,
   permission_mode: null,
 }
 

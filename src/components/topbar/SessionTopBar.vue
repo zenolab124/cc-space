@@ -45,6 +45,10 @@ const props = defineProps<{
   selectedModelId: string | null
   /** 用户已选择的努力等级(null = 跟随 CLI,'ultracode' = 超档) */
   selectedEffort: EffortSetting
+  /** null = 跟随 CLI/项目配置；boolean = 本会话显式覆盖 */
+  selectedFastMode: boolean | null
+  /** 快速模式不可用并自动恢复标准速度后的提示。 */
+  fastModeNotice?: string | null
   /** 渠道选择(null = 跟随应用默认;'official' = 强制官方;其他 = 渠道 id) */
   selectedChannelId: string | null
   /** 解析后的最终注入渠道 id(null = 官方):终端恢复带渠道用 */
@@ -68,6 +72,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'modelChange', modelId: string | null): void
   (e: 'effortChange', effort: EffortSetting): void
+  (e: 'fastModeChange', fastMode: boolean): void
   (e: 'channelChange', channelId: string | null): void
   (e: 'chromeChange', chrome: boolean): void
   (e: 'extraArgsChange', extraArgs: string): void
@@ -91,6 +96,7 @@ const effectiveModelStr = computed(() =>
 const capsuleSettings = computed(() => ({
   modelId: props.selectedModelId,
   effort: props.selectedEffort,
+  fastMode: props.selectedFastMode,
   channelId: props.selectedChannelId,
   chrome: props.selectedChrome,
   extraArgs: props.selectedExtraArgs,
@@ -231,9 +237,11 @@ function onPermissionModeChange(mode: PermissionMode | null) {
         :settings="capsuleSettings"
         :run-config="runConfig"
         :cwd="cwd"
+        :fast-mode-notice="fastModeNotice"
         :narrow="containerWidth < 280"
         @model-change="onModelChange"
         @effort-change="onEffortChange"
+        @fast-mode-change="(v: boolean) => emit('fastModeChange', v)"
         @channel-change="onChannelChange"
         @chrome-change="(v: boolean) => emit('chromeChange', v)"
         @extra-args-change="(v: string) => emit('extraArgsChange', v)"

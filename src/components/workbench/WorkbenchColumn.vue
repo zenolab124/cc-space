@@ -136,6 +136,7 @@ async function onToggleRC() {
       cwd,
       model: rc.launch.model ?? null,
       effort: rc.launch.effort ?? null,
+      fastMode: rc.launch.fastMode ?? null,
       channel: rc.channelId,
       advisor: settings.value.advisor,
       chrome: settings.value.chrome,

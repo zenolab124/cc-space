@@ -22,6 +22,7 @@ describe('session permission inheritance migration', () => {
   it('新会话默认不生成权限覆盖', () => {
     expect(DEFAULT_SETTINGS.permissionMode).toBeNull()
     expect(getSessionSettings('test-session').permissionMode).toBeNull()
+    expect(getSessionSettings('test-session').fastMode).toBeNull()
   })
 
   it('旧记录中的具体权限值按显式覆盖保留', () => {
@@ -35,5 +36,13 @@ describe('session permission inheritance migration', () => {
 
     localStorage.setItem(KEY, JSON.stringify({ permissionMode: 'future-mode' }))
     expect(getSessionSettings('test-session').permissionMode).toBeNull()
+  })
+
+  it('快速模式只接受显式布尔值，旧记录保持跟随 CLI', () => {
+    localStorage.setItem(KEY, JSON.stringify({ fastMode: true }))
+    expect(getSessionSettings('test-session').fastMode).toBe(true)
+
+    localStorage.setItem(KEY, JSON.stringify({ fastMode: 'on' }))
+    expect(getSessionSettings('test-session').fastMode).toBeNull()
   })
 })

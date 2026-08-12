@@ -57,7 +57,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Automatic session identity: continue → resume; branch from a point in history → native fork; fresh → new. Three intents, zero ceremony
 - Fork sessions: grow a new branch from any historical session through each engine's native mechanism (Claude CLI / Codex App Server); Monet never copies or rewrites JSONL / rollouts
 - **Hot-switch channel / model / thinking effort mid-session**: change any of them while the session runs (five effort levels + an ultracode tier), effective immediately — no process restart, no lost context; use a strong model for the hard turn, then drop to a cheap one for chores
-- Run-config capsule: a three-segment pill showing current channel/model/effort; click any segment to change it; session-level overrides get a one-click "reset to inherited"; unsupported options stay visible with an explanation instead of disappearing
+- Run-config capsule: a three-segment pill showing current channel/model/effort; click any segment to change it; both Claude Code and Codex expose Fast mode as a separate checkbox above effort (Codex switches on the next turn), with automatic fallback to standard speed when unavailable; session-level overrides get a one-click "reset to inherited"; unsupported options stay visible with an explanation instead of disappearing
 - Permission mode switchable at runtime: six modes (approve / auto-edit / plan / auto / bypass / don't ask), each with a one-line description
 - Chrome integration toggle: enable Claude in Chrome on demand (browser control, shared login state); off by default to save context
 - Remote Control toggle: start/stop the CLI's remote control dynamically

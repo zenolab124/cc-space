@@ -23,8 +23,8 @@ describe('useCliDefaults cwd isolation', () => {
 
   it('不同 cwd 使用独立摘要', async () => {
     invoke
-      .mockResolvedValueOnce({ model: 'project-a', effort_level: null, ultracode: false, permission_mode: null })
-      .mockResolvedValueOnce({ model: 'project-b', effort_level: 'max', ultracode: true, permission_mode: 'plan' })
+      .mockResolvedValueOnce({ model: 'project-a', effort_level: null, ultracode: false, fast_mode: false, fast_mode_per_session_opt_in: false, permission_mode: null })
+      .mockResolvedValueOnce({ model: 'project-b', effort_level: 'max', ultracode: true, fast_mode: true, fast_mode_per_session_opt_in: false, permission_mode: 'plan' })
 
     await refreshCliDefaults('/repo/a')
     await refreshCliDefaults('/repo/b')
@@ -38,6 +38,8 @@ describe('useCliDefaults cwd isolation', () => {
       model: 'persisted',
       effort_level: null,
       ultracode: false,
+      fast_mode: false,
+      fast_mode_per_session_opt_in: false,
       permission_mode: null,
     })
     await refreshCliDefaults('/repo/persisted')
@@ -48,6 +50,8 @@ describe('useCliDefaults cwd isolation', () => {
       model: null,
       effort_level: null,
       ultracode: false,
+      fast_mode: false,
+      fast_mode_per_session_opt_in: false,
       permission_mode: null,
     })
   })

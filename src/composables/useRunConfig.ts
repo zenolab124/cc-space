@@ -20,18 +20,22 @@ export interface ResolvedRunConfig {
     modelSource: ValueSource
     effort: NonNullable<EffortSetting> | undefined
     effortSource: ValueSource
+    fastMode: boolean
+    fastModeSource: 'session' | 'cli'
     permissionMode: PermissionMode
     permissionModeSource: 'session' | 'cli'
   }
   launch: {
     model: string | undefined
     effort: NonNullable<EffortSetting> | undefined
+    fastMode: boolean | undefined
     permissionMode: PermissionMode | null
   }
   channelDefaultModel: string | null
   channelDefaultEffort: NonNullable<EffortSetting> | null
   cliDefaultModel: string | null
   cliDefaultEffort: NonNullable<EffortSetting> | null
+  cliDefaultFastMode: boolean
 }
 
 export interface RunConfigSnapshot {
@@ -91,6 +95,9 @@ export function resolveRunConfig(
   const cliDefaultEffort = snapshot.cliSettings.ultracode
     ? 'ultracode'
     : sanitizeEffort(snapshot.cliSettings.effort_level)
+  // 管理策略要求逐会话显式选择时，新进程不能沿用已保存的全局 fastMode 偏好。
+  const cliDefaultFastMode = snapshot.cliSettings.fast_mode
+    && !snapshot.cliSettings.fast_mode_per_session_opt_in
 
   let displayModel: string | undefined
   let launchModel: string | undefined
@@ -132,6 +139,7 @@ export function resolveRunConfig(
 
   const inheritedPermissionMode = sanitizePermissionMode(snapshot.cliSettings.permission_mode)
   const permissionMode = settings.permissionMode ?? inheritedPermissionMode
+  const fastMode = settings.fastMode ?? cliDefaultFastMode
 
   return {
     channelId,
@@ -140,18 +148,22 @@ export function resolveRunConfig(
       modelSource,
       effort: displayEffort,
       effortSource,
+      fastMode,
+      fastModeSource: settings.fastMode === null ? 'cli' : 'session',
       permissionMode,
       permissionModeSource: settings.permissionMode ? 'session' : 'cli',
     },
     launch: {
       model: launchModel,
       effort: launchEffort,
+      fastMode: settings.fastMode ?? undefined,
       permissionMode: settings.permissionMode,
     },
     channelDefaultModel,
     channelDefaultEffort,
     cliDefaultModel,
     cliDefaultEffort,
+    cliDefaultFastMode,
   }
 }
 
