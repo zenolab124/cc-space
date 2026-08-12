@@ -252,6 +252,55 @@ describe('live history reconciliation', () => {
     ])
   })
 
+  it('atomically hands every live record to a completed persisted turn', () => {
+    const persisted = [
+      record({
+        id: 'item-1',
+        role: 'user',
+        turnId: 'turn-2',
+        segments: [{ kind: 'text', text: 'question' }],
+      }),
+      record({
+        id: 'item-3',
+        turnId: 'turn-2',
+        segments: [{ kind: 'text', text: 'complete final answer', phase: 'final' }],
+      }),
+    ]
+    const live = [
+      record({
+        id: 'pending-user-2',
+        role: 'user',
+        turnId: 'turn-2',
+        segments: [{ kind: 'text', text: 'question' }],
+        sourceMeta: optimisticUserSourceMeta(),
+      }),
+      record({
+        id: 'runtime-command',
+        role: 'tool',
+        turnId: 'turn-2',
+        segments: [{
+          kind: 'commandExecution',
+          id: 'runtime-command',
+          command: 'check',
+          cwd: null,
+          output: null,
+          status: 'completed',
+        }],
+      }),
+      record({
+        id: 'runtime-final',
+        turnId: 'turn-2',
+        segments: [{ kind: 'text', text: 'complete final' }],
+      }),
+    ]
+
+    expect(reconcileLiveRecords(persisted, live)).toEqual([])
+    expect(composeRuntimeTimeline(persisted, live).map(item => item.id)).toEqual([
+      'item-1',
+      'item-3',
+    ])
+  })
+
   it('keeps a new live turn in prompt-then-response order', () => {
     const pendingUser = record({
       id: 'pending-user-2',

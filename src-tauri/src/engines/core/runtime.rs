@@ -115,7 +115,11 @@ pub enum TurnStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum NormalizedRuntimeEvent {
     SessionAttached,
     SessionDetached,
@@ -208,4 +212,34 @@ pub trait AgentRuntime: Send + Sync {
     fn close_session(&self, session: SessionRef) -> EngineFuture<'_, ()>;
 
     fn subscribe_events(&self, sink: RuntimeEventSink) -> EngineResult<SubscriptionHandle>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_event_fields_follow_the_frontend_camel_case_contract() {
+        let event = NormalizedRuntimeEvent::ItemDelta {
+            turn_id: "turn-1".into(),
+            item_id: "item-1".into(),
+            segment: Segment::Text {
+                text: "done".into(),
+                phase: None,
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "kind": "itemDelta",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "segment": {
+                    "kind": "text",
+                    "text": "done",
+                },
+            }),
+        );
+    }
 }

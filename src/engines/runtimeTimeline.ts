@@ -245,16 +245,6 @@ function textualFingerprint(record: ConversationRecord): string | null {
   return `${record.role}\u001e${values.join('\u001d')}`
 }
 
-function finalText(record: ConversationRecord): string | null {
-  if (record.role !== 'assistant' || record.segments.length === 0) return null
-  let text = ''
-  for (const segment of record.segments) {
-    if (segment.kind !== 'text' || segment.phase !== 'final') return null
-    text += segment.text
-  }
-  return text || null
-}
-
 function userInputFingerprint(record: ConversationRecord): string | null {
   if (record.role !== 'user') return null
   const optimisticImages = Array.isArray(record.sourceMeta.optimisticImages)
@@ -287,18 +277,6 @@ function landedRecordIndex(
     if (semantic >= 0) return semantic
   }
 
-  // App Server 的历史源可能先返回完整 final，而前端打字机仍在逐段消费同一条
-  // runtime delta。此时 live 只是 persisted 的前缀，也应立即交由历史记录接管。
-  const liveFinalText = finalText(live)
-  if (liveFinalText) {
-    const completed = persisted.findIndex(record => {
-      if (record.turnId !== live.turnId) return false
-      const persistedFinalText = finalText(record)
-      return persistedFinalText?.startsWith(liveFinalText) === true
-    })
-    if (completed >= 0) return completed
-  }
-
   if (live.sourceMeta[OPTIMISTIC_RECORD] !== true) return -1
   const userInput = userInputFingerprint(live)
   if (!userInput) return -1
@@ -313,8 +291,20 @@ export function reconcileLiveRecords(
   persisted: ConversationRecord[],
   live: ConversationRecord[],
 ): ConversationRecord[] {
+  // 历史源一旦给出 final，该 turn 已是完整权威快照。实时源可能仍在消化同一轮的
+  // 文本或工具事件；必须整轮原子退场，逐条匹配会短暂拼出错误顺序和重复答复。
+  const completedTurns = new Set(persisted.flatMap(record =>
+    record.turnId
+      && record.role === 'assistant'
+      && record.segments.some(segment =>
+        segment.kind === 'text' && segment.phase === 'final' && !!segment.text,
+      )
+      ? [record.turnId]
+      : [],
+  ))
   const unclaimedPersisted = [...persisted]
   return live.filter(record => {
+    if (record.turnId && completedTurns.has(record.turnId)) return false
     const index = landedRecordIndex(unclaimedPersisted, record)
     if (index < 0) return true
     unclaimedPersisted.splice(index, 1)
