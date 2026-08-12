@@ -2,7 +2,13 @@
 import { ref, computed } from 'vue'
 import { useSortable } from '@dnd-kit/vue/sortable'
 
-const props = defineProps<{ tabId: string; index: number; flex: number; resizing?: boolean }>()
+const props = defineProps<{
+  tabId: string
+  index: number
+  flex: number
+  fill?: boolean
+  resizing?: boolean
+}>()
 const el = ref<HTMLElement>()
 const handleEl = ref<HTMLElement>()
 
@@ -22,7 +28,9 @@ const setHandle = (node: any) => { handleEl.value = node }
     ref="el"
     class="sortable-col"
     :class="{ 'sortable-col-dragging': isDragging, 'no-transition': resizing }"
-    :style="{ width: `${flex}px`, flex: '0 0 auto' }"
+    :style="fill
+      ? { width: 'auto', flex: '1 1 0' }
+      : { width: `${flex}px`, flex: '0 0 auto' }"
   >
     <slot :is-dragging="isDragging" :handle-ref="setHandle" />
   </div>

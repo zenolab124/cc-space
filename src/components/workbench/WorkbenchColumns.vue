@@ -165,12 +165,14 @@ watch(focusColumnRequest, async (req) => {
         :tab-id="activeTab.id"
         :index="i"
         :flex="activeTab.columnSizes[i]"
+        :fill="activeTab.columns.length === 1"
         :resizing="dragging || suppressColumnTransition"
       >
         <template #default="{ isDragging: colDragging, handleRef }">
           <WorkbenchColumnView :column="col" :tab-id="activeTab.id" :index="i" :dragging="colDragging" :handle-ref="handleRef" @start-race="onStartRace(col.sessionId)" />
           <!-- 列右边缘 resize 手柄（绝对定位，不参与 flex 布局） -->
           <div
+            v-if="activeTab.columns.length > 1"
             class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20"
             :class="{ 'divider-shift': shiftDragging }"
             @pointerdown.stop
