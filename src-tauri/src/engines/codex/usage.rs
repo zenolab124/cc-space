@@ -127,6 +127,7 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
     let mut session_kind_resolved = false;
     let mut is_subagent_rollout = false;
     let mut reached_turn_context = false;
+    let mut previous_cumulative_usage = None;
     let mut contributions = Vec::new();
     for (sequence, line) in BufReader::with_capacity(64 * 1024, file)
         .lines()
@@ -152,7 +153,7 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
                     .map(String::from);
             }
             Some("event_msg") => {
-                let Some((timestamp, date, usage)) = usage_contribution(&value) else {
+                let Some(event) = usage_event(&value) else {
                     continue;
                 };
                 // legacy 子 Agent rollout 会在自身首个 turn_context 前复制父任务历史。
@@ -160,21 +161,33 @@ fn scan_file(path: &Path) -> Vec<EngineUsageContribution> {
                 if is_subagent_rollout && !reached_turn_context {
                     continue;
                 }
+                // Codex 会在同一次调用后重复发出 token_count：
+                // last_token_usage 不变，total_token_usage 也没有前进。
+                // 时间戳不同不代表新用量，必须按累计水位过滤。
+                if event.cumulative_usage.as_ref() == previous_cumulative_usage.as_ref()
+                    && event.cumulative_usage.is_some()
+                {
+                    continue;
+                }
+                if let Some(cumulative) = event.cumulative_usage.clone() {
+                    previous_cumulative_usage = Some(cumulative);
+                }
                 let id = format!(
                     "codex:{timestamp}:{}:{}:{}:{}:{}",
                     model.as_deref().unwrap_or("unknown"),
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cache_creation_input_tokens,
-                    usage.cache_read_input_tokens,
+                    event.usage.input_tokens,
+                    event.usage.output_tokens,
+                    event.usage.cache_creation_input_tokens,
+                    event.usage.cache_read_input_tokens,
+                    timestamp = event.timestamp,
                 );
                 contributions.push(EngineUsageContribution {
                     id,
                     engine_id: ENGINE_ID.to_string(),
-                    date,
-                    timestamp,
+                    date: event.date,
+                    timestamp: event.timestamp,
                     model: model.clone(),
-                    usage,
+                    usage: event.usage,
                     sequence: sequence as u64,
                 });
             }
@@ -199,7 +212,34 @@ fn is_subagent_session_meta(value: &Value) -> bool {
     source_marks_subagent || has_subagent_identity
 }
 
-fn usage_contribution(value: &Value) -> Option<(String, NaiveDate, TokenUsage)> {
+struct CodexUsageEvent {
+    timestamp: String,
+    date: NaiveDate,
+    usage: TokenUsage,
+    cumulative_usage: Option<TokenUsage>,
+}
+
+fn token_usage(value: &Value) -> Option<TokenUsage> {
+    let input_tokens = value.get("input_tokens")?.as_u64()?;
+    let cache_read_input_tokens = value
+        .get("cached_input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let cache_creation_input_tokens = value
+        .get("cache_write_input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    Some(TokenUsage {
+        input_tokens: input_tokens
+            .saturating_sub(cache_read_input_tokens)
+            .saturating_sub(cache_creation_input_tokens),
+        output_tokens: value.get("output_tokens")?.as_u64()?,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+    })
+}
+
+fn usage_event(value: &Value) -> Option<CodexUsageEvent> {
     let payload = value.get("payload")?;
     if payload.get("type").and_then(Value::as_str) != Some("token_count") {
         return None;
@@ -209,29 +249,13 @@ fn usage_contribution(value: &Value) -> Option<(String, NaiveDate, TokenUsage)> 
         .ok()?
         .with_timezone(&Local)
         .date_naive();
-    let usage = payload.get("info")?.get("last_token_usage")?;
-    let input_tokens = usage.get("input_tokens")?.as_u64()?;
-    let cache_read_input_tokens = usage
-        .get("cached_input_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let cache_creation_input_tokens = usage
-        .get("cache_write_input_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let uncached_input_tokens = input_tokens
-        .saturating_sub(cache_read_input_tokens)
-        .saturating_sub(cache_creation_input_tokens);
-    Some((
+    let info = payload.get("info")?;
+    Some(CodexUsageEvent {
         timestamp,
         date,
-        TokenUsage {
-            input_tokens: uncached_input_tokens,
-            output_tokens: usage.get("output_tokens")?.as_u64()?,
-            cache_creation_input_tokens,
-            cache_read_input_tokens,
-        },
-    ))
+        usage: token_usage(info.get("last_token_usage")?)?,
+        cumulative_usage: info.get("total_token_usage").and_then(token_usage),
+    })
 }
 
 #[cfg(test)]
@@ -271,7 +295,7 @@ mod tests {
 
     #[test]
     fn maps_codex_increment_without_double_counting_cache() {
-        let (timestamp, date, usage) = usage_contribution(&json!({
+        let event = usage_event(&json!({
             "type": "event_msg",
             "timestamp": "2026-08-09T16:20:41.993Z",
             "payload": {
@@ -289,17 +313,17 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(timestamp, "2026-08-09T16:20:41.993Z");
-        let expected_date = DateTime::parse_from_rfc3339(&timestamp)
+        assert_eq!(event.timestamp, "2026-08-09T16:20:41.993Z");
+        let expected_date = DateTime::parse_from_rfc3339(&event.timestamp)
             .unwrap()
             .with_timezone(&Local)
             .date_naive();
-        assert_eq!(date, expected_date);
-        assert_eq!(usage.input_tokens, 160);
-        assert_eq!(usage.cache_read_input_tokens, 900);
-        assert_eq!(usage.cache_creation_input_tokens, 20);
-        assert_eq!(usage.output_tokens, 70);
-        assert_eq!(usage.total(), 1150);
+        assert_eq!(event.date, expected_date);
+        assert_eq!(event.usage.input_tokens, 160);
+        assert_eq!(event.usage.cache_read_input_tokens, 900);
+        assert_eq!(event.usage.cache_creation_input_tokens, 20);
+        assert_eq!(event.usage.output_tokens, 70);
+        assert_eq!(event.usage.total(), 1150);
     }
 
     #[test]
@@ -315,7 +339,53 @@ mod tests {
                 }
             }
         });
-        assert_eq!(usage_contribution(&value).unwrap().2.total(), 120);
+        assert_eq!(usage_event(&value).unwrap().usage.total(), 120);
+    }
+
+    #[test]
+    fn skips_repeated_notification_at_same_cumulative_usage() {
+        let path = test_rollout_path("repeated-cumulative");
+        let mut file = File::create(&path).unwrap();
+        for (timestamp, cumulative) in [
+            ("2026-08-09T08:00:00Z", 120),
+            ("2026-08-09T08:00:01Z", 120),
+            ("2026-08-09T08:00:02Z", 240),
+        ] {
+            writeln!(
+                file,
+                "{}",
+                json!({
+                    "type": "event_msg",
+                    "timestamp": timestamp,
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": cumulative - 20,
+                                "output_tokens": 20
+                            },
+                            "last_token_usage": {
+                                "input_tokens": 100,
+                                "output_tokens": 20
+                            }
+                        }
+                    }
+                })
+            )
+            .unwrap();
+        }
+        drop(file);
+
+        let contributions = scan_file(&path);
+        assert_eq!(contributions.len(), 2);
+        assert_eq!(
+            contributions
+                .iter()
+                .map(|item| item.usage.total())
+                .sum::<u64>(),
+            240
+        );
+        std::fs::remove_file(path).ok();
     }
 
     #[test]

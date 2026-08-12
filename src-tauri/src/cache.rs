@@ -13,7 +13,8 @@ use crate::parser::{self, UsageLedger};
 // v3: SessionSummary 增加 subagent_tokens 分项且 total_tokens 口径改为含子 Agent，旧缓存整体重扫
 // v4: usage 按 message.id 选择最终完整快照，子 Agent 缓存保留账本以支持跨文件去重
 // v5: Codex 子 Agent 的继承历史前缀不再重复计入用量，旧缓存整体重扫
-const CACHE_VERSION: u32 = 5;
+// v6: Codex 同一累计水位的重复 token_count 通知不再重复计入
+const CACHE_VERSION: u32 = 6;
 
 // ── Disk format ──────────────────────────────────────────
 

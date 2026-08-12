@@ -3,7 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, Timelike};
+use chrono::{
+    DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, Timelike,
+};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,7 @@ struct WidgetSnapshot {
     // Monthly
     monthly_tokens: u64,
     last_month_tokens: u64,
+    month_mode: String,
     monthly_models: Vec<ModelStat>,
     // Cost
     estimated_cost_usd: f64,
@@ -109,8 +112,7 @@ fn with_snapshot_lock<T>(operation: impl FnOnce() -> Result<T, String>) -> Resul
         .truncate(false)
         .open(&lock_path)
         .map_err(|error| format!("open widget snapshot lock: {error}"))?;
-    FileExt::lock_exclusive(&lock)
-        .map_err(|error| format!("lock widget snapshot: {error}"))?;
+    FileExt::lock_exclusive(&lock).map_err(|error| format!("lock widget snapshot: {error}"))?;
     let result = operation();
     let _ = FileExt::unlock(&lock);
     result
@@ -123,40 +125,79 @@ fn read_config() -> WidgetConfig {
         .unwrap_or_default()
 }
 
-fn compute_day_boundary(day_start_hour: i8) -> (u64, String) {
-    let now = Local::now();
-
+fn compute_day_boundary(day_start_hour: i8, now: DateTime<Local>) -> i64 {
     if day_start_hour < 0 {
-        let start = now - Duration::hours(24);
-        let ts = start.timestamp() as u64;
-        let date_str = now.format("%Y-%m-%d").to_string();
-        return (ts, date_str);
+        return (now - Duration::hours(24)).timestamp();
     }
 
-    let hour = day_start_hour as u32;
+    let hour = u32::try_from(day_start_hour)
+        .ok()
+        .filter(|hour| *hour < 24)
+        .unwrap_or_default();
     let boundary_time = NaiveTime::from_hms_opt(hour, 0, 0).unwrap_or_default();
     let today = now.date_naive();
-    let boundary_today = today
-        .and_time(boundary_time)
-        .and_local_timezone(Local)
-        .unwrap();
-
-    let boundary = if now.naive_local().time() >= boundary_time {
-        boundary_today
+    let boundary_date = if now.naive_local().time() >= boundary_time {
+        today
     } else {
-        boundary_today - Duration::days(1)
+        today - Duration::days(1)
     };
+    let boundary = resolve_local_boundary(boundary_date.and_time(boundary_time))
+        .unwrap_or_else(|| now - Duration::hours(24));
 
-    let ts = boundary.timestamp() as u64;
-    let date_str = if now.hour() < hour {
-        (today - chrono::Duration::days(1))
-            .format("%Y-%m-%d")
-            .to_string()
-    } else {
-        today.format("%Y-%m-%d").to_string()
-    };
+    boundary.timestamp()
+}
 
-    (ts, date_str)
+fn resolve_local_boundary(mut naive: NaiveDateTime) -> Option<DateTime<Local>> {
+    // DST 春季跳时可能让配置的本地时刻不存在：顺延到首个有效分钟。
+    // 秋季回拨会出现两个同名时刻：取第一次，保持当天窗口完整。
+    for _ in 0..=180 {
+        match naive.and_local_timezone(Local) {
+            LocalResult::Single(value) => return Some(value),
+            LocalResult::Ambiguous(first, _) => return Some(first),
+            LocalResult::None => naive += Duration::minutes(1),
+        }
+    }
+    None
+}
+
+fn summarize_timeline(
+    timeline: &[app_lib::usage_stats::TimedUsage],
+    start_ts: i64,
+    end_exclusive_ts: i64,
+) -> (
+    u64,
+    Vec<ModelStat>,
+    Vec<app_lib::usage_stats::RawModelUsage>,
+) {
+    let mut total = 0u64;
+    let mut models: HashMap<String, u64> = HashMap::new();
+    let mut raw_models: HashMap<String, app_lib::models::TokenUsage> = HashMap::new();
+    for item in timeline
+        .iter()
+        .filter(|item| item.timestamp >= start_ts && item.timestamp < end_exclusive_ts)
+    {
+        let tokens = item.usage.total();
+        total += tokens;
+        *models.entry(item.model.clone()).or_default() += tokens;
+        raw_models
+            .entry(item.raw_model.clone())
+            .or_default()
+            .accumulate(&item.usage);
+    }
+    let mut models: Vec<ModelStat> = models
+        .into_iter()
+        .map(|(model, tokens)| ModelStat {
+            model,
+            count: 0,
+            tokens,
+        })
+        .collect();
+    models.sort_unstable_by_key(|item| std::cmp::Reverse(item.tokens));
+    let raw_models = raw_models
+        .into_iter()
+        .map(|(model, usage)| app_lib::usage_stats::RawModelUsage { model, usage })
+        .collect();
+    (total, models, raw_models)
 }
 
 fn compute_streak(daily: &[app_lib::usage_stats::DailyUsage]) -> (u32, u32, u32) {
@@ -222,7 +263,8 @@ fn project_display_name(project_path: Option<&str>) -> String {
 }
 
 fn collect_project_stats(
-    start_ts: u64,
+    start_ts: i64,
+    end_exclusive_ts: i64,
     sessions: &[app_lib::usage_stats::SessionActivity],
 ) -> (u32, Vec<ProjectStat>, u32, Vec<u32>) {
     let mut project_counts: HashMap<String, (String, u32)> = HashMap::new();
@@ -238,7 +280,9 @@ fn collect_project_stats(
             .entry(project_key.clone())
             .or_insert_with(|| (project_display_name(session.project_path.as_deref()), 0));
         entry.1 += 1;
-        if session.updated_at >= start_ts {
+        if session.updated_at >= start_ts.max(0) as u64
+            && session.updated_at < end_exclusive_ts.max(0) as u64
+        {
             active_today.insert(project_key);
         }
         if let Some(datetime) = chrono::DateTime::from_timestamp(session.updated_at as i64, 0) {
@@ -254,119 +298,219 @@ fn collect_project_stats(
     top.sort_by_key(|p| std::cmp::Reverse(p.sessions));
     top.truncate(8);
 
-    (active_today.len() as u32, top, sessions.len() as u32, hourly)
+    (
+        active_today.len() as u32,
+        top,
+        sessions.len() as u32,
+        hourly,
+    )
 }
 
 fn main() {
     let cfg = read_config();
-    let (start_ts, today_str) = compute_day_boundary(cfg.day_start_hour);
+    let now = Local::now();
+    let end_exclusive_ts = now.timestamp().saturating_add(1);
+    let start_ts = compute_day_boundary(cfg.day_start_hour, now);
 
-    let stats = app_lib::usage_stats::collect_usage_stats().ok();
+    let stats = app_lib::usage_stats::collect_widget_usage_stats().ok();
     let today_sessions = stats
         .as_ref()
         .map(|stats| {
             stats
                 .sessions
                 .iter()
-                .filter(|session| session.updated_at >= start_ts)
+                .filter(|session| {
+                    session.updated_at >= start_ts.max(0) as u64
+                        && session.updated_at < end_exclusive_ts.max(0) as u64
+                })
                 .count() as u32
         })
         .unwrap_or_default();
 
-    let (today_tokens, models, monthly_tokens, last_month_tokens, monthly_models,
-         estimated_cost, unpriced_tokens, weekly_tokens, daily_heatmap, current_streak,
-         longest_streak, active_days, total_tokens) =
-        if let Some(stats) = stats.as_ref() {
-            let now = Local::now();
-            let today_date = now.date_naive();
+    let (
+        today_tokens,
+        models,
+        monthly_tokens,
+        last_month_tokens,
+        monthly_models,
+        estimated_cost,
+        unpriced_tokens,
+        weekly_tokens,
+        daily_heatmap,
+        current_streak,
+        longest_streak,
+        active_days,
+        total_tokens,
+    ) = if let Some(stats) = stats.as_ref() {
+        let today_date = now.date_naive();
 
-            // Today tokens
-            let mut tt = 0u64;
-            if cfg.day_start_hour < 0 {
-                let yesterday = (now - Duration::days(1)).format("%Y-%m-%d").to_string();
-                for d in &stats.daily {
-                    if d.date == today_str || d.date == yesterday { tt += d.total; }
+        // Today tokens
+        let tt = summarize_timeline(&stats.timeline, start_ts, end_exclusive_ts).0;
+
+        // Last month tokens
+        let lm = if now.month() == 1 {
+            12
+        } else {
+            now.month() - 1
+        };
+        let ly = if now.month() == 1 {
+            now.year() - 1
+        } else {
+            now.year()
+        };
+        let natural_last_month: u64 = stats
+            .daily
+            .iter()
+            .filter(|d| {
+                if let Ok(nd) = NaiveDate::parse_from_str(&d.date, "%Y-%m-%d") {
+                    nd.year() == ly && nd.month() == lm
+                } else {
+                    false
                 }
-            } else if let Some(day) = stats.daily.iter().find(|d| d.date == today_str) {
-                tt = day.total;
-            }
+            })
+            .map(|d| d.total)
+            .sum();
 
-            // Last month tokens
-            let lm = if now.month() == 1 { 12 } else { now.month() - 1 };
-            let ly = if now.month() == 1 { now.year() - 1 } else { now.year() };
-            let lmt: u64 = stats.daily.iter()
-                .filter(|d| {
-                    if let Ok(nd) = NaiveDate::parse_from_str(&d.date, "%Y-%m-%d") {
-                        nd.year() == ly && nd.month() == lm
-                    } else { false }
+        let is_rolling = cfg.month_mode == "rolling";
+
+        // Rolling mode is an exact moving window, with the immediately preceding
+        // 30 days as its comparison period.
+        let (monthly_t, previous_monthly_t, mm, raw_models) = if is_rolling {
+            let current_start = (now - Duration::days(30)).timestamp();
+            let previous_start = (now - Duration::days(60)).timestamp();
+            let (total, models, raw_models) =
+                summarize_timeline(&stats.timeline, current_start, end_exclusive_ts);
+            let previous_total =
+                summarize_timeline(&stats.timeline, previous_start, current_start).0;
+            (total, previous_total, models, raw_models)
+        } else {
+            let models = stats
+                .month
+                .by_model
+                .iter()
+                .map(|m| ModelStat {
+                    model: m.model.clone(),
+                    count: 0,
+                    tokens: m.total,
                 })
-                .map(|d| d.total)
-                .sum();
+                .collect();
+            (
+                stats.month.total,
+                natural_last_month,
+                models,
+                stats.month.by_raw_model.clone(),
+            )
+        };
 
-            let is_rolling = cfg.month_mode == "rolling";
+        // 计价用原始模型名桶：归一化名匹配不上价目表。
+        let pricing = app_lib::pricing::load();
+        let (cost, unpriced) = estimate_cost(&pricing, &raw_models);
+        let models_list: Vec<String> = mm.iter().map(|m| m.model.clone()).collect();
 
-            // Monthly tokens: natural month or rolling 30 days
-            let monthly_t = if is_rolling {
-                let cutoff = (today_date - Duration::days(30)).format("%Y-%m-%d").to_string();
-                stats.daily.iter().filter(|d| d.date > cutoff).map(|d| d.total).sum()
-            } else {
-                stats.month.total
-            };
-
-            // Model distribution & cost: always from natural month (daily has no model granularity)
-            let mm: Vec<ModelStat> = stats.month.by_model.iter().map(|m| ModelStat {
-                model: m.model.clone(),
-                count: 0,
-                tokens: m.total,
-            }).collect();
-            // 计价用原始模型名桶（by_raw_model）：归一化名匹配不上价目表
-            let pricing = app_lib::pricing::load();
-            let (cost, unpriced) = estimate_cost(&pricing, &stats.month.by_raw_model);
-            let models_list: Vec<String> = stats.month.by_model.iter().map(|m| m.model.clone()).collect();
-
-            // Weekly (last 7 days)
-            let weekly: Vec<DayTokens> = (0..7).rev().map(|i| {
+        // Weekly (last 7 days)
+        let weekly: Vec<DayTokens> = (0..7)
+            .rev()
+            .map(|i| {
                 let d = today_date - Duration::days(i);
                 let ds = d.format("%Y-%m-%d").to_string();
-                let t = stats.daily.iter().find(|x| x.date == ds).map(|x| x.total).unwrap_or(0);
-                DayTokens { date: ds, tokens: t }
-            }).collect();
+                let t = stats
+                    .daily
+                    .iter()
+                    .find(|x| x.date == ds)
+                    .map(|x| x.total)
+                    .unwrap_or(0);
+                DayTokens {
+                    date: ds,
+                    tokens: t,
+                }
+            })
+            .collect();
 
-            // Heatmap
-            let heatmap: Vec<DayTokens> = if is_rolling {
-                (0..30).rev().map(|i| {
+        // Heatmap
+        let heatmap: Vec<DayTokens> = if is_rolling {
+            (0..30)
+                .rev()
+                .map(|i| {
                     let d = today_date - Duration::days(i);
                     let ds = d.format("%Y-%m-%d").to_string();
-                    let t = stats.daily.iter().find(|x| x.date == ds).map(|x| x.total).unwrap_or(0);
-                    DayTokens { date: ds, tokens: t }
-                }).collect()
+                    let t = stats
+                        .daily
+                        .iter()
+                        .find(|x| x.date == ds)
+                        .map(|x| x.total)
+                        .unwrap_or(0);
+                    DayTokens {
+                        date: ds,
+                        tokens: t,
+                    }
+                })
+                .collect()
+        } else {
+            let month_start =
+                NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1).unwrap();
+            let next_month = if today_date.month() == 12 {
+                NaiveDate::from_ymd_opt(today_date.year() + 1, 1, 1).unwrap()
             } else {
-                let month_start = NaiveDate::from_ymd_opt(today_date.year(), today_date.month(), 1).unwrap();
-                let next_month = if today_date.month() == 12 {
-                    NaiveDate::from_ymd_opt(today_date.year() + 1, 1, 1).unwrap()
-                } else {
-                    NaiveDate::from_ymd_opt(today_date.year(), today_date.month() + 1, 1).unwrap()
-                };
-                let days_in_month = (next_month - month_start).num_days();
-                (0..days_in_month).map(|i| {
+                NaiveDate::from_ymd_opt(today_date.year(), today_date.month() + 1, 1).unwrap()
+            };
+            let days_in_month = (next_month - month_start).num_days();
+            (0..days_in_month)
+                .map(|i| {
                     let d = month_start + Duration::days(i);
                     let ds = d.format("%Y-%m-%d").to_string();
-                    let t = stats.daily.iter().find(|x| x.date == ds).map(|x| x.total).unwrap_or(0);
-                    DayTokens { date: ds, tokens: t }
-                }).collect()
-            };
-
-            let (cs, ls, ad) = compute_streak(&stats.daily);
-            let total_t = stats.total;
-
-            (tt, models_list, monthly_t, lmt, mm, cost, unpriced, weekly, heatmap, cs, ls, ad, total_t)
-        } else {
-            (0, Vec::new(), 0, 0, Vec::new(), 0.0, 0, Vec::new(), Vec::new(), 0, 0, 0, 0)
+                    let t = stats
+                        .daily
+                        .iter()
+                        .find(|x| x.date == ds)
+                        .map(|x| x.total)
+                        .unwrap_or(0);
+                    DayTokens {
+                        date: ds,
+                        tokens: t,
+                    }
+                })
+                .collect()
         };
+
+        let (cs, ls, ad) = compute_streak(&stats.daily);
+        let total_t = stats.total;
+
+        (
+            tt,
+            models_list,
+            monthly_t,
+            previous_monthly_t,
+            mm,
+            cost,
+            unpriced,
+            weekly,
+            heatmap,
+            cs,
+            ls,
+            ad,
+            total_t,
+        )
+    } else {
+        (
+            0,
+            Vec::new(),
+            0,
+            0,
+            Vec::new(),
+            0.0,
+            0,
+            Vec::new(),
+            Vec::new(),
+            0,
+            0,
+            0,
+            0,
+        )
+    };
 
     let (active_projects, top_projects, total_sessions, hourly) = stats
         .as_ref()
-        .map(|stats| collect_project_stats(start_ts, &stats.sessions))
+        .map(|stats| collect_project_stats(start_ts, end_exclusive_ts, &stats.sessions))
         .unwrap_or_else(|| (0, Vec::new(), 0, vec![0; 24]));
 
     let snap = WidgetSnapshot {
@@ -379,6 +523,7 @@ fn main() {
         active_days,
         monthly_tokens,
         last_month_tokens,
+        month_mode: cfg.month_mode,
         monthly_models,
         estimated_cost_usd: estimated_cost,
         unpriced_tokens,
@@ -417,5 +562,89 @@ fn main() {
     if let Err(error) = result {
         eprintln!("widget snapshot update failed:\n{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn local_time(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Local> {
+        Local
+            .with_ymd_and_hms(year, month, day, hour, 30, 0)
+            .single()
+            .unwrap()
+    }
+
+    #[test]
+    fn rolling_day_boundary_is_exactly_24_hours() {
+        let now = local_time(2026, 8, 12, 9);
+        assert_eq!(
+            compute_day_boundary(-1, now),
+            local_time(2026, 8, 11, 9).timestamp()
+        );
+    }
+
+    #[test]
+    fn fixed_day_boundary_uses_configured_local_hour() {
+        let after_boundary = local_time(2026, 8, 12, 9);
+        let before_boundary = local_time(2026, 8, 12, 3);
+        assert_eq!(
+            compute_day_boundary(5, after_boundary),
+            Local
+                .with_ymd_and_hms(2026, 8, 12, 5, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp()
+        );
+        assert_eq!(
+            compute_day_boundary(5, before_boundary),
+            Local
+                .with_ymd_and_hms(2026, 8, 11, 5, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp()
+        );
+    }
+
+    #[test]
+    fn invalid_fixed_hour_falls_back_to_midnight() {
+        let now = local_time(2026, 8, 12, 9);
+        assert_eq!(
+            compute_day_boundary(42, now),
+            Local
+                .with_ymd_and_hms(2026, 8, 12, 0, 0, 0)
+                .single()
+                .unwrap()
+                .timestamp()
+        );
+    }
+
+    #[test]
+    fn timeline_summary_respects_exact_window() {
+        let usage = |timestamp: i64, tokens: u64| app_lib::usage_stats::TimedUsage {
+            timestamp,
+            model: "gpt-test".into(),
+            raw_model: "gpt-test".into(),
+            usage: app_lib::models::TokenUsage {
+                input_tokens: tokens,
+                ..Default::default()
+            },
+        };
+        let timeline = vec![
+            usage(99, 100),
+            usage(100, 200),
+            usage(199, 300),
+            usage(200, 400),
+        ];
+
+        let (total, models, raw_models) = summarize_timeline(&timeline, 100, 200);
+
+        assert_eq!(total, 500);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].tokens, 500);
+        assert_eq!(raw_models.len(), 1);
+        assert_eq!(raw_models[0].usage.total(), 500);
     }
 }

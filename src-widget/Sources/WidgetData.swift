@@ -28,6 +28,7 @@ struct WidgetData: Codable {
 
     let monthlyTokens: UInt64?
     let lastMonthTokens: UInt64?
+    let monthMode: String?
     let monthlyModels: [ModelStat]?
 
     let estimatedCostUsd: Double?
@@ -54,6 +55,7 @@ struct WidgetData: Codable {
         activeDays: 30,
         monthlyTokens: 2_500_000,
         lastMonthTokens: 2_000_000,
+        monthMode: "natural",
         monthlyModels: [
             ModelStat(model: "opus-4.6", count: 0, tokens: 1_500_000),
             ModelStat(model: "sonnet-4.6", count: 0, tokens: 800_000),
@@ -116,8 +118,11 @@ struct WidgetData: Codable {
         return Int(((Double(current) - Double(last)) / Double(last)) * 100)
     }
 
-    // Daily average: monthlyTokens / day-of-month (1-indexed)
+    // Natural month averages elapsed days; rolling mode always spans 30 days.
     var dailyAverage: UInt64 {
+        if monthMode == "rolling" {
+            return (monthlyTokens ?? 0) / 30
+        }
         let day = max(Calendar.current.component(.day, from: Date()), 1)
         return (monthlyTokens ?? 0) / UInt64(day)
     }

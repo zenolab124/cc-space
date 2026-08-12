@@ -35,6 +35,9 @@ pub struct UsageStats {
     /// Widget 后台进程消费的会话活动，不进入 IPC JSON。
     #[serde(skip)]
     pub sessions: Vec<SessionActivity>,
+    /// 去重后的秒级用量时间线，供 Widget 精确截取自定义日界线。
+    #[serde(skip)]
+    pub timeline: Vec<TimedUsage>,
 }
 
 #[derive(Debug, Serialize)]
@@ -72,6 +75,14 @@ pub struct ModelUsage {
 #[derive(Debug, Clone)]
 pub struct RawModelUsage {
     pub model: String,
+    pub usage: TokenUsage,
+}
+
+#[derive(Debug, Clone)]
+pub struct TimedUsage {
+    pub timestamp: i64,
+    pub model: String,
+    pub raw_model: String,
     pub usage: TokenUsage,
 }
 
@@ -524,6 +535,7 @@ fn aggregate_usage(
     buckets: Buckets,
     sessions: Vec<SessionActivity>,
     today: NaiveDate,
+    include_timeline: bool,
 ) -> Result<UsageStats, String> {
     let days_from_monday = today.weekday().num_days_from_monday() as i64;
     let window_start = today - chrono::Duration::days(days_from_monday + 15 * 7);
@@ -533,10 +545,32 @@ fn aggregate_usage(
 
     let mut aggregate = UsageAccumulator::default();
     let mut engines: HashMap<String, UsageAccumulator> = HashMap::new();
+    let mut timeline = Vec::new();
     for session in &sessions {
         engines.entry(session.engine_id.clone()).or_default();
     }
     for contribution in buckets.by_id.into_values().chain(buckets.anon) {
+        if include_timeline {
+            let timestamp = contribution
+                .snapshot
+                .timestamp
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
+            if let Some(timestamp) = timestamp {
+                let raw_model = contribution.model.clone().unwrap_or_default();
+                let model = contribution
+                    .model
+                    .as_deref()
+                    .map(|value| normalize_model(value, &date_suffix, &version_tail))
+                    .unwrap_or_else(|| "未知".to_string());
+                timeline.push(TimedUsage {
+                    timestamp: timestamp.timestamp(),
+                    model,
+                    raw_model,
+                    usage: contribution.snapshot.usage.clone(),
+                });
+            }
+        }
         aggregate.add(
             &contribution,
             today,
@@ -567,6 +601,7 @@ fn aggregate_usage(
         })
         .collect();
     by_engine.sort_unstable_by(|left, right| left.engine_id.cmp(&right.engine_id));
+    timeline.sort_unstable_by_key(|item| item.timestamp);
 
     Ok(UsageStats {
         total,
@@ -574,12 +609,13 @@ fn aggregate_usage(
         month,
         by_engine,
         sessions,
+        timeline,
     })
 }
 
 /// 聚合所有可用引擎的本地用量。单个引擎数据源不可读时，其余引擎仍可工作；
 /// 只有所有来源都不可用时才返回错误。
-pub fn collect_usage_stats() -> Result<UsageStats, String> {
+fn collect_usage_stats_inner(include_timeline: bool) -> Result<UsageStats, String> {
     let mut buckets = Buckets::default();
     let mut sessions = Vec::new();
     let mut source_available = false;
@@ -634,9 +670,23 @@ pub fn collect_usage_stats() -> Result<UsageStats, String> {
         }
     }
     let sessions = unique_sessions.into_values().collect();
-    let stats = aggregate_usage(buckets, sessions, Local::now().date_naive())?;
+    let stats = aggregate_usage(
+        buckets,
+        sessions,
+        Local::now().date_naive(),
+        include_timeline,
+    )?;
     cache::flush();
     Ok(stats)
+}
+
+pub fn collect_usage_stats() -> Result<UsageStats, String> {
+    collect_usage_stats_inner(false)
+}
+
+/// Widget 需要按秒截取自定义时间窗口，只在这条路径保留去重后时间线。
+pub fn collect_widget_usage_stats() -> Result<UsageStats, String> {
+    collect_usage_stats_inner(true)
 }
 
 #[cfg(test)]
@@ -791,6 +841,7 @@ mod tests {
             buckets,
             sessions,
             NaiveDate::from_ymd_opt(2026, 8, 10).unwrap(),
+            true,
         )
         .unwrap();
 
@@ -798,6 +849,7 @@ mod tests {
         assert_eq!(stats.total, 30);
         assert_eq!(stats.daily[0].total, 30);
         assert_eq!(stats.sessions.len(), 2);
+        assert_eq!(stats.timeline.len(), 2);
         assert_eq!(
             stats
                 .by_engine
