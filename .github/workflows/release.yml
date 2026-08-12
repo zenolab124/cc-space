@@ -5,12 +5,12 @@ name: Release
 # 人工检查后 publish 才对 updater 生效。
 #
 # 所需 secrets:
-#   SIGNING_CERT_P12          自签证书 "Monet Signing" 导出的 .p12,base64 编码
+#   SIGNING_CERT_P12          macOS 签名证书导出的 .p12,base64 编码
 #   SIGNING_CERT_PASSWORD     .p12 导出密码
 #   TAURI_SIGNING_PRIVATE_KEY updater minisign 私钥(对应 tauri.conf 的 pubkey,双平台共用)
 #
-# 签名用与本地相同的稳定自签身份:updater 静默升级后签名不变,TCC 授权不丢。
-# 公证(Developer ID)按触发式策略暂缓,届时仅需替换证书 secrets 与 SIGN_ID。
+# vars.MACOS_SIGNING_IDENTITY 未配置时沿用稳定自签身份；切换 Developer ID 时
+# 只需替换证书 secrets 并设置该变量，App Group 会从证书 Team ID 自动启用。
 # Windows 侧无 Authenticode 签名(SmartScreen 会拦,发布期另议),NSIS 本身即
 # updater 工件,minisign 签名后写入 latest.json 的 windows-x86_64 条目。
 
@@ -73,6 +73,8 @@ jobs:
     # 串行等 Windows 工件:latest.json 需并入 windows-x86_64 条目后统一发布
     needs: build-windows
     runs-on: macos-latest
+    env:
+      SIGN_ID: ${{ vars.MACOS_SIGNING_IDENTITY || 'Monet Signing' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,17 +115,20 @@ jobs:
           # 自签证书必须进系统信任链,否则 codesign 拒绝用它签名。
           # PEM 从已导入的 keychain 用 security 原生导出——security export 产的 p12
           # 是 RC2-40 老式加密,OpenSSL 3 默认拒解(首跑实败教训),绕开 openssl
-          security find-certificate -c "Monet Signing" -p build.keychain > /tmp/cert.pem
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
-          rm -f /tmp/cert.p12 /tmp/cert.pem
+          if [ "$SIGN_ID" = "Monet Signing" ]; then
+            security find-certificate -c "$SIGN_ID" -p build.keychain > /tmp/cert.pem
+            sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
+            rm -f /tmp/cert.pem
+          fi
+          rm -f /tmp/cert.p12
           IDENTITIES=$(security find-identity -v -p codesigning)
-          grep -F '"Monet Signing"' <<< "$IDENTITIES" >/dev/null
+          grep -F "\"$SIGN_ID\"" <<< "$IDENTITIES" >/dev/null
 
       - name: Install dependencies
         run: pnpm install
 
       - name: Build app
-        run: pnpm tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Monet Signing"}}}'
+        run: pnpm tauri build --bundles app --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$SIGN_ID\"}}}"
 
       - name: Bundle tray helper
         run: bash scripts/bundle-tray.sh
@@ -131,7 +136,6 @@ jobs:
       - name: Build widget, sign, package
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
-          SIGN_ID: Monet Signing
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: src-widget/build.sh
@@ -142,7 +146,7 @@ jobs:
           APP=src-tauri/target/release/bundle/macos/Monet.app
           codesign --verify --deep --strict "$APP"
           DETAILS=$(codesign -dvv "$APP" 2>&1)
-          grep -F 'Authority=Monet Signing' <<< "$DETAILS" >/dev/null
+          grep -F "Authority=$SIGN_ID" <<< "$DETAILS" >/dev/null
           if grep -F 'Signature=adhoc' <<< "$DETAILS" >/dev/null; then
             echo 'Unexpected ad-hoc signature' >&2
             exit 1

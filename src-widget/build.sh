@@ -31,6 +31,53 @@ if ! grep -F "\"$SIGN_ID\"" <<< "$IDENTITIES" >/dev/null; then
 fi
 CODESIGN_ARGS=(--force --options runtime --sign "$SIGN_ID")
 
+# macOS 支持 Team ID 前缀的 App Group，无需注册 group.* 标识符或嵌入
+# provisioning profile。Developer ID / Apple Development 身份均可从名称末尾提取 Team ID；
+# 自签身份没有 Apple Team ID，因此安全地关闭共享写入，避免再次触发容器授权弹窗。
+resolve_app_group_identifier() {
+    if [ -n "${MONET_APP_GROUP_ID:-}" ]; then
+        echo "$MONET_APP_GROUP_ID"
+        return
+    fi
+
+    local identity_name="$SIGN_ID"
+    if [[ ! "$identity_name" =~ \([A-Z0-9]{10}\)$ ]]; then
+        identity_name=$(sed -nE 's/.*"([^"]+)".*/\1/p' <<< "$IDENTITIES" \
+            | grep -F "$SIGN_ID" | head -1 || true)
+    fi
+    if [[ "$identity_name" =~ ^(Developer\ ID\ Application|Apple\ Development):.*\(([A-Z0-9]{10})\)$ ]]; then
+        echo "${BASH_REMATCH[2]}.io.github.zenolab124.monet"
+    fi
+}
+
+APP_GROUP_ID=$(resolve_app_group_identifier)
+if [ -n "$APP_GROUP_ID" ] && \
+   [[ ! "$APP_GROUP_ID" =~ ^[A-Z0-9]{10}\.io\.github\.zenolab124\.monet$ ]]; then
+    echo "Error: invalid MONET_APP_GROUP_ID format" >&2
+    exit 1
+fi
+
+ENTITLEMENTS_DIR=$(mktemp -d)
+trap 'rm -rf "$ENTITLEMENTS_DIR"' EXIT
+prepare_entitlements() {
+    local source="$1"
+    local destination="$2"
+    cp "$source" "$destination"
+    if [ -n "$APP_GROUP_ID" ]; then
+        /usr/libexec/PlistBuddy \
+            -c "Add :com.apple.security.application-groups array" \
+            -c "Add :com.apple.security.application-groups:0 string $APP_GROUP_ID" \
+            "$destination"
+    fi
+}
+
+MAIN_ENTITLEMENTS="$ENTITLEMENTS_DIR/Monet.entitlements"
+WIDGET_ENTITLEMENTS="$ENTITLEMENTS_DIR/MonetWidgetExtension.entitlements"
+UPDATER_ENTITLEMENTS="$ENTITLEMENTS_DIR/WidgetUpdater.entitlements"
+prepare_entitlements ../src-tauri/Monet.entitlements "$MAIN_ENTITLEMENTS"
+prepare_entitlements MonetWidgetExtension.entitlements "$WIDGET_ENTITLEMENTS"
+prepare_entitlements WidgetUpdater.entitlements "$UPDATER_ENTITLEMENTS"
+
 # --- 构建 Widget Extension ---
 echo "=> Building widget extension..."
 DEVELOPER_DIR="$XCODE" xcodegen generate --quiet 2>/dev/null || DEVELOPER_DIR="$XCODE" xcodegen generate
@@ -39,6 +86,7 @@ DEVELOPER_DIR="$XCODE" xcodebuild build \
     -target MonetWidgetExtension \
     -configuration "$CONFIG" \
     CODE_SIGNING_ALLOWED=NO \
+    MONET_APP_GROUP_ID="$APP_GROUP_ID" \
     CONFIGURATION_BUILD_DIR=build/"$CONFIG" \
     -quiet
 
@@ -56,12 +104,20 @@ cp ../src-tauri/target/release/widget-updater "$APP_BUNDLE/Contents/MacOS/widget
 LAUNCH_AGENTS_DIR="$APP_BUNDLE/Contents/Library/LaunchAgents"
 mkdir -p "$LAUNCH_AGENTS_DIR"
 cp io.github.zenolab124.monet.widget-updater.plist "$LAUNCH_AGENTS_DIR/"
+if [ -n "$APP_GROUP_ID" ]; then
+    /usr/libexec/PlistBuddy \
+        -c "Set :MonetAppGroupIdentifier $APP_GROUP_ID" \
+        "$APP_BUNDLE/Contents/Info.plist"
+    echo "=> App Group enabled for this Apple team"
+else
+    echo "=> App Group disabled (signing identity has no Apple Team ID)"
+fi
 
 # --- 签名 ---
 echo "=> Signing..."
 
 codesign "${CODESIGN_ARGS[@]}" \
-    --entitlements MonetWidgetExtension.entitlements \
+    --entitlements "$WIDGET_ENTITLEMENTS" \
     "$PLUGINS_DIR/MonetWidgetExtension.appex"
 for BIN in "$APP_BUNDLE/Contents/MacOS/"*; do
     NAME=$(basename "$BIN")
@@ -75,8 +131,9 @@ for BIN in "$APP_BUNDLE/Contents/MacOS/"*; do
             --identifier "$APP_IDENTIFIER.$NAME" "$BIN"
     elif [ "$NAME" = "widget-updater" ]; then
         # SMAppService 将 LaunchAgent 的受保护数据访问归属到主应用。
-        # updater 必须与主应用共享稳定 DR，否则每次周期刷新都会重新请求权限。
+        # updater 还必须自己携带 App Group entitlement，子进程不继承父进程能力。
         codesign "${CODESIGN_ARGS[@]}" \
+            --entitlements "$UPDATER_ENTITLEMENTS" \
             --identifier "$APP_IDENTIFIER" "$BIN"
     else
         codesign "${CODESIGN_ARGS[@]}" \
@@ -90,7 +147,7 @@ if [ -d "$TRAY_APP" ]; then
         --identifier "io.github.zenolab124.monet.tray" "$TRAY_APP"
 fi
 codesign "${CODESIGN_ARGS[@]}" \
-    --entitlements ../src-tauri/Monet.entitlements "$APP_BUNDLE"
+    --entitlements "$MAIN_ENTITLEMENTS" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 SIGNATURE_DETAILS=$(codesign -dvv "$APP_BUNDLE" 2>&1)
 grep -F "Authority=$SIGN_ID" <<< "$SIGNATURE_DETAILS" >/dev/null

@@ -31,7 +31,7 @@
 
 **菜单栏图标不见了或点不开。** macOS 13+ 的菜单栏 Helper 由 `SMAppService` 注册，不要手动创建或修改 `~/Library/LaunchAgents` 下的 plist。重启 Monet 后查看「设置 → 菜单栏」的后台项目状态；若显示需要批准，点击「打开后台项目设置」，在系统设置中允许 Monet。仍有问题时查 `sfltool dumpbtm | grep -A 12 -B 2 io.github.zenolab124.monet.tray` 与 `~/.monet/tray.log`。macOS 11–12 才使用 `launchctl list` 检查兼容路径。
 
-**桌面小组件只显示“打开 Monet”。** 这表示 WidgetKit 扩展已加载，但没有读到 Widget 数据。更新到包含 `SMAppService` 的版本并重启 Monet；在「设置 → 桌面小组件」确认“后台数据刷新”显示已注册。若显示需要批准，允许 Monet 的后台项目后等待一次刷新。诊断时可检查 `~/Library/Containers/io.github.zenolab124.monet.widget/Data/widget-data.json` 是否存在；不要手动写入该文件。
+**桌面小组件只显示“打开 Monet”。** 这表示 WidgetKit 扩展已加载，但没有读到 Widget 数据。先确认安装的是 Developer ID 签名版本，再重启 Monet；在「设置 → 桌面小组件」确认“后台数据刷新”显示已注册。若显示需要批准，允许 Monet 的后台项目后等待一次刷新。共享快照位于 Monet 的 App Group 容器，本地备份位于 `~/.monet/widget-data.json`；不要手动写入共享容器。
 
 **定时任务不执行。** Routine 由 launchd 执行（`io.github.zenolab124.monet.routine.<id>`），其权限账本与主 app **分离**——执行体是 `monet-routine-runner`。首次授权在任务真实运行时经系统弹窗完成；弹窗被拒后 macOS 不会再问——用户须在系统设置 → 隐私与安全性中删掉旧的 `monet-routine-runner` 条目再触发。设置页的权限体检面板会经真实 launchd 链路自测。
 

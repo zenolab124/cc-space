@@ -89,13 +89,20 @@ describe('macOS background service recovery', () => {
     }
   })
 
-  it('keeps the sandbox contract limited to the Widget-owned container', () => {
+  it('injects the shared App Group into every Widget data process at signing time', () => {
     const mainEntitlements = source('../../src-tauri/Monet.entitlements')
     const widgetEntitlements = source('../../src-widget/MonetWidgetExtension.entitlements')
+    const updaterEntitlements = source('../../src-widget/WidgetUpdater.entitlements')
+    const build = source('../../src-widget/build.sh')
+    const widgetInfo = source('../../src-widget/Sources/Info.plist')
 
+    expect(build).toContain('com.apple.security.application-groups')
+    expect(build).toContain('UPDATER_ENTITLEMENTS')
+    expect(widgetInfo).toContain('MonetAppGroupIdentifier')
     expect(mainEntitlements).not.toContain('application-groups')
     expect(widgetEntitlements).toContain('com.apple.security.app-sandbox')
     expect(widgetEntitlements).not.toContain('temporary-exception')
+    expect(updaterEntitlements).not.toContain('temporary-exception')
   })
 
   it('signs the managed Widget updater with the parent application identity', () => {

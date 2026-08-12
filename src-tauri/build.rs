@@ -35,6 +35,14 @@ fn main() {
     println!("cargo:rerun-if-changed=src/native/service_management.m");
     println!("cargo:rustc-link-lib=framework=ServiceManagement");
 
+    // App Group 容器必须由 FileManager 解析，不能手拼 ~/Library/Group Containers。
+    cc::Build::new()
+      .file("src/native/app_group.m")
+      .flag("-fobjc-arc")
+      .compile("monet_app_group");
+    println!("cargo:rerun-if-changed=src/native/app_group.m");
+    println!("cargo:rustc-link-lib=framework=Foundation");
+
     // rustc-link-lib 只随 lib target 传播；runner bin 不依赖 app lib
     //（避免链入 tauri），需要按 bin 显式补链接参数
     let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -51,6 +59,14 @@ fn main() {
     ] {
       println!("cargo:rustc-link-arg-bin=monet-routine-runner={}", arg);
     }
+
+    // widget-updater 是独立 bin，不链接 app lib，需要显式带上 App Group 桥接库。
+    println!(
+      "cargo:rustc-link-arg-bin=widget-updater={}/libmonet_app_group.a",
+      out_dir
+    );
+    println!("cargo:rustc-link-arg-bin=widget-updater=-framework");
+    println!("cargo:rustc-link-arg-bin=widget-updater=Foundation");
 
     // 裸二进制嵌入 Info.plist（__TEXT,__info_plist 段）：TCC 要求发送
     // Apple Events 的进程带 NSAppleEventsUsageDescription，缺失时授权

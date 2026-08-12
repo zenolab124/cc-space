@@ -252,14 +252,21 @@ mod tests {
         const MAIN_ENTITLEMENTS: &str = include_str!("../Monet.entitlements");
         const WIDGET_ENTITLEMENTS: &str =
             include_str!("../../src-widget/MonetWidgetExtension.entitlements");
+        const UPDATER_ENTITLEMENTS: &str =
+            include_str!("../../src-widget/WidgetUpdater.entitlements");
+        const WIDGET_INFO: &str = include_str!("../../src-widget/Sources/Info.plist");
 
         assert!(WIDGET_PLIST.contains(WIDGET_UPDATER_LABEL));
         assert!(WIDGET_PLIST.contains("Contents/MacOS/widget-updater"));
         assert!(WIDGET_BUILD.contains(WIDGET_UPDATER_PLIST));
         assert!(WIDGET_BUILD.contains("[ \"$NAME\" = \"widget-updater\" ]"));
         assert!(WIDGET_BUILD.contains("--identifier \"$APP_IDENTIFIER\" \"$BIN\""));
+        assert!(WIDGET_BUILD.contains("com.apple.security.application-groups"));
+        assert!(WIDGET_BUILD.contains("--entitlements \"$UPDATER_ENTITLEMENTS\""));
+        assert!(WIDGET_INFO.contains("MonetAppGroupIdentifier"));
         assert!(TRAY_INFO.contains(TRAY_SERVICE_ID));
         assert!(!MAIN_ENTITLEMENTS.contains("application-groups"));
         assert!(!WIDGET_ENTITLEMENTS.contains("temporary-exception"));
+        assert!(!UPDATER_ENTITLEMENTS.contains("temporary-exception"));
     }
 }

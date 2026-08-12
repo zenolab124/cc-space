@@ -34,6 +34,8 @@ concurrency:
 jobs:
   build-macos:
     runs-on: macos-latest
+    env:
+      SIGN_ID: ${{ vars.MACOS_SIGNING_IDENTITY || 'Monet Signing' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -142,11 +144,14 @@ jobs:
           echo "$CERT_P12" | base64 -d > /tmp/cert.p12
           security import /tmp/cert.p12 -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S 'apple-tool:,apple:,codesign:' -s -k "$KEYCHAIN_PASS" build.keychain
-          security find-certificate -c "Monet Signing" -p build.keychain > /tmp/cert.pem
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
-          rm -f /tmp/cert.p12 /tmp/cert.pem
+          if [ "$SIGN_ID" = "Monet Signing" ]; then
+            security find-certificate -c "$SIGN_ID" -p build.keychain > /tmp/cert.pem
+            sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain /tmp/cert.pem
+            rm -f /tmp/cert.pem
+          fi
+          rm -f /tmp/cert.p12
           IDENTITIES=$(security find-identity -v -p codesigning)
-          grep -F '"Monet Signing"' <<< "$IDENTITIES" >/dev/null
+          grep -F "\"$SIGN_ID\"" <<< "$IDENTITIES" >/dev/null
 
       - name: Install dependencies
         if: steps.check.outputs.skip == 'false'
@@ -154,7 +159,7 @@ jobs:
 
       - name: Build app
         if: steps.check.outputs.skip == 'false'
-        run: pnpm tauri build --bundles app --config '{"bundle":{"macOS":{"signingIdentity":"Monet Signing"}}}'
+        run: pnpm tauri build --bundles app --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$SIGN_ID\"}}}"
 
       - name: Bundle tray helper
         if: steps.check.outputs.skip == 'false'
@@ -164,7 +169,6 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
-          SIGN_ID: Monet Signing
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: src-widget/build.sh
@@ -176,7 +180,7 @@ jobs:
           APP=src-tauri/target/release/bundle/macos/Monet.app
           codesign --verify --deep --strict "$APP"
           DETAILS=$(codesign -dvv "$APP" 2>&1)
-          grep -F 'Authority=Monet Signing' <<< "$DETAILS" >/dev/null
+          grep -F "Authority=$SIGN_ID" <<< "$DETAILS" >/dev/null
           if grep -F 'Signature=adhoc' <<< "$DETAILS" >/dev/null; then
             echo 'Unexpected ad-hoc signature' >&2
             exit 1

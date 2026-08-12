@@ -72,10 +72,35 @@ struct WidgetData: Codable {
     )
 
     static func read() -> WidgetData? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("widget-data.json")
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(WidgetData.self, from: data)
+        let decoder = JSONDecoder()
+        for url in snapshotURLs {
+            guard let data = try? Data(contentsOf: url),
+                  let snapshot = try? decoder.decode(WidgetData.self, from: data) else {
+                continue
+            }
+            return snapshot
+        }
+        return nil
+    }
+
+    private static var snapshotURLs: [URL] {
+        var urls: [URL] = []
+        if let identifier = Bundle.main.object(
+            forInfoDictionaryKey: "MonetAppGroupIdentifier"
+        ) as? String,
+           !identifier.isEmpty,
+           let container = FileManager.default.containerURL(
+               forSecurityApplicationGroupIdentifier: identifier
+           ) {
+            urls.append(container.appendingPathComponent("widget-data.json"))
+        }
+
+        // 仅用于从旧版本平滑过渡；新版本不会再写 Widget 自有沙箱。
+        urls.append(
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("widget-data.json")
+        )
+        return urls
     }
 
     var formattedTokens: String {

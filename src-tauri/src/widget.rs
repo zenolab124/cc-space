@@ -8,6 +8,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
+use crate::widget_storage;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -26,12 +27,6 @@ impl Default for WidgetConfig {
 
 fn widget_config_path() -> PathBuf {
     config::data_dir().join("widget-config.json")
-}
-
-fn widget_container_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| {
-        h.join("Library/Containers/io.github.zenolab124.monet.widget/Data/widget-data.json")
-    })
 }
 
 pub fn read_widget_config() -> WidgetConfig {
@@ -86,20 +81,21 @@ fn valid_widget_snapshot(contents: &str) -> bool {
         && object.get("updatedAt").is_some_and(|value| value.is_string())
 }
 
-fn snapshot_needs_refresh() -> bool {
-    let Some(path) = widget_container_path() else {
-        return true;
+fn snapshot_needs_refresh() -> Result<bool, String> {
+    let Some(path) = widget_storage::shared_snapshot_path()? else {
+        // 自签开发构建没有可授权的 App Group，只维护 ~/.monet 备份。
+        return Ok(false);
     };
     let Ok(contents) = std::fs::read_to_string(&path) else {
-        return true;
+        return Ok(true);
     };
     if !valid_widget_snapshot(&contents) {
-        return true;
+        return Ok(true);
     }
     let modified = std::fs::metadata(path)
         .ok()
         .and_then(|metadata| metadata.modified().ok());
-    snapshot_needs_refresh_at(modified, SystemTime::now())
+    Ok(snapshot_needs_refresh_at(modified, SystemTime::now()))
 }
 
 fn refresh_snapshot_once() -> Result<(), String> {
@@ -131,7 +127,7 @@ fn refresh_snapshot_once() -> Result<(), String> {
 }
 
 pub(crate) fn refresh_snapshot_if_needed() -> Result<(), String> {
-    if snapshot_needs_refresh() {
+    if snapshot_needs_refresh()? {
         refresh_snapshot_once()
     } else {
         Ok(())
@@ -305,21 +301,22 @@ fn update_widget_locked(
 
     let json = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
 
-    let container_result: Result<(), String> = (|| {
-        let path = widget_container_path().ok_or("widget container path unavailable")?;
-        write_snapshot(&path, &json)
-    })();
+    let shared_result = match widget_storage::shared_snapshot_path() {
+        Ok(Some(path)) => write_snapshot(&path, &json),
+        Ok(None) => Ok(()),
+        Err(error) => Err(error),
+    };
 
     let backup_result = write_snapshot(&backup_path, &json);
 
-    match (container_result, backup_result) {
+    match (shared_result, backup_result) {
         (Ok(()), Ok(())) => Ok(()),
-        (Err(container), Ok(())) => Err(format!(
-            "widget container write failed; backup updated: {container}"
+        (Err(shared), Ok(())) => Err(format!(
+            "widget shared container write failed; backup updated: {shared}"
         )),
         (Ok(()), Err(backup)) => Err(format!("widget backup write failed: {backup}")),
-        (Err(container), Err(backup)) => Err(format!(
-            "widget container write failed: {container}; backup write failed: {backup}"
+        (Err(shared), Err(backup)) => Err(format!(
+            "widget shared container write failed: {shared}; backup write failed: {backup}"
         )),
     }
 }

@@ -8,6 +8,10 @@
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Monet uses AppleScript to open Terminal for resuming sessions and to manage scheduled-task wake and sleep.</string>
 
+	<!-- build.sh 在 Developer ID 构建中写入 Team ID 前缀共享组；自签构建保持为空。 -->
+	<key>MonetAppGroupIdentifier</key>
+	<string></string>
+
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_monet._tcp</string>

@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[path = "../config.rs"]
 #[allow(dead_code)]
 mod config;
+#[path = "../widget_storage.rs"]
+mod widget_storage;
 
 static SNAPSHOT_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -119,12 +121,6 @@ fn read_config() -> WidgetConfig {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
-}
-
-fn widget_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join("Library/Containers/io.github.zenolab124.monet.widget/Data/widget-data.json")
 }
 
 fn compute_day_boundary(day_start_hour: i8) -> (u64, String) {
@@ -398,11 +394,16 @@ fn main() {
     let json = serde_json::to_string_pretty(&snap).unwrap_or_default();
 
     let result = with_snapshot_lock(|| {
-        let wp = widget_path();
         let bp = config::data_dir().join("widget-data.json");
         let mut failures = Vec::new();
-        if let Err(error) = write_snapshot(&wp, &json) {
-            failures.push(error);
+        match widget_storage::shared_snapshot_path() {
+            Ok(Some(path)) => {
+                if let Err(error) = write_snapshot(&path, &json) {
+                    failures.push(error);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => failures.push(error),
         }
         if let Err(error) = write_snapshot(&bp, &json) {
             failures.push(error);

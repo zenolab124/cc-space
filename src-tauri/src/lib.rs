@@ -61,6 +61,7 @@ mod tray_agent;
 mod translate;
 mod turn_signal;
 mod widget;
+mod widget_storage;
 /// pub：候选清单+pid+日志回读，MCP bin 经 #[path] 共享
 pub mod runner_store;
 mod runners;
