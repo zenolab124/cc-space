@@ -27,6 +27,8 @@ import type { SessionSummary } from '@/types'
 
 const { getMeta } = useSessionMeta()
 import UnifiedSessionDetail from '../session/UnifiedSessionDetail.vue'
+import NewTaskEnginePicker from './NewTaskEnginePicker.vue'
+import RaceEnginePicker from './RaceEnginePicker.vue'
 
 const props = defineProps<{
   column: WorkbenchColumn
@@ -35,16 +37,19 @@ const props = defineProps<{
   handleRef?: (el: any) => void
   mutationDisabled?: boolean
   engineSwitchAvailable?: boolean
+  enginePickerOpen?: boolean
+  selectingEngineId?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'startRace'): void
-  (e: 'switchRaceEngine', sessionId: string): void
+  (e: 'toggleRaceEnginePicker', sessionId: string): void
+  (e: 'selectRaceEngine', sessionId: string, engineId: string): void
 }>()
 
 const { t } = useI18n()
 const { projects } = useProjects()
-const { collapseColumn, removeSession, removeRaceLane, draftCwd, engineDraft, findLane, state, openSession, createDraftSession, registerEngineDraft, registerFork, forkSourceOf } = useWorkbench()
+const { collapseColumn, removeSession, removeRaceLane, pendingTaskCwd, draftCwd, engineDraft, findLane, state, openSession, createDraftSession, registerEngineDraft, registerFork, forkSourceOf } = useWorkbench()
 const { engines } = useEngines()
 
 provide('columnIndex', computed(() => props.index))
@@ -64,6 +69,7 @@ const raceEngineSwitchHint = computed(() => {
 
 const rcLoading = ref(false)
 const engineActionLoading = ref(false)
+const pendingTask = computed(() => pendingTaskCwd(props.column.sessionId))
 const sessionSummary = computed<SessionSummary | null>(() => {
   const persisted = projects.value
     .flatMap(project => project.sessions)
@@ -93,7 +99,8 @@ const sessionSummary = computed<SessionSummary | null>(() => {
     context_window: null,
   }
 })
-const useNativeDetail = computed(() => !sessionSummary.value?.engine || usesNativeSessionSurface(sessionSummary.value.engine))
+const useNativeDetail = computed(() => !pendingTask.value
+  && (!sessionSummary.value?.engine || usesNativeSessionSurface(sessionSummary.value.engine)))
 const engineDescriptor = computed(() => {
   const instance = sessionSummary.value?.engine
   return instance ? engines.value.find(item => sameInstance(item.instance, instance)) ?? null : null
@@ -111,7 +118,7 @@ const enginePresentation = computed(() => resolveEnginePresentation(
   useNativeDetail.value ? 'claude' : sessionSummary.value?.engine?.engineId,
   sessionSummary.value?.engine_name ?? (useNativeDetail.value ? 'Claude Code' : null),
 ))
-const engineName = computed(() => enginePresentation.value.displayName)
+const engineName = computed(() => pendingTask.value ? null : enginePresentation.value.displayName)
 const engineIdentityStyle = computed(() => {
   const color = `var(--${enginePresentation.value.accent})`
   return {
@@ -170,7 +177,7 @@ const { settings, setChrome } = useSessionSettings(sid)
 const runConfigCwd = computed(() => {
   const session = projects.value.flatMap(project => project.sessions)
     .find(item => item.id === props.column.sessionId)
-  return session?.cwd ?? draftCwd(props.column.sessionId) ?? null
+  return session?.cwd ?? pendingTask.value ?? draftCwd(props.column.sessionId) ?? null
 })
 const { runConfig } = useRunConfig(settings, runConfigCwd)
 
@@ -179,6 +186,7 @@ const projectName = computed(() => {
     if (p.sessions.some(s => s.id === props.column.sessionId))
       return fileName(p.display_path)
   }
+  if (pendingTask.value) return fileName(pendingTask.value)
   const cwd = draftCwd(props.column.sessionId)
   return cwd ? fileName(cwd) : engineDraft(props.column.sessionId)?.cwd ? fileName(engineDraft(props.column.sessionId)!.cwd) : null
 })
@@ -188,7 +196,7 @@ const title = computed(() => {
     const s = p.sessions.find(s => s.id === props.column.sessionId)
     if (s) return displayTitle(s, getMeta(s.id)?.title)
   }
-  if (draftCwd(props.column.sessionId) || engineDraft(props.column.sessionId)) return t('session.newSessionTitle')
+  if (pendingTask.value || draftCwd(props.column.sessionId) || engineDraft(props.column.sessionId)) return t('session.newSessionTitle')
   return props.column.sessionId.slice(0, 8)
 })
 
@@ -210,7 +218,7 @@ async function onFork() {
       registerEngineDraft(sessionId, {
         reference: created.session,
         project: session.project_reference,
-        engineName: session.engine_name || engineName.value,
+        engineName: session.engine_name || engineName.value || session.engine?.engineId || 'Agent',
         cwd: session.cwd,
         attachedChannel,
         attachedCapabilityFingerprint: created.capabilityFingerprint,
@@ -251,7 +259,7 @@ async function onNewSession() {
       registerEngineDraft(sessionId, {
         reference: created.session,
         project: session.project_reference,
-        engineName: session.engine_name || engineName.value,
+        engineName: session.engine_name || engineName.value || session.engine?.engineId || 'Agent',
         cwd,
         attachedChannel,
         attachedCapabilityFingerprint: created.capabilityFingerprint,
@@ -312,13 +320,15 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         v-if="engineName && isRace"
         type="button"
         class="workbench-column-engine-badge workbench-column-engine-switch"
+        :class="{ 'workbench-column-engine-switch-active': enginePickerOpen }"
         :disabled="mutationDisabled || raceEngineSwitchLocked || !engineSwitchAvailable"
         :style="engineIdentityStyle"
         v-tooltip="raceEngineSwitchHint"
         :title="raceEngineSwitchHint"
         :aria-label="raceEngineSwitchHint"
+        :aria-expanded="enginePickerOpen"
         @pointerdown.stop
-        @click.stop="emit('switchRaceEngine', column.sessionId)"
+        @click.stop="emit('toggleRaceEnginePicker', column.sessionId)"
       >
         <span v-if="engineId === 'codex'" class="i-simple-openai h-3.5 w-3.5" />
         <span v-else-if="engineId === 'claude' || engineId === 'claude-code'" class="i-simple-anthropic h-3.5 w-3.5" />
@@ -433,7 +443,19 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
     </div>
 
     <div class="flex-1 min-h-0">
+      <NewTaskEnginePicker
+        v-if="pendingTask"
+        :session-id="column.sessionId"
+        :cwd="pendingTask"
+      />
+      <RaceEnginePicker
+        v-else-if="isRace && enginePickerOpen"
+        :current-engine-id="engineId"
+        :selecting-engine-id="selectingEngineId ?? null"
+        @select="emit('selectRaceEngine', column.sessionId, $event)"
+      />
       <UnifiedSessionDetail
+        v-else
         :session="sessionSummary"
         :session-id="column.sessionId"
         mode="workbench"
@@ -465,6 +487,9 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
   transition: opacity 150ms ease, filter 150ms ease;
 }
 .workbench-column-engine-switch:hover:not(:disabled) { filter: brightness(0.94); }
+.workbench-column-engine-switch-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 20%, transparent);
+}
 .workbench-column-engine-switch:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 1px;

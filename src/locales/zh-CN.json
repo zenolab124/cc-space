@@ -293,6 +293,16 @@
       "show": "显示监控列",
       "hide": "收起监控列"
     },
+    "enginePicker": {
+      "title": "选择本次任务使用的 Agent",
+      "description": "工作目录已经准备好。选择一个 Agent 后，就可以输入第一条消息。",
+      "claudeDescription": "使用 Claude Code 开始一个空白会话",
+      "codexDescription": "使用 Codex 开始一个空白会话",
+      "unavailable": "当前不可用",
+      "starting": "正在创建会话…",
+      "current": "当前引擎",
+      "expired": "这个新任务已不在当前工作台中"
+    },
     "columns": {
       "empty": "从左列选择会话展开",
       "noSpace": "空间不足，已收起:{names}",
@@ -323,6 +333,8 @@
       "closeLane": "关闭赛道",
       "laneLabel": "赛道 {n}",
       "switchEngine": "切换引擎（新引擎将从空白会话开始）",
+      "chooseEngine": "选择此赛道的 Agent",
+      "chooseEngineDescription": "切换后此赛道将从空白会话开始；发送首条消息后将锁定 Agent。",
       "engineSwitchLocked": "首条消息已发出，无法切换引擎",
       "engineSwitchUnavailable": "没有其他可用引擎",
       "stopAll": "全部停止",

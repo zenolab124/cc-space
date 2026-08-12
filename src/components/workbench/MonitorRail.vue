@@ -8,19 +8,13 @@ import { useUiState } from '@/composables/useUiState'
 import { useNotifications } from '@/composables/useNotifications'
 import { fileName } from '@/utils/path'
 import MonitorCard from './MonitorCard.vue'
-import { createSession, engineHealth, listEngines } from '@/engines/client'
-import { instanceKey } from '@/engines/identity'
-import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
-import { channelSupportsEngine, refreshChannels, useChannels } from '@/composables/useChannels'
-import type { EngineDescriptor, ProjectRef } from '@/engines/types'
 import type { Project } from '@/types'
 
 const { t } = useI18n()
-const { activeTab, createDraftSession, registerEngineDraft } = useWorkbench()
+const { activeTab, createPendingTask } = useWorkbench()
 const { projects } = useProjects()
 const { switchSection } = useUiState()
 const { notifyTransient } = useNotifications()
-const { channels, defaultSessionChannels } = useChannels()
 
 const expandedSet = computed(() => new Set(activeTab.value.columns.map(c => c.sessionId)))
 
@@ -31,75 +25,43 @@ const hint = computed(() => {
 })
 
 const showPopover = ref(false)
-const engineChoices = ref<EngineDescriptor[]>([])
-const selectedEngineKey = ref('')
-const engineSelectionOverridden = ref(false)
 const creating = ref(false)
 const popoverRef = ref<HTMLElement>()
 const triggerRef = ref<HTMLButtonElement>()
 
-const recentProjects = computed(() => projects.value.slice(0, 5))
+interface ProjectOption {
+  id: string
+  cwd: string
+  lastActive: number
+}
+
+/** 双引擎项目按工作目录合并；同目录只保留最近活跃的一项。 */
+const projectOptions = computed<ProjectOption[]>(() => {
+  const options = new Map<string, ProjectOption>()
+  for (const project of projects.value) {
+    const cwd = projectCwd(project)
+    if (!cwd) continue
+    const key = cwd.replace(/[\\/]+$/, '')
+    const lastActive = project.last_active ?? 0
+    const current = options.get(key)
+    if (!current || lastActive > current.lastActive) {
+      options.set(key, { id: key, cwd, lastActive })
+    }
+  }
+  return [...options.values()].sort((a, b) => b.lastActive - a.lastActive)
+})
+
+const recentProjects = computed(() => projectOptions.value.slice(0, 5))
 // 二级面板只列一级没展示的,不重复
-const moreProjects = computed(() => projects.value.slice(5))
+const moreProjects = computed(() => projectOptions.value.slice(5))
 const hasMore = computed(() => moreProjects.value.length > 0)
 const showAllProjects = ref(false)
 const subMenuRef = ref<HTMLElement>()
 const subMenuStyle = ref<Record<string, string>>({})
 let subMenuLeaveTimer = 0
-const RECENT_ENGINE_KEY = 'monet-recent-engine-by-project'
-
-function loadRecentEngines(): Record<string, string> {
-  try {
-    const value = JSON.parse(localStorage.getItem(RECENT_ENGINE_KEY) ?? '{}')
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-  } catch (_) {
-    return {}
-  }
-}
-
-const recentEngineByProject = ref<Record<string, string>>(loadRecentEngines())
 
 function projectCwd(project: Project): string | null {
   return project.sessions.find(session => session.cwd)?.cwd ?? project.source_path ?? null
-}
-
-function engineForProject(project: Project): EngineDescriptor | undefined {
-  const selected = engineChoices.value.find(item => instanceKey(item.instance) === selectedEngineKey.value)
-  if (engineSelectionOverridden.value && selected) return selected
-  const cwd = projectCwd(project)
-  const remembered = cwd ? recentEngineByProject.value[cwd] : null
-  return engineChoices.value.find(item => instanceKey(item.instance) === remembered)
-    ?? engineChoices.value.find(item => project.engine && instanceKey(item.instance) === instanceKey(project.engine))
-    ?? selected
-    ?? engineChoices.value[0]
-}
-
-function rememberEngine(cwd: string, engine: EngineDescriptor) {
-  recentEngineByProject.value = {
-    ...recentEngineByProject.value,
-    [cwd]: instanceKey(engine.instance),
-  }
-  try {
-    localStorage.setItem(RECENT_ENGINE_KEY, JSON.stringify(recentEngineByProject.value))
-  } catch (_) {}
-}
-
-function onEngineSelectionChanged() {
-  engineSelectionOverridden.value = true
-}
-
-function defaultChannelForEngine(engine: EngineDescriptor): string | null {
-  const engineId = engine.instance.engineId
-  if (engineId !== 'claude-code' && engineId !== 'codex') return null
-  const channelId = defaultSessionChannels.value[engineId]
-  if (!channelId) return null
-  const channel = channels.value.find(item => item.id === channelId)
-  return channel?.enabled
-    && channel.scope !== 'agent-only'
-    && channelSupportsEngine(channel, engineId)
-    ? channelId
-    : null
 }
 
 function cancelSubMenuClose() {
@@ -142,12 +104,10 @@ async function positionSubMenu() {
 
 function togglePopover() {
   showPopover.value = !showPopover.value
-  if (showPopover.value) engineSelectionOverridden.value = false
 }
 
 function closePopover() {
   showPopover.value = false
-  engineSelectionOverridden.value = false
   showAllProjects.value = false
   subMenuStyle.value = {}
 }
@@ -161,49 +121,10 @@ function onDocumentClick(e: MouseEvent) {
   }
 }
 
-async function createForEngine(engine: EngineDescriptor, project: ProjectRef, cwd: string) {
-  if (usesNativeSessionSurface(engine.instance)) {
-    createDraftSession(cwd)
-  } else {
-    const attachedChannel = defaultChannelForEngine(engine)
-    const created = await createSession(project, cwd, attachedChannel ? { channelId: attachedChannel } : {})
-    const sessionId = sessionUiId(created.session)
-    registerEngineDraft(sessionId, {
-      reference: created.session,
-      project,
-      engineName: engine.displayName,
-      cwd,
-      attachedChannel,
-      attachedCapabilityFingerprint: created.capabilityFingerprint,
-    })
-  }
-  notifyTransient(t('workbench.rail.newSessionReady'), t('workbench.rail.newSessionHint'))
-}
-
-async function selectProject(project: Project) {
-  const engine = engineForProject(project)
-  const cwd = projectCwd(project)
-  if (!engine || !cwd || creating.value) return
-  const matchingProject = projects.value.find(candidate =>
-    candidate.reference
-    && candidate.engine
-    && instanceKey(candidate.engine) === instanceKey(engine.instance)
-    && projectCwd(candidate) === cwd)
-  const reference = matchingProject?.reference
-    ?? (project.engine && instanceKey(project.engine) === instanceKey(engine.instance)
-      ? project.reference
-      : { engine: engine.instance, nativeId: cwd })
-  if (!reference) return
-  creating.value = true
-  try {
-    await createForEngine(engine, reference, cwd)
-    rememberEngine(cwd, engine)
-    closePopover()
-  } catch (cause) {
-    notifyTransient(t('common.newSessionFailed'), String(cause))
-  } finally {
-    creating.value = false
-  }
+function selectProject(project: ProjectOption) {
+  if (creating.value) return
+  createPendingTask(project.cwd)
+  closePopover()
 }
 
 function goToArchive() {
@@ -213,34 +134,19 @@ function goToArchive() {
 
 async function pickFolder() {
   closePopover()
-  const selected = await open({ directory: true, multiple: false })
-  if (selected) {
-    const engine = engineChoices.value.find(item => instanceKey(item.instance) === selectedEngineKey.value)
-    if (!engine) return
-    creating.value = true
-    try {
-      await createForEngine(engine, { engine: engine.instance, nativeId: selected }, selected)
-      rememberEngine(selected, engine)
-    } catch (cause) {
-      notifyTransient(t('common.newSessionFailed'), String(cause))
-    } finally {
-      creating.value = false
-    }
+  creating.value = true
+  try {
+    const selected = await open({ directory: true, multiple: false })
+    if (selected) createPendingTask(selected)
+  } catch (cause) {
+    notifyTransient(t('common.openFailed'), String(cause))
+  } finally {
+    creating.value = false
   }
 }
 
-onMounted(async () => {
+onMounted(() => {
   document.addEventListener('mousedown', onDocumentClick)
-  try {
-    await refreshChannels()
-    const candidates = (await listEngines()).filter(item => item.enabled && item.capabilities.runtime?.create)
-    const checks = await Promise.allSettled(candidates.map(item => engineHealth(item.instance)))
-    engineChoices.value = candidates.filter((_, index) => {
-      const check = checks[index]
-      return check?.status === 'fulfilled' && check.value.runtime.available
-    })
-    selectedEngineKey.value = instanceKey(engineChoices.value[0]?.instance ?? { engineId: '', instanceId: '' })
-  } catch (_) {}
 })
 onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
 </script>
@@ -283,12 +189,6 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
           class="absolute bottom-full left-0 right-0 mb-1.5 z-50
                  rounded border border-border shadow-paper-lifted bg-popover"
         >
-          <label v-if="engineChoices.length > 1" class="mx-2.5 my-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-            <span>{{ $t('common.newSessionEngine') }}</span>
-            <select v-model="selectedEngineKey" class="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-1 text-[11px] text-foreground" @change="onEngineSelectionChanged">
-              <option v-for="engine in engineChoices" :key="instanceKey(engine.instance)" :value="instanceKey(engine.instance)">{{ engine.displayName }}</option>
-            </select>
-          </label>
           <!-- 最近项目 -->
           <div v-if="recentProjects.length" class="py-1">
             <div class="px-2.5 py-1 text-[10px] text-muted-foreground/70 tracking-wider">
@@ -304,8 +204,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
               @click="selectProject(p)"
             >
               <span class="i-carbon-folder w-3.5 h-3.5 shrink-0 opacity-60" />
-              <span class="truncate">{{ fileName(p.display_path) }}</span>
-              <span class="ml-auto shrink-0 text-[9px] opacity-55">{{ engineForProject(p)?.displayName ?? p.engine_name }}</span>
+              <span class="truncate">{{ fileName(p.cwd) }}</span>
             </button>
 
             <!-- 更多项目（二级,去重:只列一级之外的） -->
@@ -345,8 +244,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
                 >
                   <span class="i-carbon-folder w-3.5 h-3.5 shrink-0 opacity-60 mt-0.5 self-start" />
                   <span class="min-w-0">
-                    <span class="block text-xs truncate">{{ fileName(p.display_path) }}</span>
-                    <span class="block text-[10px] text-muted-foreground/50 truncate">{{ p.display_path }}</span>
+                    <span class="block text-xs truncate">{{ fileName(p.cwd) }}</span>
+                    <span class="block text-[10px] text-muted-foreground/50 truncate">{{ p.cwd }}</span>
                   </span>
                 </button>
               </div>
@@ -372,7 +271,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
                      hover:bg-muted hover:text-foreground transition-colors
                      flex items-center gap-2"
               @click="pickFolder"
-              :disabled="creating || engineChoices.length === 0"
+              :disabled="creating"
             >
               <span class="i-carbon-folder-add w-3.5 h-3.5 shrink-0 opacity-60" />
               <span>{{ $t('workbench.rail.pickFolder') }}</span>

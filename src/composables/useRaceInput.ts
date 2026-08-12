@@ -193,17 +193,15 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     return null
   }
 
-  async function switchLaneEngine(sessionId: string) {
-    if (raceMutationLoading.value || broadcasting.value) return
+  async function switchLaneEngine(sessionId: string, targetEngineId: string): Promise<boolean> {
+    if (raceMutationLoading.value || broadcasting.value) return false
     const race = tab.value.race
     const choices = switchableEngines.value
-    if (!race || race.engineSwitchLocked || choices.length < 2) return
+    if (!race || race.engineSwitchLocked || choices.length < 2) return false
     const current = currentLaneEngine(sessionId, choices)
-    const currentIndex = current
-      ? choices.findIndex(engine => sameInstance(engine.instance, current.instance))
-      : -1
-    const target = choices[(currentIndex + 1) % choices.length]
-    if (!target || (current && sameInstance(target.instance, current.instance))) return
+    const target = choices.find(engine => engine.instance.engineId === targetEngineId)
+    if (!target) return false
+    if (current && sameInstance(target.instance, current.instance)) return true
 
     raceError.value = null
     raceMutationLoading.value = true
@@ -243,11 +241,13 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
         replacementSessionId = null
         throw new Error(i18n.global.t('common.runtimeUnavailable'))
       }
+      return true
     } catch (error) {
       if (replacementSessionId && !tab.value.race?.lanes.some(lane => lane.sessionId === replacementSessionId)) {
         discardStagedSession(replacementSessionId)
       }
       raceError.value = errorMessage(error)
+      return false
     } finally {
       raceMutationLoading.value = false
     }

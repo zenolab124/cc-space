@@ -71,6 +71,8 @@ interface WorkbenchState {
   tabSeq: number
   /** 展开序号计数 */
   openSeq: number
+  /** 已选工作目录、尚未选择运行引擎的新任务占位(sessionId → cwd)。 */
+  pendingTasks: Record<string, string>
   /**
    * 应用内新建、尚未落盘的草稿会话(sessionId → cwd)。
    * 首条消息经 CLI --session-id 落盘后由 pruneDrafts 清理;
@@ -168,7 +170,16 @@ function createTabObject(seq: number): WorkbenchTab {
 
 function createInitialState(): WorkbenchState {
   const tab = createTabObject(1)
-  return { tabs: [tab], activeTabId: tab.id, tabSeq: 1, openSeq: 0, drafts: {}, engineDrafts: {}, forkIntents: {} }
+  return {
+    tabs: [tab],
+    activeTabId: tab.id,
+    tabSeq: 1,
+    openSeq: 0,
+    pendingTasks: {},
+    drafts: {},
+    engineDrafts: {},
+    forkIntents: {},
+  }
 }
 
 // ---- 持久化(NFR-002):任一变更后同步落盘;损坏时回退默认并提示 ----
@@ -260,6 +271,12 @@ function loadState(): WorkbenchState | null {
       activeTabId = tabs[0].id
       stateRepairCount += 1
     }
+    const pendingTasks: Record<string, string> = {}
+    if (parsed.pendingTasks && typeof parsed.pendingTasks === 'object' && !Array.isArray(parsed.pendingTasks)) {
+      for (const [key, value] of Object.entries(parsed.pendingTasks)) {
+        if (typeof value === 'string' && value) pendingTasks[key] = sanitizeCwd(value)
+      }
+    }
     // drafts 为 v2.1.x 增量字段:旧数据缺省为 {},值非法则丢弃单条不作废整体
     const drafts: Record<string, string> = {}
     if (parsed.drafts && typeof parsed.drafts === 'object' && !Array.isArray(parsed.drafts)) {
@@ -300,6 +317,7 @@ function loadState(): WorkbenchState | null {
       activeTabId,
       tabSeq: typeof parsed.tabSeq === 'number' ? parsed.tabSeq : tabs.length,
       openSeq: typeof parsed.openSeq === 'number' ? parsed.openSeq : 0,
+      pendingTasks,
       drafts,
       engineDrafts,
       forkIntents,
@@ -505,6 +523,7 @@ function replaceWorkbenchSession(sessionId: string, replacementSessionId: string
   }
   tab.sessionIds[sessionIndex] = replacementSessionId
   teardownSession(sessionId)
+  delete state.value.pendingTasks[sessionId]
   delete state.value.drafts[sessionId]
   delete state.value.forkIntents[sessionId]
   return true
@@ -624,6 +643,27 @@ function createDraftSession(cwd: string): string {
   return sessionId
 }
 
+/** 先选择工作目录、再在正文区选择引擎的新任务占位。 */
+function createPendingTask(cwd: string): string {
+  const sessionId = crypto.randomUUID()
+  state.value.pendingTasks[sessionId] = cwd
+  openSession(sessionId)
+  return sessionId
+}
+
+/** 将中立占位原位升级为 Claude Code 原生草稿，保留列与 sessionId。 */
+function promotePendingTaskToDraft(sessionId: string): boolean {
+  const cwd = state.value.pendingTasks[sessionId]
+  if (!cwd) return false
+  state.value.drafts[sessionId] = cwd
+  delete state.value.pendingTasks[sessionId]
+  return true
+}
+
+function pendingTaskCwd(sessionId: string): string | null {
+  return state.value.pendingTasks[sessionId] ?? null
+}
+
 /** 登记原生引擎空白草稿但不改变 Tab；赛马切换会原位接管列归属。 */
 function stageDraftSession(cwd: string, sessionId = crypto.randomUUID()): string {
   state.value.drafts[sessionId] = cwd
@@ -676,6 +716,9 @@ function forkSourceOf(sessionId: string): string | null {
  * 由 App 层在 projects 刷新后调用。分叉意图同生命周期一并收割
  */
 function pruneDrafts(isPersisted: (sessionId: string) => boolean) {
+  for (const sid of Object.keys(state.value.pendingTasks)) {
+    if (!findSession(sid)) delete state.value.pendingTasks[sid]
+  }
   for (const sid of Object.keys(state.value.drafts)) {
     if (isPersisted(sid) || !findSession(sid)) {
       delete state.value.drafts[sid]
@@ -827,13 +870,15 @@ function updateColumnSize(tabId: string, index: number, desiredLeftWidth: number
 function teardownSession(sessionId: string) {
   const stillReferenced = state.value.tabs.some(t => t.sessionIds.includes(sessionId))
   if (!stillReferenced) {
+    const pendingTask = state.value.pendingTasks[sessionId]
     const engineSession = resolveSessionRef(sessionId) ?? state.value.engineDrafts[sessionId]?.reference
     if (engineSession) invoke('engine_close_session', { session: engineSession }).catch(() => {})
-    else invoke('close_session', { sessionId }).catch(() => {})
+    else if (!pendingTask) invoke('close_session', { sessionId }).catch(() => {})
     // 会话彻底离开工作台 = 关闭语义:其挂载的运行命令一并停止(切走/收起不触发)
     useRunners().stopAllForSession(sessionId).catch(() => {})
     evictSessionTransients(sessionId)
     clearEngineRunConfig(sessionId)
+    delete state.value.pendingTasks[sessionId]
     delete state.value.engineDrafts[sessionId]
   }
 }
@@ -873,6 +918,9 @@ export function useWorkbench() {
     setActiveTab,
     reorderSessions,
     openSession,
+    createPendingTask,
+    promotePendingTaskToDraft,
+    pendingTaskCwd,
     createDraftSession,
     stageDraftSession,
     discardStagedSession,

@@ -31,7 +31,7 @@ const props = defineProps<{
 const sid = computed(() => props.sessionId)
 
 const { projects } = useProjects()
-const { activeTab, expandSession, removeSession, flashSessionId, draftCwd, engineDraft } = useWorkbench()
+const { activeTab, expandSession, removeSession, flashSessionId, pendingTaskCwd, draftCwd, engineDraft } = useWorkbench()
 const { retrySession } = useStreaming()
 const { respondRequest } = usePermissionRequests()
 const { notifyTransient, sessionTitle, dismissError } = useNotifications()
@@ -66,7 +66,7 @@ const draft = computed(() => {
   if (summary.value) return null
   const genericDraft = engineDraft(props.sessionId)
   if (genericDraft) return { projectName: fileName(genericDraft.cwd), engineName: genericDraft.engineName }
-  const cwd = draftCwd(props.sessionId)
+  const cwd = pendingTaskCwd(props.sessionId) ?? draftCwd(props.sessionId)
   return cwd ? { projectName: fileName(cwd), engineName: null } : null
 })
 

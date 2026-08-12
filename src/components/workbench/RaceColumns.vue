@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkbench, setRightZoneWidth } from '@/composables/useWorkbench'
 import { useHorizontalWheelScroll } from '@/composables/useHorizontalWheelScroll'
@@ -47,6 +47,33 @@ const {
 
 const containerRef = ref<HTMLElement>()
 const showHud = ref(false)
+const enginePickerSessionId = ref<string | null>(null)
+const selectingRaceEngine = ref<{ sessionId: string; engineId: string } | null>(null)
+
+function toggleRaceEnginePicker(sessionId: string) {
+  if (!canSwitchRaceEngine.value || broadcasting.value || raceMutationLoading.value) return
+  enginePickerSessionId.value = enginePickerSessionId.value === sessionId ? null : sessionId
+}
+
+function selectingEngineForLane(sessionId: string): string | null {
+  return selectingRaceEngine.value?.sessionId === sessionId
+    ? selectingRaceEngine.value.engineId
+    : null
+}
+
+async function selectRaceEngine(sessionId: string, engineId: string) {
+  if (selectingRaceEngine.value || broadcasting.value || raceMutationLoading.value) return
+  selectingRaceEngine.value = { sessionId, engineId }
+  try {
+    if (await switchLaneEngine(sessionId, engineId)) enginePickerSessionId.value = null
+  } finally {
+    selectingRaceEngine.value = null
+  }
+}
+
+watch(canSwitchRaceEngine, (available) => {
+  if (!available) enginePickerSessionId.value = null
+})
 
 function getSessionSummary(sessionId: string): SessionSummary | null {
   for (const p of projects.value) {
@@ -121,7 +148,10 @@ function onInputKeydown(e: KeyboardEvent) {
             :index="i"
             :mutation-disabled="broadcasting || raceMutationLoading"
             :engine-switch-available="canSwitchRaceEngine"
-            @switch-race-engine="switchLaneEngine"
+            :engine-picker-open="enginePickerSessionId === col.sessionId"
+            :selecting-engine-id="selectingEngineForLane(col.sessionId)"
+            @toggle-race-engine-picker="toggleRaceEnginePicker"
+            @select-race-engine="selectRaceEngine"
           />
 
           <!-- 列右边缘 resize 手柄(与普通多列同款,Shift 调全局最小列宽) -->

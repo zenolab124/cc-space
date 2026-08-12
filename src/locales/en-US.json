@@ -293,6 +293,16 @@
       "show": "Show monitor rail",
       "hide": "Hide monitor rail"
     },
+    "enginePicker": {
+      "title": "Choose an agent for this task",
+      "description": "The working folder is ready. Choose an agent, then send your first message.",
+      "claudeDescription": "Start a blank session with Claude Code",
+      "codexDescription": "Start a blank session with Codex",
+      "unavailable": "Currently unavailable",
+      "starting": "Creating session…",
+      "current": "Current agent",
+      "expired": "This new task is no longer in the current workbench"
+    },
     "columns": {
       "empty": "Select a session from the left rail to expand",
       "noSpace": "Not enough space, collapsed: {names}",
@@ -323,6 +333,8 @@
       "closeLane": "Close Lane",
       "laneLabel": "Lane {n}",
       "switchEngine": "Switch engine (the new engine starts with an empty session)",
+      "chooseEngine": "Choose an agent for this lane",
+      "chooseEngineDescription": "Switching starts this lane with a blank session. The agent locks after the first message.",
       "engineSwitchLocked": "Engine switching is locked after the first message",
       "engineSwitchUnavailable": "No other engine is available",
       "stopAll": "Stop All",
