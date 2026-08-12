@@ -54,7 +54,7 @@ import { groupConversationRecords } from '@/engines/conversationGroups'
 import { isRenderableEngineSegment } from '@/engines/processGroups'
 import { measureElement as measureVirtualElement, useVirtualizer, type Virtualizer } from '@tanstack/vue-virtual'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
-import { shouldCompensateVirtualItemSizeChange } from '@/lib/sessionScrollPolicy'
+import { hasUpwardScrollRange, shouldCompensateVirtualItemSizeChange } from '@/lib/sessionScrollPolicy'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -613,24 +613,43 @@ function stopTimelineFollow() {
   invalidateTimelineScrollRequests()
 }
 
+function resumeTimelineFollowIfAtBottom(element: HTMLElement, intentAt: number): boolean {
+  if (
+    followTimeline.value
+    || viewportElement.value !== element
+    || timelineDownwardIntentAt !== intentAt
+    || intentAt <= timelineUpwardIntentAt
+    || performance.now() - intentAt > TIMELINE_SCROLL_INTENT_MS
+    || timelineDistanceFromBottom(element) > TIMELINE_BOTTOM_THRESHOLD
+  ) return false
+  resumeTimelineFollow()
+  return true
+}
+
 function onTimelineWheel(event: WheelEvent) {
   if (event.deltaY < 0) {
+    const element = viewportElement.value
+    // 顶部或内容未溢出时没有产生阅读位移，不能让触控板噪声关闭跟随。
+    if (!element || !hasUpwardScrollRange(element)) return
     timelineUpwardIntentAt = performance.now()
     stopTimelineFollow()
     return
   }
   if (event.deltaY <= 0) return
-  timelineDownwardIntentAt = performance.now()
+  const intentAt = performance.now()
+  timelineDownwardIntentAt = intentAt
   const element = viewportElement.value
+  if (followTimeline.value || !element) return
   // 已在底部时向下滚不会再触发 scroll，直接恢复后续内容跟随。
-  if (
-    !followTimeline.value
-    && element
-    && timelineDistanceFromBottom(element) <= TIMELINE_BOTTOM_THRESHOLD
-  ) {
-    invalidateTimelineScrollRequests()
-    followTimeline.value = true
-  }
+  if (resumeTimelineFollowIfAtBottom(element, intentAt)) return
+
+  // 触控板的最后一小段惯性位移可能没有形成足够大的 scroll delta；等浏览器
+  // 应用本帧原生滚动后再复核一次，确保物理触底必然恢复跟随。
+  const generation = timelineFollowGeneration
+  requestAnimationFrame(() => {
+    if (generation !== timelineFollowGeneration) return
+    resumeTimelineFollowIfAtBottom(element, intentAt)
+  })
 }
 
 function onTimelineScroll(event: Event) {
@@ -642,7 +661,7 @@ function onTimelineScroll(event: Event) {
   lastTimelineScrollTop = nextScrollTop
 
   // 覆盖滚动条拖拽和键盘上滚；宁可停止跟随，也不能让排队请求覆盖阅读位置。
-  if (delta < -0.5 && !reachedBottom) {
+  if (delta < -0.5 && !reachedBottom && hasUpwardScrollRange(element)) {
     timelineUpwardIntentAt = performance.now()
     if (followTimeline.value) stopTimelineFollow()
     return
@@ -656,8 +675,7 @@ function onTimelineScroll(event: Event) {
     && timelineDownwardIntentAt > timelineUpwardIntentAt
     && performance.now() - timelineDownwardIntentAt <= TIMELINE_SCROLL_INTENT_MS
   ) {
-    invalidateTimelineScrollRequests()
-    followTimeline.value = true
+    resumeTimelineFollow()
   }
 }
 
@@ -696,6 +714,8 @@ function requestTimelineFollow(allowLayoutReset = false) {
         !allowLayoutReset
         && element.scrollTop < scheduledScrollTop - 0.5
         && timelineDistanceFromBottom(element) > TIMELINE_BOTTOM_THRESHOLD
+        && hasUpwardScrollRange(element)
+        && performance.now() - timelineUpwardIntentAt <= TIMELINE_SCROLL_INTENT_MS
       ) {
         timelineUpwardIntentAt = performance.now()
         stopTimelineFollow()

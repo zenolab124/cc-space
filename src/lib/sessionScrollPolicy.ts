@@ -46,6 +46,31 @@ export function canApplyScrollFollowToken(
     && token.epoch === state.epoch
 }
 
+export interface ScrollViewportGeometry {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+}
+
+/**
+ * wheel 只有在视口确实能继续向上移动时，才足以表达“离开底部阅读”的意图。
+ * 内容未溢出或仍停在顶部时，触控板噪声不应关闭流式跟随。
+ */
+export function hasUpwardScrollRange(
+  geometry: ScrollViewportGeometry,
+  tolerance = 0.5,
+): boolean {
+  const { scrollTop, scrollHeight, clientHeight } = geometry
+  if (
+    !Number.isFinite(scrollTop)
+    || !Number.isFinite(scrollHeight)
+    || !Number.isFinite(clientHeight)
+    || !Number.isFinite(tolerance)
+    || tolerance < 0
+  ) return false
+  return scrollHeight - clientHeight > tolerance && scrollTop > tolerance
+}
+
 interface MessageGroupKeyRecord {
   uuid?: string | null
 }

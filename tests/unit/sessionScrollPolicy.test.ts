@@ -3,6 +3,7 @@ import {
   canApplyScrollFollowToken,
   captureScrollFollowToken,
   createScrollFollowState,
+  hasUpwardScrollRange,
   shouldCompensateVirtualItemSizeChange,
   stableMessageGroupKey,
   transitionScrollFollow,
@@ -39,6 +40,24 @@ describe('session scroll follow policy', () => {
 
     expect(canApplyScrollFollowToken(resumed, stale)).toBe(false)
     expect(canApplyScrollFollowToken(resumed, current)).toBe(true)
+  })
+
+  it('ignores upward wheel noise until the viewport can actually move upward', () => {
+    expect(hasUpwardScrollRange({
+      scrollTop: 0,
+      scrollHeight: 400,
+      clientHeight: 600,
+    })).toBe(false)
+    expect(hasUpwardScrollRange({
+      scrollTop: 0,
+      scrollHeight: 900,
+      clientHeight: 600,
+    })).toBe(false)
+    expect(hasUpwardScrollRange({
+      scrollTop: 300,
+      scrollHeight: 900,
+      clientHeight: 600,
+    })).toBe(true)
   })
 })
 
