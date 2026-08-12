@@ -169,6 +169,61 @@ export function optimisticUserSourceMeta(): Record<string, unknown> {
   return { [OPTIMISTIC_RECORD]: true }
 }
 
+/** 用 turn/start 的权威返回值收口乐观用户消息，避免依赖通知与 source reload 的先后。 */
+export function bindOptimisticUserTurn(
+  records: ConversationRecord[],
+  recordId: string,
+  turnId: string,
+): ConversationRecord[] {
+  let changed = false
+  const next = records.map(record => {
+    if (
+      record.id !== recordId
+      || record.role !== 'user'
+      || record.sourceMeta[OPTIMISTIC_RECORD] !== true
+      || record.turnId === turnId
+    ) return record
+    changed = true
+    return { ...record, turnId }
+  })
+  return changed ? next : records
+}
+
+/**
+ * 历史源与实时源会独立收敛；按 turn 把实时记录插回历史槽位，不能简单把 live
+ * 拼在末尾，否则局部落账时同一轮会被拆成“回复在上、用户在下”两个组。
+ */
+export function composeRuntimeTimeline(
+  persisted: readonly ConversationRecord[],
+  live: readonly ConversationRecord[],
+): ConversationRecord[] {
+  const merged = [...persisted]
+  for (const record of live) {
+    if (!record.turnId) {
+      merged.push(record)
+      continue
+    }
+
+    const sameTurnIndexes: number[] = []
+    for (let index = 0; index < merged.length; index++) {
+      if (merged[index].turnId === record.turnId) sameTurnIndexes.push(index)
+    }
+    if (sameTurnIndexes.length === 0) {
+      merged.push(record)
+      continue
+    }
+
+    if (record.role === 'user') {
+      const firstResponse = sameTurnIndexes.find(index => merged[index].role !== 'user')
+      const insertAt = firstResponse ?? sameTurnIndexes[sameTurnIndexes.length - 1] + 1
+      merged.splice(insertAt, 0, record)
+    } else {
+      merged.splice(sameTurnIndexes[sameTurnIndexes.length - 1] + 1, 0, record)
+    }
+  }
+  return merged
+}
+
 function textOf(record: ConversationRecord): string {
   return record.segments
     .filter((segment): segment is Extract<EngineSegment, { kind: 'text' }> => segment.kind === 'text')

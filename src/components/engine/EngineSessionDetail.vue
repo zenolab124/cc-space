@@ -11,7 +11,7 @@ import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
-import { hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline } from '@/engines/runtimeTimeline'
+import { bindOptimisticUserTurn, composeRuntimeTimeline, hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline } from '@/engines/runtimeTimeline'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
@@ -168,7 +168,7 @@ function bindDetailRoot(element: HTMLElement | null) {
 
 const reference = computed(() => props.session.reference)
 const nativeSessionId = computed(() => props.session.native_id || props.session.id)
-const allRecords = computed(() => [...records.value, ...liveRecords.value])
+const allRecords = computed(() => composeRuntimeTimeline(records.value, liveRecords.value))
 const asyncTasks = computed(() => buildEngineAsyncTasks(allRecords.value))
 const asyncPanelVisible = computed(() => asyncPanelOpen.value && asyncTasks.value.length > 0 && !!reference.value)
 const {
@@ -1010,7 +1010,8 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
   liveRecords.value.push({
     id: optimisticId,
     session: reference.value,
-    turnId: activeTurnId.value,
+    // startTurn 每次创建新 turn；不能继承可能滞后的运行时快照。
+    turnId: null,
     parentId: null,
     role: 'user',
     timestamp: new Date().toISOString(),
@@ -1022,10 +1023,15 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
     },
   })
   try {
-    await startTurnWithInput(reference.value, item.input, {
+    const turn = await startTurnWithInput(reference.value, item.input, {
       ...(selectedModel.value ? { model: selectedModel.value } : {}),
       ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
     })
+    liveRecords.value = bindOptimisticUserTurn(
+      liveRecords.value,
+      optimisticId,
+      turn.reference.nativeTurnId,
+    )
     return true
   } catch (cause) {
     liveRecords.value = liveRecords.value.filter(record => record.id !== optimisticId)

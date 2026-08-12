@@ -15,6 +15,7 @@ import type {
   SessionActions,
   RuntimeSnapshot,
   RuntimeInputItem,
+  TurnHandle,
 } from './types'
 import { configureUiIntegrations } from './integration'
 
@@ -139,7 +140,7 @@ export function startTurn(session: SessionRef, text: string, options: Record<str
 }
 
 export function startTurnWithInput(session: SessionRef, input: RuntimeInputItem[], options: Record<string, unknown> = {}) {
-  return invoke('engine_start_turn', {
+  return invoke<TurnHandle>('engine_start_turn', {
     session,
     request: { input, options },
   })

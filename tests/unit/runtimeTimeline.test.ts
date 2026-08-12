@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bindOptimisticUserTurn,
+  composeRuntimeTimeline,
   hasLiveTurn,
   optimisticUserSourceMeta,
   reconcileLiveRecords,
@@ -151,6 +153,64 @@ describe('standard runtime timeline reducer', () => {
 })
 
 describe('live history reconciliation', () => {
+  it('binds the exact optimistic prompt to the authoritative started turn', () => {
+    const previous = record({
+      id: 'pending-user-previous',
+      role: 'user',
+      turnId: 'turn-1',
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+    const current = record({
+      id: 'pending-user-current',
+      role: 'user',
+      turnId: null,
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+
+    const bound = bindOptimisticUserTurn(
+      [previous, current],
+      'pending-user-current',
+      'turn-2',
+    )
+    expect(bound.map(item => item.turnId)).toEqual(['turn-1', 'turn-2'])
+  })
+
+  it('inserts a live prompt before a response that landed first', () => {
+    const persisted = [
+      record({ id: 'user-1', role: 'user', turnId: 'turn-1' }),
+      record({ id: 'assistant-1', turnId: 'turn-1' }),
+      record({ id: 'assistant-2', turnId: 'turn-2' }),
+    ]
+    const pendingUser = record({
+      id: 'pending-user-2',
+      role: 'user',
+      turnId: 'turn-2',
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+
+    expect(composeRuntimeTimeline(persisted, [pendingUser]).map(item => item.id)).toEqual([
+      'user-1',
+      'assistant-1',
+      'pending-user-2',
+      'assistant-2',
+    ])
+  })
+
+  it('keeps a new live turn in prompt-then-response order', () => {
+    const pendingUser = record({
+      id: 'pending-user-2',
+      role: 'user',
+      turnId: 'turn-2',
+      sourceMeta: optimisticUserSourceMeta(),
+    })
+    const liveAssistant = record({ id: 'assistant-2', turnId: 'turn-2' })
+
+    expect(composeRuntimeTimeline([], [liveAssistant, pendingUser]).map(item => item.id)).toEqual([
+      'pending-user-2',
+      'assistant-2',
+    ])
+  })
+
   it('hands landed text records to history even when the source normalizes item ids', () => {
     const pendingUser = record({
       id: 'pending-user-1',

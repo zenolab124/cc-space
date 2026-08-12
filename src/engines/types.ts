@@ -151,6 +151,16 @@ export type RuntimeInputItem =
   | { kind: 'image'; mediaType: string; data: string }
   | { kind: 'file'; path: string }
 
+export interface TurnRef {
+  session: SessionRef
+  runtimeId: { 0: string } | string
+  nativeTurnId: string
+}
+
+export interface TurnHandle {
+  reference: TurnRef
+}
+
 export interface InteractionRef {
   session: SessionRef
   runtimeId: { 0: string } | string
