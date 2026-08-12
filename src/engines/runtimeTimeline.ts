@@ -198,7 +198,10 @@ export function composeRuntimeTimeline(
   live: readonly ConversationRecord[],
 ): ConversationRecord[] {
   const merged = [...persisted]
-  for (const record of live) {
+  // source reload 与运行时事件来自两条异步通道。即使 reload 已完成，较晚到达的
+  // live delta 也必须在渲染前再次与历史对账，不能等下一次 reload 才消失。
+  const unlandedLive = reconcileLiveRecords([...persisted], [...live])
+  for (const record of unlandedLive) {
     if (!record.turnId) {
       merged.push(record)
       continue

@@ -196,6 +196,41 @@ describe('live history reconciliation', () => {
     ])
   })
 
+  it('does not render a late live copy after the normalized history record has landed', () => {
+    const persisted = [
+      record({ id: 'item-1', role: 'user', turnId: 'turn-2' }),
+      record({
+        id: 'exec-1',
+        role: 'tool',
+        turnId: 'turn-2',
+        segments: [{
+          kind: 'commandExecution',
+          id: 'exec-1',
+          command: 'check',
+          cwd: null,
+          output: null,
+          status: 'completed',
+        }],
+      }),
+      record({
+        id: 'item-3',
+        turnId: 'turn-2',
+        segments: [{ kind: 'text', text: 'final answer', phase: 'final' }],
+      }),
+    ]
+    const lateLiveCopy = record({
+      id: 'msg-runtime-id',
+      turnId: 'turn-2',
+      segments: [{ kind: 'text', text: 'final answer', phase: 'final' }],
+    })
+
+    expect(composeRuntimeTimeline(persisted, [lateLiveCopy]).map(item => item.id)).toEqual([
+      'item-1',
+      'exec-1',
+      'item-3',
+    ])
+  })
+
   it('keeps a new live turn in prompt-then-response order', () => {
     const pendingUser = record({
       id: 'pending-user-2',
