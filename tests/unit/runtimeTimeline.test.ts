@@ -231,6 +231,27 @@ describe('live history reconciliation', () => {
     ])
   })
 
+  it('hands a partially replayed final response to the complete persisted response', () => {
+    const persisted = [record({
+      id: 'item-3',
+      turnId: 'turn-2',
+      segments: [{
+        kind: 'text',
+        text: 'final answer with the complete remaining text',
+        phase: 'final',
+      }],
+    })]
+    const replayingPrefix = record({
+      id: 'msg-runtime-id',
+      turnId: 'turn-2',
+      segments: [{ kind: 'text', text: 'final answer with the', phase: 'final' }],
+    })
+
+    expect(composeRuntimeTimeline(persisted, [replayingPrefix]).map(item => item.id)).toEqual([
+      'item-3',
+    ])
+  })
+
   it('keeps a new live turn in prompt-then-response order', () => {
     const pendingUser = record({
       id: 'pending-user-2',

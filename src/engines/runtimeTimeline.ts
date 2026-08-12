@@ -245,6 +245,16 @@ function textualFingerprint(record: ConversationRecord): string | null {
   return `${record.role}\u001e${values.join('\u001d')}`
 }
 
+function finalText(record: ConversationRecord): string | null {
+  if (record.role !== 'assistant' || record.segments.length === 0) return null
+  let text = ''
+  for (const segment of record.segments) {
+    if (segment.kind !== 'text' || segment.phase !== 'final') return null
+    text += segment.text
+  }
+  return text || null
+}
+
 function userInputFingerprint(record: ConversationRecord): string | null {
   if (record.role !== 'user') return null
   const optimisticImages = Array.isArray(record.sourceMeta.optimisticImages)
@@ -275,6 +285,18 @@ function landedRecordIndex(
       && textualFingerprint(record) === fingerprint,
     )
     if (semantic >= 0) return semantic
+  }
+
+  // App Server 的历史源可能先返回完整 final，而前端打字机仍在逐段消费同一条
+  // runtime delta。此时 live 只是 persisted 的前缀，也应立即交由历史记录接管。
+  const liveFinalText = finalText(live)
+  if (liveFinalText) {
+    const completed = persisted.findIndex(record => {
+      if (record.turnId !== live.turnId) return false
+      const persistedFinalText = finalText(record)
+      return persistedFinalText?.startsWith(liveFinalText) === true
+    })
+    if (completed >= 0) return completed
   }
 
   if (live.sourceMeta[OPTIMISTIC_RECORD] !== true) return -1
