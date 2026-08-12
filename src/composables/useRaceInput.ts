@@ -25,6 +25,7 @@ import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
 import { instanceKey, sameInstance } from '@/engines/identity'
 import { engineRuntimeSnapshot } from '@/engines/runtimeState'
 import { engineRunConfig, engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig, setEngineRunConfig } from '@/engines/runConfig'
+import { rebindDraftChannel, sameRuntimeChannel } from '@/engines/draftChannel'
 import { useEngines } from '@/engines/useEngines'
 import type { EngineDescriptor, ProjectRef, RuntimeInputItem, RuntimeSnapshot, SessionRef } from '@/engines/types'
 import type { Project } from '@/types'
@@ -106,30 +107,33 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     const { sessionId, context } = target
     if (context.native || !context.runtimeDraft) return target
     const selectedChannel = engineRuntimeChannel(sessionId)
-    if (context.runtimeDraftChannel === selectedChannel) return target
+    const draft = engineDraft(sessionId)
+    if (!draft || sameRuntimeChannel(draft.attachedChannel, selectedChannel)) return target
     if (tab.value.race?.engineSwitchLocked) {
       throw new Error(i18n.global.t('engine.draftChannelLocked'))
     }
     if (!context.project) throw new Error(i18n.global.t('common.runtimeUnavailable'))
 
     const config = engineRunConfig(sessionId)
-    const created = await createSession(context.project, context.cwd, engineRuntimeOptions(sessionId))
-    const replacementSessionId = sessionUiId(created.session)
-    stageEngineDraft(replacementSessionId, {
-      reference: created.session,
-      project: context.project,
-      engineName: context.engineName,
-      cwd: context.cwd,
-      attachedChannel: selectedChannel,
+    const replacement = await rebindDraftChannel({
+      sessionId,
+      draft,
+      selectedChannel,
+      options: engineRuntimeOptions(sessionId),
+      config,
+    }, {
+      createSession,
+      sessionId: sessionUiId,
+      stageDraft: stageEngineDraft,
+      saveConfig: setEngineRunConfig,
+      replaceSession: (source, next) => replaceRaceLaneSession(tab.value.id, source, next),
+      discardDraft: discardStagedSession,
+      replacementError: () => new Error(i18n.global.t('common.runtimeUnavailable')),
     })
-    if (config) setEngineRunConfig(replacementSessionId, config)
-    if (!replaceRaceLaneSession(tab.value.id, sessionId, replacementSessionId)) {
-      discardStagedSession(replacementSessionId)
-      throw new Error(i18n.global.t('common.runtimeUnavailable'))
-    }
+    if (!replacement) return target
     return {
-      sessionId: replacementSessionId,
-      context: laneContext(replacementSessionId),
+      sessionId: replacement.sessionId,
+      context: laneContext(replacement.sessionId),
     }
   }
 

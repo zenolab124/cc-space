@@ -9,6 +9,7 @@ function source(path: string): string {
 describe('multi-engine race architecture', () => {
   it('routes standard-engine race turns through the engine runtime', () => {
     const raceInput = source('../../src/composables/useRaceInput.ts')
+    const draftChannel = source('../../src/engines/draftChannel.ts')
 
     expect(raceInput).toContain('startTurnWithInput(context.reference')
     expect(raceInput).toContain('attachSession(context.reference, engineRuntimeOptions(sessionId))')
@@ -16,9 +17,10 @@ describe('multi-engine race architecture', () => {
     expect(raceInput).toContain('actions.sendWhileRunning.available')
     expect(raceInput).toContain('if (!context.runtimeDraft)')
     expect(raceInput).toContain('async function rebindRuntimeDraftChannel')
+    expect(raceInput).toContain('rebindDraftChannel({')
     expect(raceInput).toContain('targets = await Promise.all(targets.map(rebindRuntimeDraftChannel))')
-    expect(raceInput).toContain('attachedChannel: selectedChannel')
-    expect(raceInput).toContain('replaceRaceLaneSession(tab.value.id, sessionId, replacementSessionId)')
+    expect(draftChannel).toContain('attachedChannel: request.selectedChannel')
+    expect(raceInput).toContain('replaceRaceLaneSession(tab.value.id, source, next)')
     expect(raceInput).toContain("tab.value.race?.engineSwitchLocked")
     expect(raceInput).toContain('let targets: LaneTarget[] = race.lanes.map')
     expect(raceInput).toContain('targets.map(async')

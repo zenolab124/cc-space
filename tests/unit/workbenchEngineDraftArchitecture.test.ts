@@ -21,4 +21,11 @@ describe('standard-engine workbench drafts', () => {
     expect(source).toContain('attachedChannel: string | null')
     expect(source).toContain("typeof draft.attachedChannel === 'string'")
   })
+
+  it('can replace a blank runtime draft without changing its workbench position', () => {
+    expect(source).toContain('function replaceWorkbenchSession')
+    expect(source).toContain('column.sessionId = replacementSessionId')
+    expect(source).toContain('tab.sessionIds[sessionIndex] = replacementSessionId')
+    expect(source).toContain('teardownSession(sessionId)')
+  })
 })

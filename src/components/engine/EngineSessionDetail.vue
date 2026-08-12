@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { relativeTime, type SessionSummary } from '@/types'
 import type { ConversationRecord, InteractionRequest, ModelDescriptor, RuntimeEventEnvelope, RuntimeInputItem, RuntimeSnapshot, SessionActions, SessionRef } from '@/engines/types'
-import { attachSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurnWithInput } from '@/engines/client'
+import { attachSession, createSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurnWithInput } from '@/engines/client'
 import type { SourceChangeEnvelope } from '@/engines/events'
 import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
@@ -47,6 +47,7 @@ import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
+import { rebindDraftChannel, sameRuntimeChannel, type DraftChannelReplacement } from '@/engines/draftChannel'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
 import { groupConversationRecords } from '@/engines/conversationGroups'
@@ -103,7 +104,16 @@ let timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineResizeObserver: ResizeObserver | null = null
 const { getMeta, updateMeta } = useSessionMeta()
-const { openSession, removeSession, findSession, engineDraft, registerEngineDraft } = useWorkbench()
+const {
+  openSession,
+  removeSession,
+  findSession,
+  engineDraft,
+  registerEngineDraft,
+  stageEngineDraft,
+  discardStagedSession,
+  replaceWorkbenchSession,
+} = useWorkbench()
 const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
@@ -123,6 +133,7 @@ const completedTurnIds = new Set<string>()
 const settlementTimers = new Map<string, number>()
 const TURN_SETTLEMENT_DELAYS = [0, 100, 250, 600, 1_200, 2_000] as const
 let queuedInputSequence = 0
+let pendingDraftReplacement: DraftChannelReplacement | null = null
 
 interface QueuedRuntimeInput {
   id: string
@@ -860,6 +871,54 @@ async function loadRuntimeConfiguration() {
 
 type AttachOutcome = 'attached' | 'writer-conflict' | 'failed'
 
+async function rebindCurrentDraftChannel(): Promise<boolean> {
+  const sessionId = props.session.id
+  const draft = engineDraft(sessionId)
+  if (!draft || sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)) return true
+
+  const config = {
+    model: selectedModel.value,
+    effort: selectedEffort.value,
+    channelId: selectedChannel.value,
+    modelOverridden: modelOverridden.value,
+    effortOverridden: effortOverridden.value,
+  }
+  const replacement = await rebindDraftChannel({
+    sessionId,
+    draft,
+    selectedChannel: selectedChannel.value,
+    options: {
+      ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
+      ...(selectedModel.value ? { model: selectedModel.value } : {}),
+    },
+    config,
+  }, {
+    createSession,
+    sessionId: sessionUiId,
+    stageDraft: stageEngineDraft,
+    saveConfig: setEngineRunConfig,
+    // Vue 会在工作台 id 改写后调度 props watcher；必须在改写前登记，
+    // watcher 才能保留本轮选择和新 runtime，而不是按普通切会话清空。
+    beforeReplace: value => { pendingDraftReplacement = value },
+    replaceSession: replaceWorkbenchSession,
+    discardDraft: replacementSessionId => {
+      if (pendingDraftReplacement?.sessionId === replacementSessionId) pendingDraftReplacement = null
+      discardStagedSession(replacementSessionId)
+    },
+    replacementError: () => new Error(t('common.runtimeUnavailable')),
+  })
+  if (!replacement) return true
+
+  await nextTick()
+  if (props.session.id !== replacement.sessionId) {
+    pendingDraftReplacement = null
+    return false
+  }
+  runtimeId.value = replacement.runtimeId
+  attachedChannel.value = replacement.attachedChannel
+  return true
+}
+
 async function ensureAttached(): Promise<AttachOutcome> {
   if (!reference.value || attaching.value) return 'failed'
   // 已在运行的 runtime 不能 resume：重挂载会清掉 active turn，令后续事件失配。
@@ -867,20 +926,20 @@ async function ensureAttached(): Promise<AttachOutcome> {
   attaching.value = true
   try {
     await loadRuntimeConfiguration()
+    let draft = engineDraft(props.session.id)
+    while (draft && !sameRuntimeChannel(draft.attachedChannel, selectedChannel.value)) {
+      if (!(await rebindCurrentDraftChannel())) return 'failed'
+      draft = engineDraft(props.session.id)
+    }
     if (runtimeId.value && attachedChannel.value === undefined) {
       // create/fork 草稿记录的是实际附着渠道；空线程首条消息前尚无
       // rollout，不能重复 resume。已落盘会话没有这份可靠记录，必须走
       // attach 来应用当前渠道，不能把 UI 选择误当成 runtime 真实状态。
-      const draft = engineDraft(props.session.id)
       if (draft) {
         attachedChannel.value = draft.attachedChannel
-        if (draft.attachedChannel !== selectedChannel.value) {
-          error.value = t('engine.draftChannelLocked')
-          return 'failed'
-        }
       }
     }
-    if (runtimeId.value && attachedChannel.value === selectedChannel.value) {
+    if (runtimeId.value && sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)) {
       announceCurrentRuntime()
       return 'attached'
     }
@@ -889,7 +948,7 @@ async function ensureAttached(): Promise<AttachOutcome> {
       error.value = reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
       return 'failed'
     }
-    if (!runtimeId.value || attachedChannel.value !== selectedChannel.value) {
+    if (!runtimeId.value || !sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)) {
       const attached = await attachSession(reference.value, {
         ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
@@ -1271,6 +1330,12 @@ watch(() => props.session.id, async () => {
   sessionGeneration++
   const generation = sessionGeneration
   const sessionId = props.session.id
+  if (pendingDraftReplacement && pendingDraftReplacement.sessionId !== sessionId) {
+    pendingDraftReplacement = null
+  }
+  const replacement = pendingDraftReplacement?.sessionId === sessionId
+    ? pendingDraftReplacement
+    : null
   lastAppliedTimelineRequestId = 0
   cancelTurnSettlements()
   runtimeDeltaShaper.reset()
@@ -1284,20 +1349,24 @@ watch(() => props.session.id, async () => {
     queuedInputs.value = []
     imageInput.clearImages()
     snapshot.value = null
-    runtimeId.value = null
-    models.value = []
-    selectedModel.value = null
-    selectedEffort.value = null
-    modelOverridden.value = false
-    effortOverridden.value = false
-    selectedChannel.value = null
-    attachedChannel.value = undefined
+    runtimeId.value = replacement?.runtimeId ?? null
+    if (replacement) {
+      attachedChannel.value = replacement.attachedChannel
+    } else {
+      models.value = []
+      selectedModel.value = null
+      selectedEffort.value = null
+      modelOverridden.value = false
+      effortOverridden.value = false
+      selectedChannel.value = null
+      attachedChannel.value = undefined
+    }
     asyncPanelOpen.value = false
     menuOpen.value = false
     await reload()
     await nextTick()
     requestTimelineFollow(true)
-    if (interactive.value) await loadRuntimeConfiguration()
+    if (interactive.value && !replacement) await loadRuntimeConfiguration()
   } finally {
     if (generation !== sessionGeneration || props.session.id !== sessionId) return
     runConfigSyncing.value = false
@@ -1308,6 +1377,7 @@ watch(() => props.session.id, async () => {
       modelOverridden: modelOverridden.value,
       effortOverridden: effortOverridden.value,
     })
+    if (pendingDraftReplacement?.sessionId === sessionId) pendingDraftReplacement = null
   }
 })
 

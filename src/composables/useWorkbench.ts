@@ -479,24 +479,37 @@ function addRaceLane(tabId: string, forkedSessionId: string) {
   tab.columnSizes = equalSizes(tab.columns.length)
 }
 
-/** 原位替换赛道会话：保留 lane/column 身份与列宽，用于首轮广播前切换引擎。 */
-function replaceRaceLaneSession(tabId: string, sessionId: string, replacementSessionId: string): boolean {
-  const tab = state.value.tabs.find(t => t.id === tabId)
-  if (!tab?.race || tab.race.engineSwitchLocked || sessionId === replacementSessionId) return false
+/**
+ * 原位替换工作台会话：保留 tab、lane、column 身份与列宽。
+ * 通用引擎的空线程切换渠道/引擎时使用，替换完成后才关闭旧运行时。
+ */
+function replaceWorkbenchSession(sessionId: string, replacementSessionId: string): boolean {
+  const found = findSession(sessionId)
+  if (!found || sessionId === replacementSessionId) return false
+  const { tab } = found
   if (tab.sessionIds.includes(replacementSessionId)) return false
 
-  const lane = tab.race.lanes.find(item => item.sessionId === sessionId)
-  const column = tab.columns.find(item => item.sessionId === sessionId)
+  const lane = tab.race?.lanes.find(item => item.sessionId === sessionId) ?? null
+  if (tab.race && (!lane || tab.race.engineSwitchLocked)) return false
   const sessionIndex = tab.sessionIds.indexOf(sessionId)
-  if (!lane || !column || sessionIndex < 0) return false
+  if (sessionIndex < 0) return false
 
-  lane.sessionId = replacementSessionId
-  column.sessionId = replacementSessionId
+  if (lane) lane.sessionId = replacementSessionId
+  for (const column of tab.columns) {
+    if (column.sessionId === sessionId) column.sessionId = replacementSessionId
+  }
   tab.sessionIds[sessionIndex] = replacementSessionId
   teardownSession(sessionId)
   delete state.value.drafts[sessionId]
   delete state.value.forkIntents[sessionId]
   return true
+}
+
+/** 原位替换赛道会话：额外校验调用方指定的赛马 Tab。 */
+function replaceRaceLaneSession(tabId: string, sessionId: string, replacementSessionId: string): boolean {
+  const found = findSession(sessionId)
+  if (!found || found.tab.id !== tabId || !found.tab.race) return false
+  return replaceWorkbenchSession(sessionId, replacementSessionId)
 }
 
 function lockRaceEngineSelection(tabId: string) {
@@ -844,6 +857,7 @@ export function useWorkbench() {
     createTab,
     createRaceTab,
     addRaceLane,
+    replaceWorkbenchSession,
     replaceRaceLaneSession,
     lockRaceEngineSelection,
     removeRaceLane,
