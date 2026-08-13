@@ -414,37 +414,50 @@ fn execute_routine(routine: &RoutineDefinition, app: &AppHandle) -> Result<(), S
                     .ok()
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty());
-                let mut cmd = crate::routine_command::build_routine_command(
-                    crate::routine_command::RoutineCommandSpec {
-                        engine: &engine,
-                        executable: &executable,
-                        prompt: &prompt,
-                        session_id: &session_id,
-                        persist_session: persist,
-                        cwd: &cwd,
-                        path_env: &crate::streaming::enhanced_path(),
-                        claude_config_dir: claude_config_dir.as_deref(),
-                        codex_home: codex_home.as_deref(),
-                    },
+                let auth_executable = std::env::current_exe()?;
+                let channel = crate::routine_channel::resolve(
+                    &data_dir,
+                    &engine,
+                    &session_id,
+                    &auth_executable,
                 )
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-                match cmd.spawn() {
-                    Ok(child) => {
-                        // spawn 成功即写运行标记：终止能力与跨进程状态展示的事实源
-                        crate::routine_run::write_marker(
-                            &data_dir,
-                            &id,
-                            &crate::routine_run::RunningMarker {
-                                pid: child.id(),
-                                started_at: started_at.clone(),
-                                source: "manual".to_string(),
-                                cancelled: false,
-                            },
-                        );
-                        child.wait_with_output()
+                let result = (|| {
+                    let mut cmd = crate::routine_command::build_routine_command(
+                        crate::routine_command::RoutineCommandSpec {
+                            engine: &engine,
+                            executable: &executable,
+                            prompt: &prompt,
+                            session_id: &session_id,
+                            persist_session: persist,
+                            cwd: &cwd,
+                            path_env: &crate::streaming::enhanced_path(),
+                            claude_config_dir: claude_config_dir.as_deref(),
+                            codex_home: codex_home.as_deref(),
+                            channel: &channel,
+                        },
+                    )
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+                    match cmd.spawn() {
+                        Ok(child) => {
+                            // spawn 成功即写运行标记：终止能力与跨进程状态展示的事实源
+                            crate::routine_run::write_marker(
+                                &data_dir,
+                                &id,
+                                &crate::routine_run::RunningMarker {
+                                    pid: child.id(),
+                                    started_at: started_at.clone(),
+                                    source: "manual".to_string(),
+                                    cancelled: false,
+                                },
+                            );
+                            child.wait_with_output()
+                        }
+                        Err(error) => Err(error),
                     }
-                    Err(error) => Err(error),
-                }
+                })();
+                channel.cleanup();
+                result
             });
 
         // 收尾前读取终止标志：stop_routine 杀进程前会置位 cancelled

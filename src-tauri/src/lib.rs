@@ -34,6 +34,8 @@ mod routines;
 pub mod routine_run;
 /// 主 App 与独立 runner 共用的 Routine CLI 命令构造。
 mod routine_command;
+/// 主 App 与独立 runner 共用的 Routine 默认渠道解析。
+mod routine_channel;
 /// 主 App 与独立 runner 共用的 Routine CLI 输出归一化。
 mod routine_output;
 /// Routine 执行环境快照由主 App 写入、独立 runner 读取

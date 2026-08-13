@@ -109,7 +109,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 ### 3.6 Routines — scheduled runs, even with the app closed
 
 - Create scheduled tasks in natural language: "summarize yesterday's sessions every morning at nine" becomes cron automatically
-- Choose a default execution engine per task (Claude Code or Codex), then switch individual tasks or every task at once directly in the table; manual and system-scheduled runs share that setting, while existing tasks keep Claude Code as their default
+- Choose a default execution engine per task (Claude Code or Codex), then switch individual tasks or every task at once directly in the table; each run dynamically inherits that engine's default Monet session channel and follows the engine CLI only when no Monet default is configured; manual and system-scheduled runs behave the same, while existing tasks keep Claude Code as their default
 - OS-level scheduling: registered with launchd (macOS) / Task Scheduler (Windows) / systemd (Linux) — fires even when the main app isn't running
 - Timed wake (macOS): wakes the machine from sleep on schedule, runs the task, and puts it back to sleep once it confirms nobody's using it — genuinely "works while you sleep"
 - Minimal wake authorization: a single whitelisted `pmset` command; authorize once, silent thereafter, revocable anytime

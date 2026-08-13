@@ -35,6 +35,10 @@ mod tcc;
 mod routine_types;
 use routine_types::{RoutineDefinition, RoutineEngine};
 
+// 每次执行按任务引擎继承其当前默认会话渠道。
+#[path = "../routine_channel.rs"]
+mod routine_channel;
+
 // 两个执行入口共用参数、环境和进程组策略，避免手动运行与 cron 行为漂移。
 #[path = "../routine_command.rs"]
 mod routine_command;
@@ -91,6 +95,9 @@ struct ExecutionLog {
 }
 
 fn main() {
+    if let Some(code) = run_internal_command() {
+        std::process::exit(code);
+    }
     if env::args().any(|argument| argument == "--environment-protocol") {
         println!("1:{}", env!("CARGO_PKG_VERSION"));
         return;
@@ -177,37 +184,50 @@ fn main() {
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::NotFound, error))?;
             let cwd = agent_cwd();
             let path = path_env::enhanced_path();
-            let mut cmd = routine_command::build_routine_command(
-                routine_command::RoutineCommandSpec {
-                    engine: &routine.engine,
-                    executable: &executable,
-                    prompt: &routine.prompt,
-                    session_id: &session_id,
-                    persist_session: persist,
-                    cwd: &cwd,
-                    path_env: &path,
-                    claude_config_dir: environment.claude_config_dir.as_deref(),
-                    codex_home: environment.codex_home.as_deref(),
-                },
+            let auth_executable = std::env::current_exe()?;
+            let channel = routine_channel::resolve(
+                &data_dir(),
+                &routine.engine,
+                &session_id,
+                &auth_executable,
             )
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
-            match cmd.spawn() {
-                Ok(child) => {
-                    // spawn 成功即写运行标记：主 App 终止能力与状态展示的事实源
-                    routine_run::write_marker(
-                        &data_dir(),
-                        &routine_id,
-                        &routine_run::RunningMarker {
-                            pid: child.id(),
-                            started_at: started_at.clone(),
-                            source: "cron".to_string(),
-                            cancelled: false,
-                        },
-                    );
-                    child.wait_with_output()
+            let result = (|| {
+                let mut cmd = routine_command::build_routine_command(
+                    routine_command::RoutineCommandSpec {
+                        engine: &routine.engine,
+                        executable: &executable,
+                        prompt: &routine.prompt,
+                        session_id: &session_id,
+                        persist_session: persist,
+                        cwd: &cwd,
+                        path_env: &path,
+                        claude_config_dir: environment.claude_config_dir.as_deref(),
+                        codex_home: environment.codex_home.as_deref(),
+                        channel: &channel,
+                    },
+                )
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+                match cmd.spawn() {
+                    Ok(child) => {
+                        // spawn 成功即写运行标记：主 App 终止能力与状态展示的事实源
+                        routine_run::write_marker(
+                            &data_dir(),
+                            &routine_id,
+                            &routine_run::RunningMarker {
+                                pid: child.id(),
+                                started_at: started_at.clone(),
+                                source: "cron".to_string(),
+                                cancelled: false,
+                            },
+                        );
+                        child.wait_with_output()
+                    }
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
-            }
+            })();
+            channel.cleanup();
+            result
         });
 
     // 收尾前读取终止标志：主 App stop_routine 杀进程前会置位 cancelled
@@ -332,6 +352,33 @@ fn parse_args() -> String {
     }
     eprintln!("usage: monet-routine-runner --routine-id <uuid>");
     std::process::exit(1);
+}
+
+fn run_internal_command() -> Option<i32> {
+    let mut args = env::args();
+    let _program = args.next();
+    if args.next().as_deref() != Some("--monet-codex-channel-token") {
+        return None;
+    }
+    let Some(channel_id) = args.next() else {
+        return Some(2);
+    };
+    if args.next().is_some() {
+        return Some(2);
+    }
+    match routine_channel::channel_token(&data_dir(), &channel_id) {
+        Ok(token) => {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            if stdout.write_all(token.as_bytes()).is_err()
+                || stdout.write_all(b"\n").is_err()
+            {
+                return Some(1);
+            }
+            Some(0)
+        }
+        Err(_) => Some(1),
+    }
 }
 
 fn data_dir() -> PathBuf {

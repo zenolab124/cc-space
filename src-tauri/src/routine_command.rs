@@ -2,11 +2,12 @@
 //!
 //! 主 App 的「立即运行」与独立 `monet-routine-runner` 都直接编译本文件，
 //! 保证两条执行路径对引擎、持久化和环境变量的解释完全一致。本文件只能依赖
-//! std 与 routine_types，不能引用 Tauri 或 app_lib 专属状态。
+//! std、routine_types 与 routine_channel，不能引用 Tauri 或 app_lib 专属状态。
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::routine_channel::RoutineChannel;
 use crate::routine_types::RoutineEngine;
 
 pub struct RoutineCommandSpec<'a> {
@@ -19,6 +20,7 @@ pub struct RoutineCommandSpec<'a> {
     pub path_env: &'a str,
     pub claude_config_dir: Option<&'a str>,
     pub codex_home: Option<&'a str>,
+    pub channel: &'a RoutineChannel,
 }
 
 pub fn build_routine_command(spec: RoutineCommandSpec<'_>) -> Result<Command, String> {
@@ -38,6 +40,15 @@ pub fn build_routine_command(spec: RoutineCommandSpec<'_>) -> Result<Command, St
             .arg("text")
             .arg("--session-id")
             .arg(spec.session_id);
+        if let Some(path) = &spec.channel.claude_settings {
+            command.arg("--settings").arg(path);
+        }
+        for key in &spec.channel.clear_env {
+            command.env_remove(key);
+        }
+        for (key, value) in &spec.channel.env {
+            command.env(key, value);
+        }
         if !spec.persist_session {
             command.arg("--no-session-persistence");
         }
@@ -54,6 +65,9 @@ pub fn build_routine_command(spec: RoutineCommandSpec<'_>) -> Result<Command, St
             .arg("never")
             .arg("--cd")
             .arg(spec.cwd);
+        for (key, value) in &spec.channel.codex_config {
+            command.arg("-c").arg(format!("{key}={value}"));
+        }
         if !spec.persist_session {
             command.arg("--ephemeral");
         }
@@ -97,7 +111,11 @@ mod tests {
             .collect()
     }
 
-    fn spec(engine: &RoutineEngine, persist_session: bool) -> RoutineCommandSpec<'_> {
+    fn spec<'a>(
+        engine: &'a RoutineEngine,
+        channel: &'a RoutineChannel,
+        persist_session: bool,
+    ) -> RoutineCommandSpec<'a> {
         RoutineCommandSpec {
             engine,
             executable: Path::new("/usr/bin/example"),
@@ -108,13 +126,15 @@ mod tests {
             path_env: "/usr/bin",
             claude_config_dir: Some("/config/claude"),
             codex_home: Some("/config/codex"),
+            channel,
         }
     }
 
     #[test]
     fn builds_claude_command_with_explicit_session() {
         let engine = RoutineEngine::claude_code();
-        let command = build_routine_command(spec(&engine, true)).unwrap();
+        let channel = RoutineChannel::empty();
+        let command = build_routine_command(spec(&engine, &channel, true)).unwrap();
 
         assert_eq!(
             args(&command),
@@ -136,7 +156,8 @@ mod tests {
     #[test]
     fn builds_codex_command_and_maps_no_persistence_to_ephemeral() {
         let engine = RoutineEngine::codex();
-        let command = build_routine_command(spec(&engine, false)).unwrap();
+        let channel = RoutineChannel::empty();
+        let command = build_routine_command(spec(&engine, &channel, false)).unwrap();
 
         assert_eq!(
             args(&command),
@@ -160,12 +181,77 @@ mod tests {
     }
 
     #[test]
+    fn injects_resolved_claude_channel() {
+        let engine = RoutineEngine::claude_code();
+        let mut channel = RoutineChannel::empty();
+        channel.claude_settings = Some("/runtime/channel.json".into());
+        channel.clear_env.push("ANTHROPIC_API_KEY".to_string());
+        channel.env.push((
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://proxy.example".to_string(),
+        ));
+
+        let command = build_routine_command(spec(&engine, &channel, true)).unwrap();
+        assert_eq!(
+            args(&command),
+            [
+                "-p",
+                "- summarize",
+                "--output-format",
+                "text",
+                "--session-id",
+                "session-id",
+                "--settings",
+                "/runtime/channel.json",
+            ]
+        );
+        assert!(command.get_envs().any(|(key, value)| {
+            key == OsStr::new("ANTHROPIC_BASE_URL")
+                && value == Some(OsStr::new("https://proxy.example"))
+        }));
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == OsStr::new("ANTHROPIC_API_KEY") && value.is_none()));
+    }
+
+    #[test]
+    fn injects_resolved_codex_channel_as_config_overrides() {
+        let engine = RoutineEngine::codex();
+        let mut channel = RoutineChannel::empty();
+        channel.codex_config.extend([
+            ("model_provider".to_string(), "\"proxy\"".to_string()),
+            ("model".to_string(), "\"gpt-test\"".to_string()),
+        ]);
+
+        let command = build_routine_command(spec(&engine, &channel, true)).unwrap();
+        assert_eq!(
+            args(&command),
+            [
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--color",
+                "never",
+                "--cd",
+                "/workspace/agent",
+                "-c",
+                "model_provider=\"proxy\"",
+                "-c",
+                "model=\"gpt-test\"",
+                "--",
+                "- summarize",
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_unimplemented_engine_instances() {
         let engine = RoutineEngine {
             engine_id: "codex".into(),
             instance_id: "secondary".into(),
         };
-        assert!(build_routine_command(spec(&engine, true))
+        let channel = RoutineChannel::empty();
+        assert!(build_routine_command(spec(&engine, &channel, true))
             .unwrap_err()
             .contains("unsupported routine engine"));
     }
