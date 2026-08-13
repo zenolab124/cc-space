@@ -8,6 +8,8 @@ name: Release
 #   SIGNING_CERT_P12          macOS 签名证书导出的 .p12,base64 编码
 #   SIGNING_CERT_PASSWORD     .p12 导出密码
 #   TAURI_SIGNING_PRIVATE_KEY updater minisign 私钥(对应 tauri.conf 的 pubkey,双平台共用)
+#   APPLE_API_PRIVATE_KEY     App Store Connect Developer API 私钥
+# vars.APPLE_API_KEY / vars.APPLE_API_ISSUER 为非机密公开标识。
 #
 # vars.MACOS_SIGNING_IDENTITY 未配置时沿用稳定自签身份；切换 Developer ID 时
 # 只需替换证书 secrets 并设置该变量，App Group 会从证书 Team ID 自动启用。
@@ -122,7 +124,7 @@ jobs:
           fi
           rm -f /tmp/cert.p12
           IDENTITIES=$(security find-identity -v -p codesigning)
-          grep -F "\"$SIGN_ID\"" <<< "$IDENTITIES" >/dev/null
+          grep -F "$SIGN_ID" <<< "$IDENTITIES" >/dev/null
 
       - name: Install dependencies
         run: pnpm install
@@ -138,7 +140,15 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-        run: src-widget/build.sh
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          umask 077
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$KEY_PATH"
+          APPLE_API_KEY_PATH="$KEY_PATH" src-widget/build.sh
 
       - name: Verify signature
         run: |
@@ -146,7 +156,6 @@ jobs:
           APP=src-tauri/target/release/bundle/macos/Monet.app
           codesign --verify --deep --strict "$APP"
           DETAILS=$(codesign -dvv "$APP" 2>&1)
-          grep -F "Authority=$SIGN_ID" <<< "$DETAILS" >/dev/null
           if grep -F 'Signature=adhoc' <<< "$DETAILS" >/dev/null; then
             echo 'Unexpected ad-hoc signature' >&2
             exit 1

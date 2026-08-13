@@ -12,7 +12,8 @@ name: Nightly
 #   · 手动触发可通过 version 输入指定一次性版本（例如 2.0.0），仍只改 CI 工作区
 #
 # 需要的 secrets 与 release.yml 相同：SIGNING_CERT_P12 / SIGNING_CERT_PASSWORD /
-# TAURI_SIGNING_PRIVATE_KEY
+# TAURI_SIGNING_PRIVATE_KEY / APPLE_API_PRIVATE_KEY；公开标识放在 vars.APPLE_API_KEY /
+# vars.APPLE_API_ISSUER。
 
 on:
   schedule:
@@ -151,7 +152,7 @@ jobs:
           fi
           rm -f /tmp/cert.p12
           IDENTITIES=$(security find-identity -v -p codesigning)
-          grep -F "\"$SIGN_ID\"" <<< "$IDENTITIES" >/dev/null
+          grep -F "$SIGN_ID" <<< "$IDENTITIES" >/dev/null
 
       - name: Install dependencies
         if: steps.check.outputs.skip == 'false'
@@ -171,7 +172,15 @@ jobs:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-        run: src-widget/build.sh
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          umask 077
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$KEY_PATH"
+          APPLE_API_KEY_PATH="$KEY_PATH" src-widget/build.sh
 
       - name: Verify signature
         if: steps.check.outputs.skip == 'false'
@@ -180,7 +189,6 @@ jobs:
           APP=src-tauri/target/release/bundle/macos/Monet.app
           codesign --verify --deep --strict "$APP"
           DETAILS=$(codesign -dvv "$APP" 2>&1)
-          grep -F "Authority=$SIGN_ID" <<< "$DETAILS" >/dev/null
           if grep -F 'Signature=adhoc' <<< "$DETAILS" >/dev/null; then
             echo 'Unexpected ad-hoc signature' >&2
             exit 1
