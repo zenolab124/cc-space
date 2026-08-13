@@ -22,15 +22,22 @@ if [ "${#ASSETS[@]}" -ne 4 ]; then
 fi
 
 CANDIDATE_TAG="nightly-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-BACKUP_TAG="nightly-previous-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 RELEASE_TITLE="Nightly $VERSION"
 RELEASE_NOTES="每日构建，含未经验证的改动。仅供在设置中切到 Nightly 通道的用户使用。提交 ${GITHUB_SHA:0:7}"
+BACKUP_DIR=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/monet-nightly-backup.XXXXXX")
 CANDIDATE_ID=""
 OLD_RELEASE_ID=""
 OLD_SHA=""
-OLD_RENAMED=0
-NIGHTLY_TAG_MOVED=0
+OLD_TITLE=""
+OLD_NOTES=""
+OLD_PRERELEASE=true
+OLD_REMOVED=0
 CANDIDATE_PUBLISHED=0
+
+cleanup_backup() {
+    rm -rf "$BACKUP_DIR"
+}
+trap cleanup_backup EXIT
 
 release_id_for_tag() {
     local tag="$1"
@@ -60,6 +67,30 @@ verify_release_assets() {
     done
 }
 
+verify_downloaded_assets() {
+    local release_id="$1"
+    local directory="$2"
+    local remote_count local_count
+    remote_count=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --jq '.assets | length')
+    local_count=$(find "$directory" -maxdepth 1 -type f | wc -l | tr -d ' ')
+    if [ "$remote_count" -ne "$local_count" ]; then
+        echo "Error: previous Nightly backup asset count mismatch" >&2
+        return 1
+    fi
+
+    local asset name expected actual
+    for asset in "$directory"/*; do
+        name=$(basename "$asset")
+        actual="sha256:$(shasum -a 256 "$asset" | awk '{print $1}')"
+        expected=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            --jq ".assets[] | select(.name == \"$name\") | .digest")
+        if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+            echo "Error: previous Nightly backup digest mismatch for $name" >&2
+            return 1
+        fi
+    done
+}
+
 rollback() {
     local status=$?
     trap - ERR
@@ -70,26 +101,29 @@ rollback() {
         CANDIDATE_ID=$(release_id_for_tag "$CANDIDATE_TAG" 2>/dev/null || true)
     fi
 
-    if [ "$CANDIDATE_PUBLISHED" -eq 1 ] && [ -n "$CANDIDATE_ID" ]; then
-        gh api --method PATCH \
-            "repos/$GITHUB_REPOSITORY/releases/$CANDIDATE_ID" \
-            -f tag_name="$CANDIDATE_TAG" -F draft=true -F prerelease=true >/dev/null
-    fi
-    if [ "$NIGHTLY_TAG_MOVED" -eq 1 ] && [ -n "$OLD_SHA" ]; then
-        git tag -f nightly "$OLD_SHA"
-        git push --force origin refs/tags/nightly >/dev/null
-    fi
-    if [ "$OLD_RENAMED" -eq 1 ] && [ -n "$OLD_RELEASE_ID" ]; then
-        gh api --method PATCH \
-            "repos/$GITHUB_REPOSITORY/releases/$OLD_RELEASE_ID" \
-            -f tag_name=nightly -F draft=false -F prerelease=true >/dev/null
+    if [ "$CANDIDATE_PUBLISHED" -eq 1 ]; then
+        gh release delete nightly --yes --cleanup-tag >/dev/null 2>&1 || true
+        gh api --method DELETE \
+            "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly" >/dev/null 2>&1 || true
     fi
     if [ -n "$CANDIDATE_ID" ]; then
         gh api --method DELETE \
-            "repos/$GITHUB_REPOSITORY/releases/$CANDIDATE_ID" >/dev/null
+            "repos/$GITHUB_REPOSITORY/releases/$CANDIDATE_ID" >/dev/null 2>&1 || true
     fi
-    git push origin ":refs/tags/$CANDIDATE_TAG" >/dev/null 2>&1 || true
-    git push origin ":refs/tags/$BACKUP_TAG" >/dev/null 2>&1 || true
+    if [ "$OLD_REMOVED" -eq 1 ] && [ -n "$OLD_RELEASE_ID" ] && \
+       ! gh release view nightly >/dev/null 2>&1; then
+        OLD_ASSETS=("$BACKUP_DIR"/*)
+        RESTORE_ARGS=(
+            nightly
+            --target "$OLD_SHA"
+            --title "$OLD_TITLE"
+            --notes "$OLD_NOTES"
+        )
+        if [ "$OLD_PRERELEASE" = "true" ]; then
+            RESTORE_ARGS+=(--prerelease)
+        fi
+        gh release create "${RESTORE_ARGS[@]}" "${OLD_ASSETS[@]}" >/dev/null
+    fi
     exit "$status"
 }
 trap rollback ERR
@@ -108,18 +142,15 @@ verify_release_assets "$CANDIDATE_ID"
 
 OLD_RELEASE_ID=$(release_id_for_tag nightly)
 if [ -n "$OLD_RELEASE_ID" ]; then
-    OLD_SHA=$(git rev-parse 'refs/tags/nightly^{commit}')
-    git tag -f "$BACKUP_TAG" "$OLD_SHA"
-    git push origin "refs/tags/$BACKUP_TAG" >/dev/null
-    OLD_RENAMED=1
-    gh api --method PATCH \
-        "repos/$GITHUB_REPOSITORY/releases/$OLD_RELEASE_ID" \
-        -f tag_name="$BACKUP_TAG" >/dev/null
+    OLD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq '.object.sha')
+    OLD_TITLE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$OLD_RELEASE_ID" --jq '.name')
+    OLD_NOTES=$(gh api "repos/$GITHUB_REPOSITORY/releases/$OLD_RELEASE_ID" --jq '.body')
+    OLD_PRERELEASE=$(gh api "repos/$GITHUB_REPOSITORY/releases/$OLD_RELEASE_ID" --jq '.prerelease')
+    gh release download nightly --dir "$BACKUP_DIR"
+    verify_downloaded_assets "$OLD_RELEASE_ID" "$BACKUP_DIR"
+    OLD_REMOVED=1
+    gh release delete nightly --yes --cleanup-tag >/dev/null
 fi
-
-git tag -f nightly "$GITHUB_SHA"
-NIGHTLY_TAG_MOVED=1
-git push --force origin refs/tags/nightly >/dev/null
 
 CANDIDATE_PUBLISHED=1
 gh api --method PATCH \
@@ -133,17 +164,11 @@ gh api --method PATCH \
 
 PUBLIC_RELEASE_ID=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/nightly" --jq '.id')
 test "$PUBLIC_RELEASE_ID" = "$CANDIDATE_ID"
+PUBLIC_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq '.object.sha')
+test "$PUBLIC_SHA" = "$GITHUB_SHA"
 verify_release_assets "$PUBLIC_RELEASE_ID"
 
-# 新入口已经完整可用。旧 Release 与临时 tag 的清理失败不应反向破坏新版。
+# 新入口已经完整可用；旧资产备份随 EXIT trap 从 runner 临时目录清理。
 trap - ERR
-if [ -n "$OLD_RELEASE_ID" ]; then
-    gh api --method DELETE \
-        "repos/$GITHUB_REPOSITORY/releases/$OLD_RELEASE_ID" >/dev/null || \
-        echo "Warning: failed to remove previous Nightly release" >&2
-fi
-git push origin ":refs/tags/$BACKUP_TAG" >/dev/null 2>&1 || \
-    echo "Warning: failed to remove previous Nightly tag" >&2
-git push origin ":refs/tags/$CANDIDATE_TAG" >/dev/null 2>&1 || true
 
 echo "Nightly $VERSION published with verified assets"
