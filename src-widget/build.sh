@@ -2,6 +2,19 @@
 # 构建 Widget Extension + widget-updater，嵌入 Tauri .app bundle，签名，打 DMG
 set -euo pipefail
 
+# 长期私钥只保留为当前 shell 的非导出变量。后续 xcodebuild、cargo、codesign、
+# diskutil 等子进程不应继承它们；仅在实际调用 notarytool / Tauri signer 时注入。
+NOTARY_PRIVATE_KEY="${APPLE_API_PRIVATE_KEY:-}"
+NOTARY_EXTERNAL_KEY_PATH="${APPLE_API_KEY_PATH:-}"
+NOTARY_KEY_ID="${APPLE_API_KEY:-}"
+NOTARY_ISSUER_ID="${APPLE_API_ISSUER:-}"
+UPDATER_SIGNING_PRIVATE_KEY="${TAURI_SIGNING_PRIVATE_KEY:-}"
+UPDATER_SIGNING_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+unset APPLE_API_PRIVATE_KEY APPLE_API_KEY_PATH APPLE_API_KEY APPLE_API_ISSUER
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+export -n NOTARY_PRIVATE_KEY NOTARY_EXTERNAL_KEY_PATH NOTARY_KEY_ID NOTARY_ISSUER_ID
+export -n UPDATER_SIGNING_PRIVATE_KEY UPDATER_SIGNING_PASSWORD
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -42,8 +55,13 @@ fi
 
 # 公证必须发生在 Widget、helper 与主 App 全部完成最终签名之后。若只提供了
 # 部分凭据，宁可停止构建，也不能静默发布一个仅签名、未公证的安装包。
+if [ -n "$NOTARY_PRIVATE_KEY" ] && [ -n "$NOTARY_EXTERNAL_KEY_PATH" ]; then
+    echo "Error: provide APPLE_API_PRIVATE_KEY or APPLE_API_KEY_PATH, not both" >&2
+    exit 1
+fi
+NOTARY_KEY_SOURCE="${NOTARY_PRIVATE_KEY:-$NOTARY_EXTERNAL_KEY_PATH}"
 NOTARY_ENV_COUNT=0
-for VALUE in "${APPLE_API_KEY:-}" "${APPLE_API_ISSUER:-}" "${APPLE_API_KEY_PATH:-}"; do
+for VALUE in "$NOTARY_KEY_ID" "$NOTARY_ISSUER_ID" "$NOTARY_KEY_SOURCE"; do
     [ -n "$VALUE" ] && NOTARY_ENV_COUNT=$((NOTARY_ENV_COUNT + 1))
 done
 if [ "$NOTARY_ENV_COUNT" -ne 0 ] && [ "$NOTARY_ENV_COUNT" -ne 3 ]; then
@@ -52,7 +70,7 @@ if [ "$NOTARY_ENV_COUNT" -ne 0 ] && [ "$NOTARY_ENV_COUNT" -ne 3 ]; then
 fi
 NOTARIZE=0
 if [ "$NOTARY_ENV_COUNT" -eq 3 ]; then
-    if [ ! -f "$APPLE_API_KEY_PATH" ]; then
+    if [ -n "$NOTARY_EXTERNAL_KEY_PATH" ] && [ ! -f "$NOTARY_EXTERNAL_KEY_PATH" ]; then
         echo "Error: APPLE_API_KEY_PATH does not exist" >&2
         exit 1
     fi
@@ -82,7 +100,39 @@ if [ -n "$APP_GROUP_ID" ] && \
 fi
 
 ENTITLEMENTS_DIR=$(mktemp -d)
-trap 'rm -rf "$ENTITLEMENTS_DIR"' EXIT
+NOTARY_KEY_FILE=""
+cleanup_sensitive_files() {
+    if [ -n "$NOTARY_KEY_FILE" ]; then
+        rm -f "$NOTARY_KEY_FILE"
+    fi
+    rm -rf "$ENTITLEMENTS_DIR"
+}
+trap cleanup_sensitive_files EXIT
+
+submit_for_notarization() {
+    local artifact="$1"
+    local key_path="$NOTARY_EXTERNAL_KEY_PATH"
+    local submit_status=0
+
+    if [ -n "$NOTARY_PRIVATE_KEY" ]; then
+        NOTARY_KEY_FILE=$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/monet-notary-key.XXXXXX")
+        chmod 600 "$NOTARY_KEY_FILE"
+        printf '%s' "$NOTARY_PRIVATE_KEY" > "$NOTARY_KEY_FILE"
+        key_path="$NOTARY_KEY_FILE"
+    fi
+
+    xcrun notarytool submit "$artifact" \
+        --key "$key_path" \
+        --key-id "$NOTARY_KEY_ID" \
+        --issuer "$NOTARY_ISSUER_ID" \
+        --wait || submit_status=$?
+
+    if [ -n "$NOTARY_KEY_FILE" ]; then
+        rm -f "$NOTARY_KEY_FILE"
+        NOTARY_KEY_FILE=""
+    fi
+    return "$submit_status"
+}
 prepare_entitlements() {
     local source="$1"
     local destination="$2"
@@ -195,11 +245,7 @@ if [ "$NOTARIZE" -eq 1 ]; then
     NOTARY_DIR=$(mktemp -d)
     NOTARY_ZIP="$NOTARY_DIR/$(basename "$APP_BUNDLE").zip"
     ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARY_ZIP"
-    xcrun notarytool submit "$NOTARY_ZIP" \
-        --key "$APPLE_API_KEY_PATH" \
-        --key-id "$APPLE_API_KEY" \
-        --issuer "$APPLE_API_ISSUER" \
-        --wait
+    submit_for_notarization "$NOTARY_ZIP"
     xcrun stapler staple "$APP_BUNDLE"
     xcrun stapler validate "$APP_BUNDLE"
     rm -rf "$NOTARY_DIR"
@@ -226,11 +272,7 @@ rm -rf "$DMG_STAGE"
 
 if [ "$NOTARIZE" -eq 1 ]; then
     echo "=> Notarizing DMG..."
-    xcrun notarytool submit "$DMG_PATH" \
-        --key "$APPLE_API_KEY_PATH" \
-        --key-id "$APPLE_API_KEY" \
-        --issuer "$APPLE_API_ISSUER" \
-        --wait
+    submit_for_notarization "$DMG_PATH"
     xcrun stapler staple "$DMG_PATH"
     xcrun stapler validate "$DMG_PATH"
 fi
@@ -239,13 +281,18 @@ fi
 # 仅在提供 TAURI_SIGNING_PRIVATE_KEY 时生成（发版链路:CI 经 secrets 注入;
 # 日常本地打包无密钥自动跳过,不阻塞）。私钥对应 tauri.conf plugins.updater.pubkey
 UPDATER_DIR="$(dirname "$APP_BUNDLE")/../updater"
-if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+if [ -n "$UPDATER_SIGNING_PRIVATE_KEY" ]; then
     echo "=> Creating updater artifacts..."
     mkdir -p "$UPDATER_DIR"
     TARBALL="$UPDATER_DIR/${APP_NAME}_${VERSION}_aarch64.app.tar.gz"
     rm -f "$TARBALL" "$TARBALL.sig"
     tar czf "$TARBALL" -C "$(dirname "$APP_BUNDLE")" "$(basename "$APP_BUNDLE")"
-    (cd .. && pnpm tauri signer sign "$TARBALL")
+    (
+        cd ..
+        TAURI_SIGNING_PRIVATE_KEY="$UPDATER_SIGNING_PRIVATE_KEY" \
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$UPDATER_SIGNING_PASSWORD" \
+            pnpm tauri signer sign "$TARBALL"
+    )
     node "$SCRIPT_DIR/../scripts/create-latest-json.mjs" "$VERSION" "$TARBALL" "$UPDATER_DIR/latest.json"
     echo "   Updater: $TARBALL (+.sig, latest.json)"
 else
