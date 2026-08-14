@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
+import { Menu } from '@tauri-apps/api/menu'
 import { useUiState } from '@/composables/useUiState'
 import { useAutomation } from '@/composables/useAutomation'
 import { useWorkbench } from '@/composables/useWorkbench'
@@ -12,6 +13,27 @@ const { t } = useI18n()
 const { activeSection } = useUiState()
 const { activeTab, resetColumnSizes } = useWorkbench()
 const { isCapturing, captureWorkbench } = useWorkbenchCapture()
+
+async function showCaptureMenu() {
+  if (isCapturing.value) return
+  const nativeSupported = await invoke<boolean>('native_workbench_capture_supported').catch(() => false)
+  const menu = await Menu.new({
+    items: [
+      {
+        id: 'native',
+        text: t('workbench.capture.native'),
+        enabled: nativeSupported,
+        action: () => void captureWorkbench('native'),
+      },
+      {
+        id: 'canvas',
+        text: t('workbench.capture.canvas'),
+        action: () => void captureWorkbench('canvas'),
+      },
+    ],
+  })
+  await menu.popup()
+}
 
 // --- 自动化 ---
 const { config: autoConfig, refresh: autoRefresh, loadingConfig, loadingStats } = useAutomation()
@@ -51,7 +73,7 @@ function showGlobalConfigMenu(event: MouseEvent) {
     :disabled="isCapturing"
     v-tooltip="isCapturing ? $t('workbench.capture.capturing') : $t('workbench.capture.action')"
     :aria-label="$t('workbench.capture.action')"
-    @click="captureWorkbench"
+    @click="showCaptureMenu"
   >
     <span class="w-3.5 h-3.5" :class="isCapturing ? 'i-carbon-progress-bar-round animate-spin' : 'i-carbon-camera'" />
   </button>

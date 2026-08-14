@@ -7,6 +7,20 @@ export interface PanoramaLayout {
   pixelRatio: number
 }
 
+export function calculateNativeCaptureOffsets(
+  viewportWidth: number,
+  contentWidth: number,
+): number[] {
+  if (viewportWidth <= 0 || contentWidth <= 0) throw new Error('Invalid capture dimensions')
+  const maxScroll = Math.max(0, Math.ceil(contentWidth - viewportWidth))
+  const offsets = [0]
+  for (let offset = Math.ceil(viewportWidth); offset < maxScroll; offset += Math.ceil(viewportWidth)) {
+    offsets.push(offset)
+  }
+  if (maxScroll > 0 && offsets[offsets.length - 1] !== maxScroll) offsets.push(maxScroll)
+  return offsets
+}
+
 export function calculatePanoramaLayout(
   shellWidth: number,
   shellHeight: number,
@@ -25,7 +39,13 @@ export function calculatePanoramaLayout(
   return { width, height, pixelRatio }
 }
 
-export function workbenchCaptureFilename(tabName: string, now = new Date()): string {
+export type WorkbenchCaptureMode = 'native' | 'canvas'
+
+export function workbenchCaptureFilename(
+  tabName: string,
+  mode?: WorkbenchCaptureMode,
+  now = new Date(),
+): string {
   const safeName = tabName
     .trim()
     .replace(/[\\/:*?"<>|]/g, '-')
@@ -42,5 +62,6 @@ export function workbenchCaptureFilename(tabName: string, now = new Date()): str
     String(now.getMinutes()).padStart(2, '0'),
     String(now.getSeconds()).padStart(2, '0'),
   ].join('')
-  return `monet-${safeName}-${stamp}.png`
+  const modeSuffix = mode ? `-${mode === 'native' ? 'webkit' : 'canvas'}` : ''
+  return `monet-${safeName}${modeSuffix}-${stamp}.png`
 }

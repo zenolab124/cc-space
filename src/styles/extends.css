@@ -22,26 +22,42 @@ body {
 
 /* 工作台横向全景导出：临时扩宽真实布局，保留当前纵向视口。 */
 .workbench-capture-active,
-.workbench-capture-active * {
+.workbench-capture-active *,
+.workbench-native-capture-active,
+.workbench-native-capture-active * {
   animation-play-state: paused !important;
   caret-color: transparent !important;
   transition: none !important;
 }
-.workbench-capture-active [data-workbench-panorama] {
+.workbench-capture-active [data-workbench-panorama],
+.workbench-native-capture-active [data-workbench-panorama] {
   overflow-x: hidden !important;
 }
-.workbench-capture-active * {
+.workbench-capture-active *,
+.workbench-native-capture-active * {
   scrollbar-width: none !important;
 }
-.workbench-capture-active *::-webkit-scrollbar {
+.workbench-capture-active *::-webkit-scrollbar,
+.workbench-native-capture-active *::-webkit-scrollbar {
   display: none !important;
 }
-.workbench-capture-active .conversation-turn {
+.workbench-capture-active .conversation-turn,
+.workbench-native-capture-active .conversation-turn {
   content-visibility: visible !important;
 }
 .workbench-capture-active .sticky-user-overlay,
-.workbench-capture-active .engine-sticky-user-overlay {
+.workbench-capture-active .engine-sticky-user-overlay,
+.workbench-native-capture-active .sticky-user-overlay,
+.workbench-native-capture-active .engine-sticky-user-overlay {
   display: none !important;
+}
+.workbench-native-capture-active [data-capture-exclude] {
+  visibility: hidden !important;
+}
+body.paper-atmosphere.workbench-native-atmosphere-active::before,
+body.paper-atmosphere.workbench-native-atmosphere-active::after {
+  inset: 0 auto 0 var(--workbench-native-atmosphere-left);
+  width: var(--workbench-native-atmosphere-width);
 }
 
 body {

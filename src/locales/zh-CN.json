@@ -312,6 +312,8 @@
     "capture": {
       "action": "导出工作台全景",
       "capturing": "正在生成全景图…",
+      "native": "WebKit 原生渲染（推荐）",
+      "canvas": "Canvas 兼容渲染",
       "saved": "工作台全景已保存",
       "failed": "工作台全景导出失败",
       "unavailable": "当前工作台无法截图",

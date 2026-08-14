@@ -312,6 +312,8 @@
     "capture": {
       "action": "Export workbench panorama",
       "capturing": "Generating panorama…",
+      "native": "WebKit native rendering (recommended)",
+      "canvas": "Canvas compatibility rendering",
       "saved": "Workbench panorama saved",
       "failed": "Failed to export workbench panorama",
       "unavailable": "The current workbench cannot be captured",

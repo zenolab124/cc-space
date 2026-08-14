@@ -5,7 +5,12 @@ import html2canvas from 'html2canvas-pro'
 import i18n from '@/locales'
 import { useNotifications } from '@/composables/useNotifications'
 import { useWorkbench } from '@/composables/useWorkbench'
-import { calculatePanoramaLayout, workbenchCaptureFilename } from '@/utils/workbenchCapture'
+import {
+  calculatePanoramaLayout,
+  calculateNativeCaptureOffsets,
+  workbenchCaptureFilename,
+  type WorkbenchCaptureMode,
+} from '@/utils/workbenchCapture'
 
 const isCapturing = ref(false)
 const ICON_RASTER_SCALE = 2
@@ -215,25 +220,134 @@ async function renderPanorama(): Promise<Blob> {
   }
 }
 
+interface NativeCaptureTile {
+  image: HTMLImageElement
+  scrollLeft: number
+}
+
+async function loadPngImage(pngBase64: string): Promise<HTMLImageElement> {
+  return await new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error(i18n.global.t('workbench.capture.renderFailed')))
+    image.src = `data:image/png;base64,${pngBase64}`
+  })
+}
+
+async function renderNativePanorama(): Promise<Blob> {
+  const root = document.querySelector<HTMLElement>('[data-workbench-capture-root]')
+  const scroller = document.querySelector<HTMLElement>('[data-workbench-panorama]')
+  if (!root || !scroller) throw new Error(i18n.global.t('workbench.capture.unavailable'))
+
+  const rootRect = root.getBoundingClientRect()
+  const layout = calculatePanoramaLayout(
+    rootRect.width,
+    rootRect.height,
+    scroller.clientWidth,
+    scroller.scrollWidth,
+  )
+  const scrollerRect = scroller.getBoundingClientRect()
+  const scrollerX = scrollerRect.left - rootRect.left
+  const scrollerY = scrollerRect.top - rootRect.top
+  const originalScrollLeft = scroller.scrollLeft
+  const tiles: NativeCaptureTile[] = []
+  const atmosphere = document.body
+
+  root.classList.add('workbench-native-capture-active')
+  atmosphere.classList.add('workbench-native-atmosphere-active')
+  atmosphere.style.setProperty('--workbench-native-atmosphere-width', `${layout.width}px`)
+  try {
+    await document.fonts?.ready
+    for (const offset of calculateNativeCaptureOffsets(scroller.clientWidth, scroller.scrollWidth)) {
+      scroller.scrollLeft = offset
+      const scrollLeft = scroller.scrollLeft
+      atmosphere.style.setProperty('--workbench-native-atmosphere-left', `${-scrollLeft}px`)
+      await nextFrame()
+      await nextFrame()
+      if (tiles.some(tile => tile.scrollLeft === scrollLeft)) continue
+      const pngBase64 = await invoke<string>('capture_native_workbench_tile')
+      tiles.push({ image: await loadPngImage(pngBase64), scrollLeft })
+    }
+  } finally {
+    scroller.scrollLeft = originalScrollLeft
+    root.classList.remove('workbench-native-capture-active')
+    atmosphere.classList.remove('workbench-native-atmosphere-active')
+    atmosphere.style.removeProperty('--workbench-native-atmosphere-width')
+    atmosphere.style.removeProperty('--workbench-native-atmosphere-left')
+    await nextFrame()
+  }
+  if (tiles.length === 0) throw new Error(i18n.global.t('workbench.capture.renderFailed'))
+
+  const nativeScale = tiles[0].image.naturalWidth / rootRect.width
+  const outputScale = Math.min(nativeScale, layout.pixelRatio)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(layout.width * outputScale)
+  canvas.height = Math.round(layout.height * outputScale)
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error(i18n.global.t('workbench.capture.renderFailed'))
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+
+  const first = tiles[0].image
+  context.drawImage(first, 0, 0, rootRect.width * outputScale, rootRect.height * outputScale)
+  const extraWidth = layout.width - rootRect.width
+  if (extraWidth > 0) {
+    context.drawImage(
+      first,
+      first.naturalWidth - nativeScale,
+      0,
+      nativeScale,
+      first.naturalHeight,
+      rootRect.width * outputScale,
+      0,
+      extraWidth * outputScale,
+      rootRect.height * outputScale,
+    )
+  }
+
+  for (const tile of tiles) {
+    context.drawImage(
+      tile.image,
+      scrollerX * nativeScale,
+      scrollerY * nativeScale,
+      scrollerRect.width * nativeScale,
+      scrollerRect.height * nativeScale,
+      (scrollerX + tile.scrollLeft) * outputScale,
+      scrollerY * outputScale,
+      scrollerRect.width * outputScale,
+      scrollerRect.height * outputScale,
+    )
+  }
+  return await canvasToBlob(canvas)
+}
+
 export function useWorkbenchCapture() {
   const { activeTab } = useWorkbench()
   const { notifyTransient } = useNotifications()
 
-  async function captureWorkbench(): Promise<void> {
+  async function captureWorkbench(mode: WorkbenchCaptureMode = 'native'): Promise<void> {
     if (isCapturing.value || activeTab.value.columns.length === 0) return
     const path = await save({
-      defaultPath: workbenchCaptureFilename(activeTab.value.name),
+      defaultPath: workbenchCaptureFilename(activeTab.value.name, mode),
       filters: [{ name: 'PNG', extensions: ['png'] }],
     })
     if (!path) return
 
     isCapturing.value = true
     try {
-      const blob = await renderPanorama()
-      await invoke('save_workbench_capture', {
-        path,
-        pngBase64: await blobToBase64(blob),
-      })
+      if (mode === 'native') {
+        const blob = await renderNativePanorama()
+        await invoke('save_workbench_capture', {
+          path,
+          pngBase64: await blobToBase64(blob),
+        })
+      } else {
+        const blob = await renderPanorama()
+        await invoke('save_workbench_capture', {
+          path,
+          pngBase64: await blobToBase64(blob),
+        })
+      }
       notifyTransient(i18n.global.t('workbench.capture.saved'))
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause)

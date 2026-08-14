@@ -265,6 +265,8 @@ pub fn run() {
             commands::read_task_output,
             commands::git_worktree_snapshot,
             workbench_capture::save_workbench_capture,
+            workbench_capture::native_workbench_capture_supported,
+            workbench_capture::capture_native_workbench_tile,
             commands::get_usage_stats,
             commands::get_schema_diagnosis,
             commands::search_query,

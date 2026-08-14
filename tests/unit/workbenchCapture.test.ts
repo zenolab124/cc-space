@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { calculatePanoramaLayout, workbenchCaptureFilename } from '../../src/utils/workbenchCapture'
+import {
+  calculateNativeCaptureOffsets,
+  calculatePanoramaLayout,
+  workbenchCaptureFilename,
+} from '../../src/utils/workbenchCapture'
 
 describe('workbench panorama capture', () => {
   it('adds only the horizontally clipped width to the app shell', () => {
@@ -22,7 +26,16 @@ describe('workbench panorama capture', () => {
 
   it('builds a filesystem-safe timestamped filename', () => {
     const now = new Date(2026, 7, 15, 9, 8, 7)
-    expect(workbenchCaptureFilename('My / Workbench:*', now))
+    expect(workbenchCaptureFilename('My / Workbench:*', undefined, now))
       .toBe('monet-My-Workbench-20260815-090807.png')
+    expect(workbenchCaptureFilename('My / Workbench:*', 'native', now))
+      .toBe('monet-My-Workbench-webkit-20260815-090807.png')
+    expect(workbenchCaptureFilename('My / Workbench:*', 'canvas', now))
+      .toBe('monet-My-Workbench-canvas-20260815-090807.png')
+  })
+
+  it('covers native snapshots from the first viewport through the maximum scroll', () => {
+    expect(calculateNativeCaptureOffsets(900, 2100)).toEqual([0, 900, 1200])
+    expect(calculateNativeCaptureOffsets(900, 700)).toEqual([0])
   })
 })

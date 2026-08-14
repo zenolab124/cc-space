@@ -10,6 +10,14 @@ fn main() {
     println!("cargo:rerun-if-changed=src/native/high_refresh.m");
     println!("cargo:rustc-link-lib=framework=WebKit");
 
+    // 工作台全景导出：由真实 WKWebView 扩宽布局并生成原生快照。
+    cc::Build::new()
+      .file("src/native/webview_snapshot.m")
+      .flag("-fobjc-arc")
+      .compile("monet_webview_snapshot");
+    println!("cargo:rerun-if-changed=src/native/webview_snapshot.m");
+    println!("cargo:rustc-link-lib=framework=AppKit");
+
     // TCC 权限静默检测（设置页权限体检），主 App 与 routine-runner 共用
     cc::Build::new()
       .file("src/native/tcc_check.c")
