@@ -139,8 +139,12 @@ function onInputKeydown(e: KeyboardEvent) {
           v-for="(col, i) in activeTab.columns"
           :key="col.id"
           class="h-full relative shrink-0 race-col"
+          data-workbench-column
           :class="{ 'no-transition': dragging || suppressColumnTransition }"
-          :style="{ width: `${activeTab.columnSizes[i] ?? minColumnWidth}px` }"
+          :style="{
+            width: `${activeTab.columnSizes[i] ?? minColumnWidth}px`,
+            flex: `${activeTab.columnSizes[i] ?? minColumnWidth} 0 auto`,
+          }"
         >
           <WorkbenchColumnView
             :column="col"

@@ -27,10 +27,11 @@ const setHandle = (node: any) => { handleEl.value = node }
   <div
     ref="el"
     class="sortable-col"
+    data-workbench-column
     :class="{ 'sortable-col-dragging': isDragging, 'no-transition': resizing }"
     :style="fill
       ? { width: 'auto', flex: '1 1 0' }
-      : { width: `${flex}px`, flex: '0 0 auto' }"
+      : { width: `${flex}px`, flex: `${flex} 0 auto` }"
   >
     <slot :is-dragging="isDragging" :handle-ref="setHandle" />
   </div>
