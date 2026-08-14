@@ -31,7 +31,6 @@ const {
   textareaRef,
   dropAreaRef,
   imageInput,
-  slashError,
   raceError,
   raceMutationLoading,
   broadcasting,
@@ -258,8 +257,8 @@ function onInputKeydown(e: KeyboardEvent) {
       class="px-4 py-3 border-t border-border shrink-0 transition-colors"
       :class="imageInput.isDragging.value && 'ring-1 ring-primary/40 ring-inset bg-primary/5'"
     >
-      <div v-if="slashError || raceError" class="mb-1 text-xs text-destructive">
-        {{ slashError || raceError }}
+      <div v-if="raceError" class="mb-1 text-xs text-destructive">
+        {{ raceError }}
       </div>
 
       <!-- 拖拽指引(pointer-events-none:避免提示自身触发 dragleave 抖动) -->

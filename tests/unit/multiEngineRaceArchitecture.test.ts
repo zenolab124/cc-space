@@ -33,6 +33,16 @@ describe('multi-engine race architecture', () => {
     expect(raceInput).toContain('lockRaceEngineSelection(tab.value.id)')
   })
 
+  it('broadcasts command-looking input verbatim without using the command parser', () => {
+    const raceInput = source('../../src/composables/useRaceInput.ts')
+
+    expect(raceInput).not.toContain('useSlashCommands')
+    expect(raceInput).not.toContain('parseCommand')
+    expect(raceInput).not.toContain('slashError')
+    expect(raceInput).toContain("genericInput.push({ kind: 'text', text })")
+    expect(raceInput).toContain('return sendMessage(sessionId, race.cwd, text')
+  })
+
   it('derives workbench actions from engine capabilities', () => {
     const column = source('../../src/components/workbench/WorkbenchColumn.vue')
     const raceColumns = source('../../src/components/workbench/RaceColumns.vue')

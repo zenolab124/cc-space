@@ -38,7 +38,7 @@ function badgeTitle(cat: string): string {
         :key="cmd.name"
         class="flex items-baseline gap-2 text-xs"
       >
-        <span class="font-mono text-primary shrink-0">/{{ cmd.name }}</span>
+        <span class="font-mono text-primary shrink-0">{{ cmd.wirePrefix }}{{ cmd.name }}</span>
         <span
           v-if="cmd.hasArg && cmd.argHint"
           class="font-mono text-muted-foreground shrink-0"

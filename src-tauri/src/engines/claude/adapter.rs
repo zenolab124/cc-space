@@ -156,9 +156,18 @@ impl EngineAdapter for ClaudeEngine {
 impl AssetProvider for ClaudeEngine {
     fn list_assets(&self, query: FacetQuery) -> EngineFuture<'_, FacetPage> {
         Box::pin(async move {
-            let assets = crate::workshop::get_workshop_assets()
+            let assets = if let Some(cwd) = query.cwd.as_deref() {
+                let cwd = cwd.to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    crate::workshop::collect_composer_assets(&cwd)
+                })
                 .await
-                .map_err(internal_error)?;
+                .map_err(|error| internal_error(error.to_string()))?
+            } else {
+                crate::workshop::get_workshop_assets()
+                    .await
+                    .map_err(internal_error)?
+            };
             let value =
                 serde_json::to_value(assets).map_err(|error| internal_error(error.to_string()))?;
             let mut items = Vec::new();

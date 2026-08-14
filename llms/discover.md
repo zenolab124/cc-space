@@ -63,7 +63,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Remote Control toggle: start/stop the CLI's remote control dynamically
 - Gentle interrupt (doesn't kill the process; next turn continues) vs. a visually distinct "terminate" for external processes
 - Input box: Enter to send / Shift+Enter for newline; paste or drag in images (format validation, auto-compression for oversized files, classified error messages); thumbnail stack with hover-to-delete
-- Slash command palette: type `/` to open, keyboard navigation, source badges (built-in / skill / terminal passthrough), instant argument validation (missing args and unknown model names are caught before sending), `/help` renders the full command list locally
+- Multi-engine command palette: type `/` or `$` to open, with keyboard navigation and source badges (built-in / skill / terminal passthrough); Monet normalizes Claude Code and Codex prefix/protocol differences, prefers project/repository skills over same-named user skills, and sends Codex skills as structured references; instant argument validation catches missing arguments and unknown model names before sending, while `/help` or `$help` renders the current engine's command list locally
 - Interactive commands auto-route to terminal: things a GUI can't do (`/login`, `/vim`) open the system terminal at the session's directory with the command pre-filled
 - Busy queueing: when the session is busy or running elsewhere, messages queue up and send in order; the queue is visible and revocable
 - External session awareness: when a session is running in a terminal or VS Code, Monet shows "running in X" naming the owner; you can watch along, or terminate it from Monet

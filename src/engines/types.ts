@@ -150,6 +150,7 @@ export type RuntimeInputItem =
   | { kind: 'text'; text: string }
   | { kind: 'image'; mediaType: string; data: string }
   | { kind: 'file'; path: string }
+  | { kind: 'skill'; name: string; path: string }
 
 export interface TurnRef {
   session: SessionRef

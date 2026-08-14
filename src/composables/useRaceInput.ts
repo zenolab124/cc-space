@@ -10,7 +10,6 @@ import { useProjects } from './useProjects'
 import { refreshCliDefaults, readCliDefaults } from './useCliDefaults'
 import { resolveRunConfig } from './useRunConfig'
 import { getSessionSettings } from './useSessionSettings'
-import { parseCommand } from './useSlashCommands'
 import {
   attachSession,
   createSession,
@@ -46,7 +45,6 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
   // 拖拽收图区由组件侧绑定(整个赛马区,拖到任意位置都进共享输入)
   const dropAreaRef = ref<HTMLElement>()
   const imageInput = useImageInput({ pasteTarget: textareaRef, dropTarget: dropAreaRef })
-  const slashError = ref<string | null>(null)
 
   const { sendMessage, stopStreaming } = useStreaming()
   const {
@@ -276,16 +274,6 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       sessionId: lane.sessionId,
       context: laneContext(lane.sessionId),
     }))
-    const initialNativeRace = targets.every(target => target.context.native)
-    if (initialNativeRace) {
-      const parsed = parseCommand(text)
-      if (parsed.kind === 'invalid') {
-        slashError.value = parsed.reason
-        return
-      }
-      if (parsed.kind === 'native' || parsed.kind === 'terminal') return
-    }
-    slashError.value = null
     raceError.value = null
     broadcasting.value = true
     try {
@@ -507,7 +495,6 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     textareaRef,
     dropAreaRef,
     imageInput,
-    slashError,
     raceError,
     raceMutationLoading,
     broadcasting,

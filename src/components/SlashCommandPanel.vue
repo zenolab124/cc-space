@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import {
+  composerPrefix,
   filterCommands,
+  type CommandCatalogContext,
   type SlashCommand,
   type SlashCommandCategory,
 } from '@/composables/useSlashCommands'
@@ -14,6 +16,7 @@ const props = defineProps<{
   position?: { top: number; left: number }
   skills?: WorkshopSkill[]
   commands?: WorkshopCommand[]
+  context?: CommandCatalogContext
 }>()
 
 const emit = defineEmits<{
@@ -24,8 +27,10 @@ const emit = defineEmits<{
 const { t } = useI18n()
 
 const filtered = computed<SlashCommand[]>(() =>
-  filterCommands(props.query, props.skills, props.commands),
+  filterCommands(props.query, props.skills, props.commands, props.context),
 )
+
+const displayPrefix = computed(() => composerPrefix(props.query) ?? '/')
 
 const activeIndex = ref(0)
 
@@ -139,7 +144,7 @@ function badgeFor(cat: SlashCommandCategory): string | null {
         @mouseenter="activeIndex = i"
         @click="selectAt(i)"
       >
-        <span class="text-sm font-mono text-primary shrink-0">/{{ cmd.name }}</span>
+        <span class="text-sm font-mono text-primary shrink-0">{{ displayPrefix }}{{ cmd.name }}</span>
         <span
           v-if="cmd.hasArg && cmd.argHint"
           class="text-xs text-muted-foreground font-mono shrink-0"

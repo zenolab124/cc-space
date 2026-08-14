@@ -187,6 +187,7 @@ export interface WorkshopSkill {
   argumentHint: string | null
   version: string | null
   source: string
+  scope?: 'project' | 'repo' | 'user' | 'admin' | 'system' | string
   path: string
 }
 
@@ -195,6 +196,7 @@ export interface WorkshopCommand {
   description: string
   argumentHint: string | null
   source: string
+  scope?: 'project' | 'repo' | 'user' | 'admin' | 'system' | string
   path: string
 }
 

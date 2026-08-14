@@ -16,6 +16,9 @@ pub struct FacetItem {
 #[serde(rename_all = "camelCase")]
 pub struct FacetQuery {
     pub kind: Option<String>,
+    /// 可选会话工作目录。需要按项目作用域解析资产的 provider 必须使用它，
+    /// 不得把其它已发现项目的资产混入结果。
+    pub cwd: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<usize>,
 }

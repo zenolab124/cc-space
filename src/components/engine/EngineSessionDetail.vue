@@ -57,6 +57,17 @@ import { measureElement as measureVirtualElement, useVirtualizer, type Virtualiz
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
 import { hasUpwardScrollRange, shouldCompensateVirtualItemSizeChange, shouldDetachScrollFollowAfterMovement } from '@/lib/sessionScrollPolicy'
 import { collectSessionCapabilityFingerprint, useHtmlVisual } from '@/features'
+import SlashCommandPanel from '@/components/SlashCommandPanel.vue'
+import SlashHelpCard from '@/components/SlashHelpCard.vue'
+import { useComposerCommands } from '@/composables/useComposerCommands'
+import {
+  composerPrefix,
+  formatCommandInvocation,
+  getAllCommands,
+  parseCommand,
+  shouldTriggerPanel,
+  type SlashCommand,
+} from '@/composables/useSlashCommands'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -75,7 +86,11 @@ const sending = ref(false)
 const preparingInput = ref(false)
 const interrupting = ref(false)
 const error = ref<string | null>(null)
+const commandError = ref<string | null>(null)
 const input = ref('')
+const cursorPos = ref(0)
+const showHelpCard = ref(false)
+const clearedRecordIds = ref(new Set<string>())
 const detailRootRef = ref<HTMLElement>()
 const composerFieldRef = ref<InstanceType<typeof SessionComposerField>>()
 const textareaRef = computed(() => composerFieldRef.value?.element ?? null)
@@ -187,7 +202,8 @@ function bindDetailRoot(element: HTMLElement | null) {
 
 const reference = computed(() => props.session.reference)
 const nativeSessionId = computed(() => props.session.native_id || props.session.id)
-const allRecords = computed(() => composeRuntimeTimeline(records.value, liveRecords.value))
+const allRecords = computed(() => composeRuntimeTimeline(records.value, liveRecords.value)
+  .filter(record => !clearedRecordIds.value.has(record.id)))
 const asyncTasks = computed(() => buildEngineAsyncTasks(allRecords.value))
 const asyncPanelVisible = computed(() => asyncPanelOpen.value && asyncTasks.value.length > 0 && !!reference.value)
 const {
@@ -227,6 +243,27 @@ const timelineEffort = computed(() => {
   return typeof value === 'string' ? value : null
 })
 const sessionEngineId = computed(() => props.session.engine?.engineId ?? 'unknown')
+const commandEngineInstance = computed(() => props.session.engine ?? {
+  engineId: sessionEngineId.value,
+  instanceId: 'default',
+})
+const commandCwd = computed(() => props.session.cwd ?? engineDraft(props.session.id)?.cwd ?? null)
+const commandCatalogContext = computed(() => ({
+  engineId: sessionEngineId.value,
+  cwd: commandCwd.value,
+}))
+const {
+  skills: composerSkills,
+  commands: composerCommands,
+  ready: composerCommandsReady,
+  refresh: refreshComposerCommands,
+} = useComposerCommands(commandEngineInstance, commandCwd)
+const allComposerCommands = computed(() => getAllCommands(
+  composerSkills.value,
+  composerCommands.value,
+  commandCatalogContext.value,
+))
+const commandPanelVisible = computed(() => shouldTriggerPanel(input.value, cursorPos.value))
 const timelineProvider = computed(() => engineProviderIdFromSource(
   props.session.source_meta,
   sessionEngineId.value,
@@ -1181,16 +1218,89 @@ async function prepareSessionForSend(inputItems: RuntimeInputItem[]): Promise<Se
   }
 }
 
-async function serializeRuntimeInput(text: string, images: readonly PendingImage[]): Promise<RuntimeInputItem[]> {
+async function serializeRuntimeInput(
+  text: string,
+  images: readonly PendingImage[],
+  skill?: { name: string; path: string },
+): Promise<RuntimeInputItem[]> {
   const imageBlocks = images.length ? await imageInput.toImageBlocks(images) : []
   return [
     ...(text ? [{ kind: 'text' as const, text }] : []),
+    ...(skill ? [{ kind: 'skill' as const, name: skill.name, path: skill.path }] : []),
     ...imageBlocks.map(block => ({
       kind: 'image' as const,
       mediaType: block.source.media_type,
       data: block.source.data,
     })),
   ]
+}
+
+function resetComposerField() {
+  input.value = ''
+  cursorPos.value = 0
+  composerFieldRef.value?.resetHeight()
+}
+
+function syncCommandCursor() {
+  cursorPos.value = textareaRef.value?.selectionStart ?? 0
+}
+
+function onCommandInput() {
+  syncCommandCursor()
+  commandError.value = null
+}
+
+function onCommandSelect(command: SlashCommand) {
+  const prefix = composerPrefix(input.value) ?? command.wirePrefix
+  if (command.hasArg) {
+    const insertion = `${prefix}${command.name} `
+    input.value = insertion
+    nextTick(() => {
+      const textarea = textareaRef.value
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(insertion.length, insertion.length)
+      cursorPos.value = insertion.length
+    })
+    return
+  }
+  input.value = `${prefix}${command.name}`
+  cursorPos.value = 0
+  nextTick(() => { void send() })
+}
+
+function handleNativeCommand(command: SlashCommand) {
+  switch (command.name) {
+    case 'help':
+      showHelpCard.value = true
+      resumeTimelineFollow()
+      break
+    case 'clear':
+      clearedRecordIds.value = new Set(
+        composeRuntimeTimeline(records.value, liveRecords.value).map(record => record.id),
+      )
+      showHelpCard.value = false
+      break
+    case 'new':
+      commandError.value = t('session.slashNewInWorkbench')
+      break
+    case 'cd':
+      commandError.value = t('session.slashOpenInWorkbench')
+      break
+  }
+}
+
+function handleModelCommand(model: string): boolean {
+  const normalized = model.toLocaleLowerCase()
+  const descriptor = models.value.find(item =>
+    item.model.toLocaleLowerCase() === normalized || item.id.toLocaleLowerCase() === normalized,
+  )
+  if (!descriptor) {
+    commandError.value = t('slash.errorEngineModelUnknown')
+    return false
+  }
+  onEngineModelChange(descriptor.model)
+  return true
 }
 
 function selectedTurnOptions(serviceTier: string | null = selectedServiceTier.value) {
@@ -1266,14 +1376,48 @@ function removeQueuedInput(id: string) {
 }
 
 async function send() {
-  const text = input.value.trim()
+  let text = input.value.trim()
   const draftImages = [...imageInput.images.value]
   if ((!text && draftImages.length === 0) || !reference.value || preparingInput.value || sending.value || resolvingWriterConflict.value) return
+  if (composerPrefix(text) && !composerCommandsReady.value) {
+    await refreshComposerCommands()
+  }
+  const parsed = parseCommand(
+    text,
+    composerSkills.value,
+    composerCommands.value,
+    commandCatalogContext.value,
+  )
+  if (parsed.kind === 'invalid') {
+    commandError.value = parsed.reason
+    return
+  }
+  commandError.value = null
+  if (parsed.kind === 'native') {
+    handleNativeCommand(parsed.cmd)
+    resetComposerField()
+    return
+  }
+  if (parsed.kind === 'terminal') {
+    commandError.value = t('slash.unsupportedForEngine')
+    return
+  }
+  if (parsed.kind === 'pass' && parsed.cmd.name === 'model') {
+    if (handleModelCommand(parsed.arg)) resetComposerField()
+    return
+  }
+  let explicitSkill: { name: string; path: string } | undefined
+  if (parsed.kind === 'pass') {
+    text = formatCommandInvocation(parsed.cmd, parsed.arg)
+    if (parsed.cmd.category === 'skill' && parsed.cmd.path && sessionEngineId.value === 'codex') {
+      explicitSkill = { name: parsed.cmd.name, path: parsed.cmd.path }
+    }
+  }
   const queueForNextTurn = runtimeActive.value
   let consumeAfterPreparation = false
   preparingInput.value = true
   try {
-    const inputItems = await serializeRuntimeInput(text, draftImages)
+    const inputItems = await serializeRuntimeInput(text, draftImages, explicitSkill)
     const queuedItem: QueuedRuntimeInput = {
       id: `queued-input-${++queuedInputSequence}`,
       text,
@@ -1287,7 +1431,7 @@ async function send() {
     }
 
     if (queueForNextTurn) {
-      input.value = ''
+      resetComposerField()
       imageInput.clearImages()
       queuedInputs.value.push(queuedItem)
       consumeAfterPreparation = !runtimeActive.value
@@ -1296,7 +1440,7 @@ async function send() {
 
     const preparation = await prepareSessionForSend(inputItems)
     if (preparation === 'forked') {
-      input.value = ''
+      resetComposerField()
       imageInput.clearImages()
       return
     }
@@ -1305,7 +1449,7 @@ async function send() {
       return
     }
 
-    input.value = ''
+    resetComposerField()
     imageInput.clearImages()
     const sent = await submitRuntimeInput(queuedItem, true)
     if (!sent && draftImages.length) {
@@ -1504,6 +1648,10 @@ watch(() => props.session.id, async () => {
     fastModeNotice.value = null
     records.value = []
     liveRecords.value = []
+    clearedRecordIds.value = new Set()
+    showHelpCard.value = false
+    commandError.value = null
+    cursorPos.value = 0
     queuedInputs.value = []
     imageInput.clearImages()
     snapshot.value = null
@@ -1781,7 +1929,7 @@ onUnmounted(() => {
         </div>
       </div>
       <SessionContentState v-if="loading && !records.length">{{ t('common.loading') }}</SessionContentState>
-      <SessionContentState v-else-if="!allRecords.length">{{ t('session.noRecords') }}</SessionContentState>
+      <SessionContentState v-else-if="!allRecords.length && !showHelpCard">{{ t('session.noRecords') }}</SessionContentState>
       <div v-else ref="timelineContentElement" class="pb-2 relative">
         <div
           v-if="shouldVirtualize"
@@ -1857,6 +2005,7 @@ onUnmounted(() => {
             :auto-open-artifact="!isTurnStreaming(lastConversationGroup.turnId)"
           />
         </div>
+        <SlashHelpCard v-if="showHelpCard" :commands="allComposerCommands" />
         <SessionTypingIndicator :active="typingActive" />
       </div>
       <SessionContentState v-if="error" tone="danger">{{ error }}</SessionContentState>
@@ -1899,6 +2048,25 @@ onUnmounted(() => {
         @send="send"
         @stop="interrupt"
       >
+        <template #notices>
+          <div v-if="commandError" class="mb-1 text-xs text-destructive">
+            {{ commandError }}
+          </div>
+        </template>
+
+        <template #overlay>
+          <SlashCommandPanel
+            :visible="commandPanelVisible"
+            :query="input"
+            :skills="composerSkills"
+            :commands="composerCommands"
+            :context="commandCatalogContext"
+            class="absolute bottom-full left-4 mb-1"
+            @select="onCommandSelect"
+            @close="commandError = null"
+          />
+        </template>
+
         <template #queue>
           <SessionComposerQueue :items="composerQueueItems" @remove="removeQueuedInput" />
         </template>
@@ -1920,6 +2088,10 @@ onUnmounted(() => {
             :placeholder="t('session.inputPlaceholder')"
             :disabled="attaching || resolvingWriterConflict"
             @keydown="onInputKeydown"
+            @input="onCommandInput"
+            @keyup="syncCommandCursor"
+            @click="syncCommandCursor"
+            @select="syncCommandCursor"
           />
         </template>
       </SessionComposer>

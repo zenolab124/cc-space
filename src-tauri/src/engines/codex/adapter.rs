@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::sync::Arc;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::{default_instance, CodexRuntime, CodexSource, CodexSupervisor};
 use crate::engines::core::*;
@@ -49,7 +49,7 @@ impl CodexEngine {
                     ],
                 }),
                 facets: FacetCapabilities {
-                    assets: false,
+                    assets: true,
                     automation: true,
                     configuration: false,
                     quota: true,
@@ -189,6 +189,10 @@ impl EngineAdapter for CodexEngine {
         Some(self.runtime.as_ref())
     }
 
+    fn assets(&self) -> Option<&dyn AssetProvider> {
+        Some(self)
+    }
+
     fn models(&self) -> Option<&dyn ModelCatalogProvider> {
         Some(self.runtime.as_ref())
     }
@@ -196,6 +200,103 @@ impl EngineAdapter for CodexEngine {
     fn quota(&self) -> Option<&dyn QuotaProvider> {
         Some(self)
     }
+}
+
+impl AssetProvider for CodexEngine {
+    fn list_assets(&self, query: FacetQuery) -> EngineFuture<'_, FacetPage> {
+        Box::pin(async move {
+            if !matches!(query.kind.as_deref(), None | Some("skill")) {
+                return Ok(FacetPage {
+                    items: Vec::new(),
+                    next_cursor: None,
+                });
+            }
+            let Some(cwd) = query.cwd.as_deref() else {
+                return Ok(FacetPage {
+                    items: Vec::new(),
+                    next_cursor: None,
+                });
+            };
+            let response = self.supervisor.request(
+                "skills/list",
+                json!({ "cwds": [cwd], "forceReload": false }),
+            )?;
+            let items = codex_skill_items(&response, cwd);
+            let (items, next_cursor) = paginate_assets(items, query.cursor, query.limit);
+            Ok(FacetPage { items, next_cursor })
+        })
+    }
+}
+
+fn codex_skill_items(response: &Value, cwd: &str) -> Vec<FacetItem> {
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|data| {
+            data.iter()
+                .find(|entry| entry.get("cwd").and_then(Value::as_str) == Some(cwd))
+        })
+        .and_then(|entry| entry.get("skills"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|skill| {
+            skill
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        })
+        .filter_map(|skill| {
+            let name = skill.get("name")?.as_str()?.to_string();
+            let description = skill
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let path = skill
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let scope = skill
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("user")
+                .to_string();
+            Some(FacetItem {
+                id: format!("skill:{name}:{path}"),
+                display_name: name.clone(),
+                description: description.clone(),
+                data: json!({
+                    "name": name,
+                    "description": description.unwrap_or_default(),
+                    "argumentHint": Value::Null,
+                    "version": Value::Null,
+                    "source": scope,
+                    "scope": scope,
+                    "path": path,
+                }),
+            })
+        })
+        .collect()
+}
+
+fn paginate_assets(
+    items: Vec<FacetItem>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+) -> (Vec<FacetItem>, Option<String>) {
+    let start = cursor
+        .as_deref()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_default()
+        .min(items.len());
+    let end = (start + limit.unwrap_or(items.len())).min(items.len());
+    let next_cursor = (end < items.len()).then(|| end.to_string());
+    (
+        items.into_iter().skip(start).take(end - start).collect(),
+        next_cursor,
+    )
 }
 
 fn status_for(source: &CapabilityHealth, runtime: &CapabilityHealth) -> EngineHealthStatus {
@@ -307,5 +408,40 @@ mod tests {
             "requiresOpenaiAuth": true,
             "account": null
         })));
+    }
+
+    #[test]
+    fn maps_enabled_codex_skills_with_scope_and_path() {
+        let items = codex_skill_items(
+            &json!({
+                "data": [{
+                    "cwd": "/workspace/app",
+                    "skills": [
+                        {
+                            "name": "review",
+                            "description": "Review changes",
+                            "path": "/workspace/app/.agents/skills/review/SKILL.md",
+                            "scope": "repo",
+                            "enabled": true
+                        },
+                        {
+                            "name": "disabled",
+                            "path": "/home/alice/.agents/skills/disabled/SKILL.md",
+                            "scope": "user",
+                            "enabled": false
+                        }
+                    ]
+                }]
+            }),
+            "/workspace/app",
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].display_name, "review");
+        assert_eq!(items[0].data["scope"], "repo");
+        assert_eq!(
+            items[0].data["path"],
+            "/workspace/app/.agents/skills/review/SKILL.md"
+        );
     }
 }

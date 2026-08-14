@@ -32,12 +32,14 @@ import {
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useNotifications } from '@/composables/useNotifications'
 import {
+  composerPrefix,
+  formatCommandInvocation,
   shouldTriggerPanel,
   parseCommand,
   getAllCommands,
   type SlashCommand,
 } from '@/composables/useSlashCommands'
-import { useWorkshop } from '@/composables/useWorkshop'
+import { useComposerCommands } from '@/composables/useComposerCommands'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 import { displayTitle, shortId, hasReportedUsage, shouldReplaceUsage } from '@/types'
 import { inferModel } from '@/utils/modelContext'
@@ -593,8 +595,18 @@ watch(() => stream.value.streaming, (streaming, was) => {
 
 // --- 斜杠命令(FR-004)状态 ---
 
-const { assets: workshopAssets, ensureLoaded: ensureWorkshopLoaded } = useWorkshop()
-ensureWorkshopLoaded()
+const claudeEngineInstance = computed(() => ({ engineId: 'claude-code', instanceId: 'default' }))
+const composerCwd = computed(() => currentSession.value?.summary.cwd ?? null)
+const composerCommandContext = computed(() => ({
+  engineId: 'claude-code',
+  cwd: composerCwd.value,
+}))
+const {
+  skills: composerSkills,
+  commands: composerCommands,
+  ready: composerCommandsReady,
+  refresh: refreshComposerCommands,
+} = useComposerCommands(claudeEngineInstance, composerCwd)
 
 const cursorPos = ref(0)
 
@@ -615,7 +627,7 @@ const slashPanelVisible = computed(() =>
 )
 
 const allSlashCommands = computed(() =>
-  getAllCommands(workshopAssets.value?.skills, workshopAssets.value?.commands),
+  getAllCommands(composerSkills.value, composerCommands.value, composerCommandContext.value),
 )
 
 function autoResize() {
@@ -1859,8 +1871,9 @@ function isModelCommandRecord(record: Extract<SessionRecord, { type: 'user' }>):
 // --- 斜杠命令处理 ---
 
 function onSlashSelect(cmd: SlashCommand) {
+  const prefix = composerPrefix(inputText.value) ?? cmd.wirePrefix
   if (cmd.hasArg) {
-    const insert = `/${cmd.name} `
+    const insert = `${prefix}${cmd.name} `
     inputText.value = insert
     nextTick(() => {
       const el = textareaRef.value
@@ -1872,7 +1885,7 @@ function onSlashSelect(cmd: SlashCommand) {
       cursorPos.value = pos
     })
   } else {
-    inputText.value = `/${cmd.name}`
+    inputText.value = `${prefix}${cmd.name}`
     cursorPos.value = 0
     nextTick(() => handleSend())
   }
@@ -1918,7 +1931,7 @@ function handleChangeDirectory(arg: string) {
   selectSession(target.sessions[0].id)
 }
 
-function handleNativeCommand(cmd: SlashCommand) {
+function handleNativeCommand(cmd: SlashCommand, arg: string) {
   switch (cmd.name) {
     case 'help':
       showHelpCard.value = true
@@ -1931,7 +1944,6 @@ function handleNativeCommand(cmd: SlashCommand) {
       handleNewSession()
       break
     case 'cd': {
-      const arg = inputText.value.trim().replace(/^\/cd\s+/, '')
       handleChangeDirectory(arg)
       break
     }
@@ -1943,12 +1955,21 @@ function handleModelSwitch(modelName: string) {
 }
 
 async function handleSend() {
-  const text = inputText.value.trim()
+  let text = inputText.value.trim()
   if ((!text && !imageInput.images.value.length) || !currentSession.value) return
   const cs = currentSession.value
   if (!cs.summary.cwd) return
 
-  const parsed = parseCommand(text, workshopAssets.value?.skills, workshopAssets.value?.commands)
+  if (composerPrefix(text) && !composerCommandsReady.value) {
+    await refreshComposerCommands()
+  }
+
+  const parsed = parseCommand(
+    text,
+    composerSkills.value,
+    composerCommands.value,
+    composerCommandContext.value,
+  )
 
   // /model invalid 等:不清空输入,显示提示
   if (parsed.kind === 'invalid') {
@@ -1959,7 +1980,7 @@ async function handleSend() {
 
   // native 命令(/help /clear /new /cd):前端处理,不调 CLI
   if (parsed.kind === 'native') {
-    handleNativeCommand(parsed.cmd)
+    handleNativeCommand(parsed.cmd, parsed.arg)
     inputText.value = ''
     if (textareaRef.value) textareaRef.value.style.height = 'auto'
     return
@@ -1997,6 +2018,10 @@ async function handleSend() {
     inputText.value = ''
     if (textareaRef.value) textareaRef.value.style.height = 'auto'
     return
+  }
+
+  if (parsed.kind === 'pass') {
+    text = formatCommandInvocation(parsed.cmd, parsed.arg)
   }
 
   // unknown / 普通文本:走原始流式发送
@@ -3512,8 +3537,9 @@ async function onReload() {
         <SlashCommandPanel
           :visible="slashPanelVisible"
           :query="inputText"
-          :skills="workshopAssets?.skills"
-          :commands="workshopAssets?.commands"
+          :skills="composerSkills"
+          :commands="composerCommands"
+          :context="composerCommandContext"
           class="absolute bottom-full left-4 mb-1"
           @select="onSlashSelect"
           @close="onSlashClose"

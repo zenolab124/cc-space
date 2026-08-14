@@ -28,6 +28,8 @@ use serde::{Deserialize, Serialize};
 
 /// source 标签：全局资产
 const GLOBAL_SOURCE: &str = "全局";
+const USER_SCOPE: &str = "user";
+const PROJECT_SCOPE: &str = "project";
 /// v2.9.0 FR-003：source 标签——来自 ~/.claude/settings.json 的 MCP 服务器
 const SETTINGS_SOURCE: &str = "设置";
 /// frontmatter 解析失败的容错文案（PRD FR-001 规则 6，全角括号）
@@ -47,6 +49,8 @@ pub struct SkillAsset {
     pub argument_hint: Option<String>,
     pub version: Option<String>,
     pub source: String,
+    /// user | project。输入框按该字段做同名覆盖，不依赖本地化 source 文案。
+    pub scope: String,
     pub path: String,
 }
 
@@ -57,6 +61,8 @@ pub struct CommandAsset {
     pub description: String,
     pub argument_hint: Option<String>,
     pub source: String,
+    /// user | project。输入框按该字段做同名覆盖，不依赖本地化 source 文案。
+    pub scope: String,
     pub path: String,
 }
 
@@ -276,11 +282,42 @@ fn collect_workshop_assets() -> Result<WorkshopAssets, String> {
     Ok(assets)
 }
 
+/// 会话输入框使用的 Claude 资产：只扫描用户级与当前项目级，避免把其它项目的
+/// skill/command 混进当前 cwd。两层都保留，由前端按 project > user 统一消歧。
+pub fn collect_composer_assets(cwd: &str) -> WorkshopAssets {
+    collect_composer_assets_from(&crate::config::claude_root(), Path::new(cwd))
+}
+
+fn collect_composer_assets_from(claude_dir: &Path, cwd: &Path) -> WorkshopAssets {
+    let mut skills = scan_skills_dir(&claude_dir.join("skills"), GLOBAL_SOURCE, USER_SCOPE);
+    let mut commands = scan_commands_dir(&claude_dir.join("commands"), GLOBAL_SOURCE, USER_SCOPE);
+    let project_root = cwd.join(".claude");
+    let source = project_source_name(&cwd.to_string_lossy());
+    skills.extend(scan_skills_dir(
+        &project_root.join("skills"),
+        &source,
+        PROJECT_SCOPE,
+    ));
+    commands.extend(scan_commands_dir(
+        &project_root.join("commands"),
+        &source,
+        PROJECT_SCOPE,
+    ));
+    sort_assets(&mut skills, |asset| (&asset.source, &asset.name));
+    sort_assets(&mut commands, |asset| (&asset.source, &asset.name));
+    WorkshopAssets {
+        skills,
+        commands,
+        agents: Vec::new(),
+        mcp_servers: Vec::new(),
+    }
+}
+
 /// 纯函数扫描核心：claude_dir = Claude 数据根，claude_json = 顶层 .claude.json 路径，
 /// project_cwds = 项目工作目录列表（单测注入 fixture）
 fn collect_assets(claude_dir: &Path, claude_json: &Path, project_cwds: &[String]) -> WorkshopAssets {
-    let mut skills = scan_skills_dir(&claude_dir.join("skills"), GLOBAL_SOURCE);
-    let mut commands = scan_commands_dir(&claude_dir.join("commands"), GLOBAL_SOURCE);
+    let mut skills = scan_skills_dir(&claude_dir.join("skills"), GLOBAL_SOURCE, USER_SCOPE);
+    let mut commands = scan_commands_dir(&claude_dir.join("commands"), GLOBAL_SOURCE, USER_SCOPE);
     let mut agents = scan_agents_dir(&claude_dir.join("agents"), GLOBAL_SOURCE);
 
     // .claude.json：用户级 MCP + 各项目 local scope MCP 与 disabled 列表。
@@ -316,8 +353,16 @@ fn collect_assets(claude_dir: &Path, claude_json: &Path, project_cwds: &[String]
     for cwd in project_cwds {
         let source = project_source_name(cwd);
         let proj_claude = Path::new(cwd).join(".claude");
-        skills.extend(scan_skills_dir(&proj_claude.join("skills"), &source));
-        commands.extend(scan_commands_dir(&proj_claude.join("commands"), &source));
+        skills.extend(scan_skills_dir(
+            &proj_claude.join("skills"),
+            &source,
+            PROJECT_SCOPE,
+        ));
+        commands.extend(scan_commands_dir(
+            &proj_claude.join("commands"),
+            &source,
+            PROJECT_SCOPE,
+        ));
         agents.extend(scan_agents_dir(&proj_claude.join("agents"), &source));
 
         let project_entry = claude_json.as_ref().and_then(|cj| cj.projects.get(cwd));
@@ -399,7 +444,7 @@ fn project_source_name(cwd: &str) -> String {
 
 /// Skills：<dir>/*/SKILL.md。symlink 目录必须跟随——
 /// 判定用 path().is_dir()（自动跟随），不能用 DirEntry::file_type()（symlink 返回 symlink 而非 dir）
-fn scan_skills_dir(dir: &Path, source: &str) -> Vec<SkillAsset> {
+fn scan_skills_dir(dir: &Path, source: &str, scope: &str) -> Vec<SkillAsset> {
     let Ok(read) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -430,6 +475,7 @@ fn scan_skills_dir(dir: &Path, source: &str) -> Vec<SkillAsset> {
             argument_hint,
             version,
             source: source.to_string(),
+            scope: scope.to_string(),
             path: skill_md.display().to_string(),
         });
     }
@@ -437,7 +483,7 @@ fn scan_skills_dir(dir: &Path, source: &str) -> Vec<SkillAsset> {
 }
 
 /// Commands：递归 <dir>/**/*.md，name = 相对路径去 .md，子目录构成命名空间（分隔符统一 '/'）
-fn scan_commands_dir(dir: &Path, source: &str) -> Vec<CommandAsset> {
+fn scan_commands_dir(dir: &Path, source: &str, scope: &str) -> Vec<CommandAsset> {
     let mut files = Vec::new();
     walk_md_files(dir, 0, &mut files);
     let mut out = Vec::new();
@@ -455,6 +501,7 @@ fn scan_commands_dir(dir: &Path, source: &str) -> Vec<CommandAsset> {
             description,
             argument_hint,
             source: source.to_string(),
+            scope: scope.to_string(),
             path: file.display().to_string(),
         });
     }
@@ -1766,7 +1813,7 @@ mod tests {
         );
         fx.write("skills/gamma/SKILL.md", "---\nname: gamma\n---\n");
 
-        let mut skills = scan_skills_dir(&fx.root.join("skills"), GLOBAL_SOURCE);
+        let mut skills = scan_skills_dir(&fx.root.join("skills"), GLOBAL_SOURCE, USER_SCOPE);
         skills.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(skills.len(), 3);
 
@@ -1798,7 +1845,7 @@ mod tests {
             "---\nname: [unclosed\ndescription: ::: bad\n---\n",
         );
 
-        let mut skills = scan_skills_dir(&fx.root.join("skills"), GLOBAL_SOURCE);
+        let mut skills = scan_skills_dir(&fx.root.join("skills"), GLOBAL_SOURCE, USER_SCOPE);
         skills.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(skills.len(), 2, "坏 YAML 项必须仍在列表中");
 
@@ -1816,9 +1863,9 @@ mod tests {
     fn missing_dirs_return_empty() {
         let fx = Fixture::new("missing-dirs");
         let nowhere = fx.root.join("does-not-exist");
-        assert!(scan_commands_dir(&nowhere.join("commands"), GLOBAL_SOURCE).is_empty());
+        assert!(scan_commands_dir(&nowhere.join("commands"), GLOBAL_SOURCE, USER_SCOPE).is_empty());
         assert!(scan_agents_dir(&nowhere.join("agents"), GLOBAL_SOURCE).is_empty());
-        assert!(scan_skills_dir(&nowhere.join("skills"), GLOBAL_SOURCE).is_empty());
+        assert!(scan_skills_dir(&nowhere.join("skills"), GLOBAL_SOURCE, USER_SCOPE).is_empty());
     }
 
     #[test]
@@ -1830,7 +1877,7 @@ mod tests {
         );
         fx.write("commands/git/pr.md", "---\ndescription: 命名空间\n---\n");
 
-        let mut commands = scan_commands_dir(&fx.root.join("commands"), GLOBAL_SOURCE);
+        let mut commands = scan_commands_dir(&fx.root.join("commands"), GLOBAL_SOURCE, USER_SCOPE);
         commands.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(commands.len(), 2);
 
@@ -1840,6 +1887,31 @@ mod tests {
 
         assert_eq!(commands[1].name, "top");
         assert_eq!(commands[1].argument_hint.as_deref(), Some("[arg]"));
+    }
+
+    #[test]
+    fn composer_assets_include_only_user_and_current_project_scopes() {
+        let fx = Fixture::new("composer-scopes");
+        fx.write(
+            "config/skills/shared/SKILL.md",
+            "---\nname: shared\ndescription: user\n---\n",
+        );
+        fx.write(
+            "project/.claude/skills/shared/SKILL.md",
+            "---\nname: shared\ndescription: project\n---\n",
+        );
+        fx.write(
+            "other/.claude/skills/foreign/SKILL.md",
+            "---\nname: foreign\ndescription: other\n---\n",
+        );
+
+        let assets =
+            collect_composer_assets_from(&fx.root.join("config"), &fx.root.join("project"));
+
+        assert_eq!(assets.skills.len(), 2);
+        assert!(assets.skills.iter().any(|item| item.scope == "user"));
+        assert!(assets.skills.iter().any(|item| item.scope == "project"));
+        assert!(!assets.skills.iter().any(|item| item.name == "foreign"));
     }
 
     #[cfg(unix)]
@@ -1858,7 +1930,7 @@ mod tests {
         )
         .unwrap();
 
-        let skills = scan_skills_dir(&fx.root.join("skills"), GLOBAL_SOURCE);
+        let skills = scan_skills_dir(&fx.root.join("skills"), GLOBAL_SOURCE, USER_SCOPE);
         assert_eq!(skills.len(), 1, "symlink 目录必须被跟随");
         assert_eq!(skills[0].name, "linked");
         assert_eq!(skills[0].description, "经 symlink 进来");

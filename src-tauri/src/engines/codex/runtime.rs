@@ -920,6 +920,9 @@ fn map_input(input: Vec<InputItem>) -> Vec<Value> {
                     .unwrap_or("file");
                 json!({ "type": "mention", "name": name, "path": path })
             }
+            InputItem::Skill { name, path } => {
+                json!({ "type": "skill", "name": name, "path": path })
+            }
         })
         .collect()
 }
@@ -1018,10 +1021,22 @@ mod tests {
                 media_type: "image/png".into(),
                 data: "encoded".into(),
             },
+            InputItem::Skill {
+                name: "review".into(),
+                path: "/home/alice/.agents/skills/review/SKILL.md".into(),
+            },
         ]);
         assert_eq!(input[0]["type"], "text");
         assert_eq!(input[1]["type"], "mention");
         assert_eq!(input[2]["url"], "data:image/png;base64,encoded");
+        assert_eq!(
+            input[3],
+            json!({
+                "type": "skill",
+                "name": "review",
+                "path": "/home/alice/.agents/skills/review/SKILL.md",
+            })
+        );
     }
 
     #[test]

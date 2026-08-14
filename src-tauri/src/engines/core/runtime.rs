@@ -28,9 +28,21 @@ pub struct TurnRef {
     rename_all_fields = "camelCase"
 )]
 pub enum InputItem {
-    Text { text: String },
-    Image { media_type: String, data: String },
-    File { path: String },
+    Text {
+        text: String,
+    },
+    Image {
+        media_type: String,
+        data: String,
+    },
+    File {
+        path: String,
+    },
+    /// 显式技能引用。支持结构化 skill item 的引擎直接映射；其它引擎可退化为文本。
+    Skill {
+        name: String,
+        path: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

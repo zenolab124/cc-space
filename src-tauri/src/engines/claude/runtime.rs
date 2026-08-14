@@ -641,6 +641,7 @@ fn map_input(input: Vec<InputItem>) -> (String, Vec<Value>) {
                 "source": { "type": "base64", "media_type": media_type, "data": data }
             })),
             InputItem::File { path } => text.push(format!("@{path}")),
+            InputItem::Skill { name, .. } => text.push(format!("/{name}")),
         }
     }
     (text.join("\n"), images)

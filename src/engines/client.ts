@@ -117,13 +117,13 @@ export function listModels(instance: EngineInstanceId): Promise<ModelDescriptor[
   return invoke('engine_list_models', { instance })
 }
 
-export async function listAssets(instance: EngineInstanceId, kind: string): Promise<FacetItem[]> {
+export async function listAssets(instance: EngineInstanceId, kind: string, cwd?: string | null): Promise<FacetItem[]> {
   const result: FacetItem[] = []
   let cursor: string | null = null
   for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber++) {
     const page: { items: FacetItem[]; nextCursor: string | null } = await invoke('engine_list_assets', {
       instance,
-      query: { kind, cursor, limit: PAGE_LIMIT },
+      query: { kind, cwd: cwd || null, cursor, limit: PAGE_LIMIT },
     })
     result.push(...page.items)
     if (!page.nextCursor || page.nextCursor === cursor) return result
