@@ -162,6 +162,7 @@ watch(focusColumnRequest, async (req) => {
   <div class="flex-1 min-w-0 h-full relative">
     <div
       ref="containerRef"
+      data-workbench-panorama
       class="h-full flex flex-row p-2.5 gap-2.5 overflow-x-auto"
       :class="{ 'drop-target-highlight': isDropTarget }"
     >
@@ -209,6 +210,22 @@ watch(focusColumnRequest, async (req) => {
 .divider-shift {
   background: color-mix(in srgb, var(--primary) 25%, transparent);
 }
+.workbench-column-enter-active {
+  pointer-events: none;
+  transition:
+    width 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    flex-basis 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    margin-left 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 160ms ease !important;
+}
+.workbench-column-enter-from {
+  width: 0 !important;
+  flex-grow: 0 !important;
+  flex-basis: 0 !important;
+  margin-left: -10px;
+  opacity: 0;
+}
 .workbench-column-leave-active {
   pointer-events: none;
   transition:
@@ -227,6 +244,7 @@ watch(focusColumnRequest, async (req) => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .workbench-column-enter-active,
   .workbench-column-leave-active {
     transition: none !important;
   }
