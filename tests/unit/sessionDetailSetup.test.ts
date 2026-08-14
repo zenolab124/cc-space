@@ -17,4 +17,12 @@ describe('SessionDetail setup order', () => {
     expect(taskLedger).toBeGreaterThan(externalState)
     expect(taskWatch).toBeGreaterThan(taskLedger)
   })
+
+  it('initializes the current session before composer assets are watched', () => {
+    const currentSession = source.indexOf('const currentSession = computed')
+    const composerCommands = source.indexOf('} = useComposerCommands(')
+
+    expect(currentSession).toBeGreaterThanOrEqual(0)
+    expect(composerCommands).toBeGreaterThan(currentSession)
+  })
 })

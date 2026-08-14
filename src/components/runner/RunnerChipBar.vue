@@ -51,58 +51,74 @@ function ghostTitle(cmd: RunnerCommand): string {
 <template>
   <div class="flex items-center gap-1.5 flex-wrap px-3 pt-2 pb-1.5 shrink-0">
     <!-- 运行中的 chip -->
-    <button
+    <div
       v-for="runner in runners"
       :key="runner.id"
       class="chip group"
       :class="{ selected: runner.id === selectedId }"
-      :title="chipTitle(runner)"
-      @click="emit('select', runner.id)"
     >
-      <span class="status-dot" :class="statusDotClass(runner.status)" />
-      <span class="truncate max-w-72">{{ runner.cmd }}</span>
+      <button
+        type="button"
+        class="chip-main"
+        :title="chipTitle(runner)"
+        @click="emit('select', runner.id)"
+      >
+        <span class="status-dot" :class="statusDotClass(runner.status)" />
+        <span class="truncate max-w-72">{{ runner.cmd }}</span>
+      </button>
       <!-- 悬停操作：运行中/启动中显示停止，崩溃/退出显示重启 -->
       <button
         v-if="runner.status === 'running' || runner.status === 'starting'"
+        type="button"
         class="chip-act group-hover:inline-flex"
         :title="t('runner.stop')"
-        @click.stop="emit('stop', runner.id)"
+        :aria-label="t('runner.stop')"
+        @click="emit('stop', runner.id)"
       >
         ■
       </button>
       <button
         v-else-if="runner.status === 'crashed' || runner.status === 'spawn-failed' || runner.status === 'exited'"
+        type="button"
         class="chip-act chip-act-go group-hover:inline-flex"
         :title="t('runner.restart')"
-        @click.stop="emit('restart', runner.id)"
+        :aria-label="t('runner.restart')"
+        @click="emit('restart', runner.id)"
       >
         ↻
       </button>
-    </button>
+    </div>
 
     <!-- 分隔线（两侧都有内容时才显示） -->
     <div v-if="runners.length > 0 && commands.length > 0" class="chip-sep" />
 
     <!-- 候选命令 chip -->
-    <button
+    <div
       v-for="cmd in commands"
       :key="cmd.id"
       class="chip ghost group"
-      :title="ghostTitle(cmd)"
-      @click="emit('launch', cmd.id)"
     >
-      <span class="src-icon" :class="cmd.source === 'agent' ? 'text-primary' : ''">
-        {{ cmd.source === 'agent' ? '✦' : '↺' }}
-      </span>
-      <span class="truncate max-w-72">{{ cmd.cmd }}</span>
       <button
+        type="button"
+        class="chip-main"
+        :title="ghostTitle(cmd)"
+        @click="emit('launch', cmd.id)"
+      >
+        <span class="src-icon" :class="cmd.source === 'agent' ? 'text-primary' : ''">
+          {{ cmd.source === 'agent' ? '✦' : '↺' }}
+        </span>
+        <span class="truncate max-w-72">{{ cmd.cmd }}</span>
+      </button>
+      <button
+        type="button"
         class="chip-act group-hover:inline-flex"
         :title="t('runner.removeCommand')"
-        @click.stop="emit('removeCommand', cmd.id)"
+        :aria-label="t('runner.removeCommand')"
+        @click="emit('removeCommand', cmd.id)"
       >
         ✕
       </button>
-    </button>
+    </div>
   </div>
 </template>
 
@@ -155,6 +171,19 @@ function ghostTitle(cmd: RunnerCommand): string {
 .chip.ghost:hover {
   color: var(--foreground);
   background: var(--card);
+}
+
+.chip-main {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 /* Chip 内操作按钮 */

@@ -595,19 +595,6 @@ watch(() => stream.value.streaming, (streaming, was) => {
 
 // --- 斜杠命令(FR-004)状态 ---
 
-const claudeEngineInstance = computed(() => ({ engineId: 'claude-code', instanceId: 'default' }))
-const composerCwd = computed(() => currentSession.value?.summary.cwd ?? null)
-const composerCommandContext = computed(() => ({
-  engineId: 'claude-code',
-  cwd: composerCwd.value,
-}))
-const {
-  skills: composerSkills,
-  commands: composerCommands,
-  ready: composerCommandsReady,
-  refresh: refreshComposerCommands,
-} = useComposerCommands(claudeEngineInstance, composerCwd)
-
 const cursorPos = ref(0)
 
 /** /model invalid 等校验失败提示 */
@@ -911,6 +898,19 @@ const currentSession = computed<{ summary: SessionSummary; projectId: string } |
   return null
 })
 provide(SESSION_FILE_ROOT, computed(() => currentSession.value?.summary.cwd))
+
+const claudeEngineInstance = computed(() => ({ engineId: 'claude-code', instanceId: 'default' }))
+const composerCwd = computed(() => currentSession.value?.summary.cwd ?? null)
+const composerCommandContext = computed(() => ({
+  engineId: 'claude-code',
+  cwd: composerCwd.value,
+}))
+const {
+  skills: composerSkills,
+  commands: composerCommands,
+  ready: composerCommandsReady,
+  refresh: refreshComposerCommands,
+} = useComposerCommands(claudeEngineInstance, composerCwd)
 
 // 会话切换时设置 runner 项目上下文 + 增量水合
 // （immediate watch 会在注册当下同步执行 getter，必须位于 currentSession 定义之后）
