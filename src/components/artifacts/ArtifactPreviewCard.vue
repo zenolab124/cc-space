@@ -162,12 +162,15 @@ function updateFrameHeight() {
 
 function scheduleFrameHeight(contentHeight: number, fillsViewport: boolean) {
   pendingContentHeight = contentHeight
-  pendingFillsViewport = fillsViewport
+  pendingFillsViewport = pendingFillsViewport && fillsViewport
   if (heightFrame) return
   heightFrame = window.requestAnimationFrame(() => {
     heightFrame = 0
     measuredContentHeight = pendingContentHeight
-    contentFillsViewport = pendingFillsViewport
+    // 一旦确认 body 只是被 vh/svh 的最小高度撑开，本次预览保持固有内容高度，
+    // 避免收缩后内容与 iframe 等高又被误判为需要最大高度。
+    contentFillsViewport = contentFillsViewport && pendingFillsViewport
+    pendingFillsViewport = true
     updateFrameHeight()
   })
 }

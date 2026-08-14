@@ -20,12 +20,38 @@ function measurementScript(token: string): string {
       const viewportHeight = innerHeight;
       const scrollHeight = body ? body.scrollHeight : 0;
       const overflowsViewport = scrollHeight > viewportHeight + 2;
+      const bodyRect = body ? body.getBoundingClientRect() : null;
+      const bodyHeight = Math.max(
+        body ? body.offsetHeight : 0,
+        bodyRect ? bodyRect.height : 0,
+      );
+      let childTop = Number.POSITIVE_INFINITY;
+      let childBottom = Number.NEGATIVE_INFINITY;
+      if (body) {
+        for (const element of body.children) {
+          if (element.tagName === 'SCRIPT') continue;
+          const rect = element.getBoundingClientRect();
+          if (rect.width <= 0 && rect.height <= 0) continue;
+          childTop = Math.min(childTop, rect.top);
+          childBottom = Math.max(childBottom, rect.bottom);
+        }
+      }
+      const childHeight = Number.isFinite(childTop) ? childBottom - childTop : 0;
+      const bodyStyle = body ? getComputedStyle(body) : null;
+      const bodySpacing = bodyStyle
+        ? ['marginTop', 'marginBottom', 'paddingTop', 'paddingBottom']
+            .reduce((sum, property) => sum + (parseFloat(bodyStyle[property]) || 0), 0)
+        : 0;
+      const intrinsicHeight = childHeight > 0 ? childHeight + bodySpacing : bodyHeight;
+      const hasViewportFloor = !overflowsViewport
+        && bodyHeight >= viewportHeight - 2
+        && intrinsicHeight < bodyHeight - 2;
       const height = Math.ceil(Math.max(
         overflowsViewport ? scrollHeight : 0,
-        body ? body.offsetHeight : 0,
-        body ? body.getBoundingClientRect().height : 0,
+        hasViewportFloor ? intrinsicHeight : bodyHeight,
       ));
-      const fillsViewport = overflowsViewport || height >= viewportHeight - 2;
+      const fillsViewport = !hasViewportFloor
+        && (overflowsViewport || height >= viewportHeight - 2);
       parent.postMessage({ type, token, height, fillsViewport }, '*');
     };
     const schedule = () => {
