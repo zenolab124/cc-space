@@ -28,6 +28,7 @@ mod menu;
 pub mod usage_stats;
 mod perf;
 mod watcher;
+mod workbench_capture;
 mod agent;
 mod automation;
 mod metadata;
@@ -263,6 +264,7 @@ pub fn run() {
             commands::get_subagent_records,
             commands::read_task_output,
             commands::git_worktree_snapshot,
+            workbench_capture::save_workbench_capture,
             commands::get_usage_stats,
             commands::get_schema_diagnosis,
             commands::search_query,

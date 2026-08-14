@@ -309,6 +309,14 @@
       "collapsed": "Collapsed: {names}",
       "resetWidths": "Reset column widths"
     },
+    "capture": {
+      "action": "Export workbench panorama",
+      "capturing": "Generating panorama…",
+      "saved": "Workbench panorama saved",
+      "failed": "Failed to export workbench panorama",
+      "unavailable": "The current workbench cannot be captured",
+      "renderFailed": "Could not generate the PNG image"
+    },
     "column": {
       "rcEnabled": "Remote Control enabled (click to disable)",
       "rcEnable": "Enable Remote Control",

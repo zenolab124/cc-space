@@ -178,7 +178,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
-  <div class="h-screen w-screen flex flex-col bg-background text-foreground" @contextmenu.prevent>
+  <div data-workbench-capture-root class="h-screen w-screen flex flex-col bg-background text-foreground" @contextmenu.prevent>
     <DragDropProvider @before-drag-start="onBeforeDragStart" @drag-over="onWorkbenchDragOver" @drag-end="onWorkbenchDragEnd">
       <TitleBar>
         <template #leading>

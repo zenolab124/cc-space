@@ -134,7 +134,7 @@ function onInputKeydown(e: KeyboardEvent) {
   <div ref="dropAreaRef" class="flex-1 min-w-0 h-full flex flex-col">
     <div class="flex-1 min-h-0 flex flex-row">
       <!-- 赛道区(横向滚动) -->
-      <div ref="containerRef" class="flex-1 min-w-0 overflow-x-auto flex flex-row p-2.5 gap-2.5">
+      <div ref="containerRef" data-workbench-panorama class="flex-1 min-w-0 overflow-x-auto flex flex-row p-2.5 gap-2.5">
         <div
           v-for="(col, i) in activeTab.columns"
           :key="col.id"

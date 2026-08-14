@@ -64,6 +64,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "diff": "^9.0.0",
+    "html2canvas-pro": "2.3.8",
     "katex": "^0.18.1",
     "markdown-it": "^14.3.0",
     "shiki": "^4.0.2",

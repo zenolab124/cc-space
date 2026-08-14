@@ -20,6 +20,30 @@ body {
   overflow: hidden;
 }
 
+/* 工作台横向全景导出：临时扩宽真实布局，保留当前纵向视口。 */
+.workbench-capture-active,
+.workbench-capture-active * {
+  animation-play-state: paused !important;
+  caret-color: transparent !important;
+  transition: none !important;
+}
+.workbench-capture-active [data-workbench-panorama] {
+  overflow-x: hidden !important;
+}
+.workbench-capture-active * {
+  scrollbar-width: none !important;
+}
+.workbench-capture-active *::-webkit-scrollbar {
+  display: none !important;
+}
+.workbench-capture-active .conversation-turn {
+  content-visibility: visible !important;
+}
+.workbench-capture-active .sticky-user-overlay,
+.workbench-capture-active .engine-sticky-user-overlay {
+  display: none !important;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--background);

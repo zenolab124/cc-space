@@ -5,11 +5,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { useUiState } from '@/composables/useUiState'
 import { useAutomation } from '@/composables/useAutomation'
 import { useWorkbench } from '@/composables/useWorkbench'
+import { useWorkbenchCapture } from '@/composables/useWorkbenchCapture'
 import { showSystemOpenMenu } from '@/composables/useFileOpener'
 
 const { t } = useI18n()
 const { activeSection } = useUiState()
 const { activeTab, resetColumnSizes } = useWorkbench()
+const { isCapturing, captureWorkbench } = useWorkbenchCapture()
 
 // --- 自动化 ---
 const { config: autoConfig, refresh: autoRefresh, loadingConfig, loadingStats } = useAutomation()
@@ -42,6 +44,17 @@ function showGlobalConfigMenu(event: MouseEvent) {
 
 <template>
   <!-- 工作台 -->
+  <button
+    v-if="activeSection === 'workbench' && activeTab.columns.length > 0"
+    data-capture-exclude
+    class="icon-btn icon-btn-sm"
+    :disabled="isCapturing"
+    v-tooltip="isCapturing ? $t('workbench.capture.capturing') : $t('workbench.capture.action')"
+    :aria-label="$t('workbench.capture.action')"
+    @click="captureWorkbench"
+  >
+    <span class="w-3.5 h-3.5" :class="isCapturing ? 'i-carbon-progress-bar-round animate-spin' : 'i-carbon-camera'" />
+  </button>
   <button
     v-if="activeSection === 'workbench' && activeTab.columns.length >= 2"
     class="icon-btn icon-btn-sm"
