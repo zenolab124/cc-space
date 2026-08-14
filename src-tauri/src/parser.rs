@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::models::*;
 
+mod active_branch;
+
 /// 轻量结构体：仅提取 assistant 消息的 id/usage，跳过 content 反序列化
 #[derive(Deserialize)]
 struct UsageExtractor {
@@ -87,14 +89,15 @@ pub fn parse_messages(path: &Path) -> Vec<SessionRecord> {
             Ok(v) => v,
             Err(_) => continue,
         };
+        let branch_meta = active_branch::BranchMeta::from_json(&value, results.len());
         if let Some(mut record) = SessionRecord::from_json_owned(value) {
             // 为每个 image block 注入深度优先序号（ccimg 协议按此 img_index 反查 base64）
             inject_image_indices(&mut record);
-            results.push(record);
+            results.push(active_branch::BranchRecord::new(record, branch_meta));
         }
     }
 
-    results
+    active_branch::select_active_branch(results)
 }
 
 /// queue-operation 通常不是消息，但新版本 CLI 会借它投递
