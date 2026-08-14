@@ -3381,6 +3381,7 @@ async function onReload() {
             :user-has-visible-content="userHasVisibleContent"
             :content-blocks="contentBlocks"
             :channel-mark-label="channelMarkLabel"
+            auto-open-artifact
             granular-visibility
           />
         </div>
@@ -3426,6 +3427,7 @@ async function onReload() {
             v-if="currentSession?.summary.cwd"
             :candidates="streamingArtifactCandidates"
             :root="currentSession.summary.cwd"
+            :auto-open="!!streamResponseCompletedAt"
           />
         </AssistantResponseFrame>
 

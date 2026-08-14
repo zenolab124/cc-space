@@ -33,6 +33,7 @@ const props = defineProps<{
   dayLabel?: string | null
   streaming?: boolean
   artifactRoot?: string | null
+  autoOpenArtifact?: boolean
 }>()
 
 const { locale } = useI18n()
@@ -188,6 +189,7 @@ const turnView = computed<ConversationTurnView>(() => ({
         v-if="artifactRoot"
         :candidates="artifactCandidates"
         :root="artifactRoot"
+        :auto-open="autoOpenArtifact"
       />
     </template>
   </ConversationTurn>

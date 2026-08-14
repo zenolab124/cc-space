@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { formatBytes } from '@/types'
@@ -8,6 +8,12 @@ import {
   type ArtifactCandidate,
   type ArtifactKind,
 } from '@/features/artifact-preview/detectArtifacts'
+import {
+  ARTIFACT_SIZE_MESSAGE,
+  MIN_ARTIFACT_FRAME_HEIGHT,
+  clampArtifactFrameHeight,
+  prepareSandboxedHtml,
+} from '@/features/artifact-preview/sandboxHtml'
 
 interface LoadedArtifact {
   fileName: string
@@ -21,18 +27,30 @@ interface LoadedArtifact {
 const props = defineProps<{
   candidate: ArtifactCandidate
   root: string
+  autoOpen?: boolean
 }>()
 
 const { t } = useI18n()
 const cardRef = ref<HTMLElement | null>(null)
+const stageRef = ref<HTMLElement | null>(null)
+const frameRef = ref<HTMLIFrameElement | null>(null)
 const artifact = ref<LoadedArtifact | null>(null)
 const loading = ref(false)
 const expanded = ref(false)
 const error = ref<string | null>(null)
-let observer: IntersectionObserver | null = null
+const sandboxNonce = ref('')
+const frameHeight = ref(MIN_ARTIFACT_FRAME_HEIGHT)
+let visibilityObserver: IntersectionObserver | null = null
+let stageResizeObserver: ResizeObserver | null = null
+let disposeTimer: number | null = null
+let heightFrame = 0
+let measuredContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
+let pendingContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
+let loadRevision = 0
+let autoOpenAttempted = false
+let inPreviewRange = true
 
 const fileName = computed(() => artifact.value?.fileName || artifactFileName(props.candidate.path))
-const isHtml = computed(() => props.candidate.kind === 'html')
 const imageSource = computed(() => {
   const value = artifact.value
   return value?.data ? `data:${value.mediaType};base64,${value.data}` : null
@@ -47,58 +65,33 @@ const kindLabel = computed(() => {
   return labels[props.candidate.kind]
 })
 
-function prepareSandboxedHtml(source: string): string {
-  const document = new DOMParser().parseFromString(source, 'text/html')
-  document.querySelectorAll('meta[http-equiv]').forEach(element => {
-    if (element.getAttribute('http-equiv')?.toLowerCase() === 'refresh') element.remove()
-  })
-  document.querySelectorAll('a, area').forEach(element => {
-    element.removeAttribute('href')
-    element.removeAttribute('xlink:href')
-  })
-  document.querySelectorAll('base').forEach(element => element.remove())
-
-  const meta = document.createElement('meta')
-  meta.httpEquiv = 'Content-Security-Policy'
-  meta.content = [
-    "default-src 'none'",
-    "img-src data: blob:",
-    "media-src data: blob:",
-    "font-src data:",
-    "style-src 'unsafe-inline'",
-    "script-src 'none'",
-    "connect-src 'none'",
-    "frame-src 'none'",
-    "child-src 'none'",
-    "worker-src 'none'",
-    "object-src 'none'",
-    "form-action 'none'",
-    "base-uri 'none'",
-  ].join('; ')
-  document.head.prepend(meta)
-  return `<!doctype html>\n${document.documentElement.outerHTML}`
-}
-
 const sandboxedHtml = computed(() => {
   const source = artifact.value?.text
-  if (!source) return ''
-  return prepareSandboxedHtml(source)
+  if (!source || !sandboxNonce.value) return ''
+  return prepareSandboxedHtml(source, sandboxNonce.value)
 })
 
 async function loadPreview() {
   if (loading.value) return
+  const revision = ++loadRevision
   loading.value = true
   error.value = null
   try {
-    artifact.value = await invoke<LoadedArtifact>('read_artifact_preview', {
+    const loaded = await invoke<LoadedArtifact>('read_artifact_preview', {
       root: props.root,
       path: props.candidate.path,
     })
+    if (revision !== loadRevision) return
+    sandboxNonce.value = loaded.kind === 'html' ? crypto.randomUUID() : ''
+    measuredContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
+    frameHeight.value = MIN_ARTIFACT_FRAME_HEIGHT
+    artifact.value = loaded
     expanded.value = true
   } catch (cause) {
+    if (revision !== loadRevision) return
     error.value = String(cause)
   } finally {
-    loading.value = false
+    if (revision === loadRevision) loading.value = false
   }
 }
 
@@ -111,26 +104,114 @@ function togglePreview() {
 }
 
 function reloadPreview() {
+  loadRevision++
   artifact.value = null
+  sandboxNonce.value = ''
   void loadPreview()
 }
 
-onMounted(() => {
-  if (isHtml.value) return
-  if (typeof IntersectionObserver === 'undefined') {
-    void loadPreview()
-    return
-  }
-  observer = new IntersectionObserver(entries => {
-    if (!entries.some(entry => entry.isIntersecting)) return
-    observer?.disconnect()
-    observer = null
-    void loadPreview()
-  }, { rootMargin: '280px' })
-  if (cardRef.value) observer.observe(cardRef.value)
+function clearDisposeTimer() {
+  if (disposeTimer === null) return
+  window.clearTimeout(disposeTimer)
+  disposeTimer = null
+}
+
+function disposePreview() {
+  clearDisposeTimer()
+  loadRevision++
+  loading.value = false
+  expanded.value = false
+  artifact.value = null
+  sandboxNonce.value = ''
+  measuredContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
+  frameHeight.value = MIN_ARTIFACT_FRAME_HEIGHT
+}
+
+function scheduleDispose() {
+  clearDisposeTimer()
+  disposeTimer = window.setTimeout(() => {
+    disposeTimer = null
+    if (!inPreviewRange && (artifact.value || loading.value)) disposePreview()
+  }, 500)
+}
+
+function maybeAutoOpen() {
+  if (!props.autoOpen || autoOpenAttempted || !inPreviewRange) return
+  autoOpenAttempted = true
+  void loadPreview()
+}
+
+function updateFrameHeight() {
+  const width = stageRef.value?.clientWidth ?? 0
+  if (width <= 0) return
+  const nextHeight = clampArtifactFrameHeight(measuredContentHeight, width)
+  if (Math.abs(nextHeight - frameHeight.value) >= 2) frameHeight.value = nextHeight
+}
+
+function scheduleFrameHeight(contentHeight: number) {
+  pendingContentHeight = contentHeight
+  if (heightFrame) return
+  heightFrame = window.requestAnimationFrame(() => {
+    heightFrame = 0
+    measuredContentHeight = pendingContentHeight
+    updateFrameHeight()
+  })
+}
+
+function onMeasurement(event: MessageEvent) {
+  const frame = frameRef.value
+  const data = event.data as { type?: unknown; token?: unknown; height?: unknown } | null
+  if (
+    !frame
+    || event.source !== frame.contentWindow
+    || !data
+    || data.type !== ARTIFACT_SIZE_MESSAGE
+    || data.token !== sandboxNonce.value
+    || typeof data.height !== 'number'
+    || !Number.isFinite(data.height)
+    || data.height < 0
+  ) return
+  scheduleFrameHeight(data.height)
+}
+
+watch(stageRef, stage => {
+  stageResizeObserver?.disconnect()
+  stageResizeObserver = null
+  if (!stage) return
+  stageResizeObserver = new ResizeObserver(updateFrameHeight)
+  stageResizeObserver.observe(stage)
+  void nextTick(updateFrameHeight)
 })
 
-onUnmounted(() => observer?.disconnect())
+watch(() => props.autoOpen, maybeAutoOpen)
+
+onMounted(() => {
+  window.addEventListener('message', onMeasurement)
+  const root = cardRef.value?.closest<HTMLElement>('.session-viewport-scroll') ?? null
+  if (typeof IntersectionObserver === 'undefined') {
+    maybeAutoOpen()
+    return
+  }
+  visibilityObserver = new IntersectionObserver(([entry]) => {
+    inPreviewRange = entry?.isIntersecting ?? false
+    if (inPreviewRange) {
+      clearDisposeTimer()
+      maybeAutoOpen()
+    } else {
+      scheduleDispose()
+    }
+  }, { root, rootMargin: '200px 0px' })
+  if (cardRef.value) visibilityObserver.observe(cardRef.value)
+})
+
+onUnmounted(() => {
+  loadRevision++
+  clearDisposeTimer()
+  visibilityObserver?.disconnect()
+  stageResizeObserver?.disconnect()
+  if (heightFrame) window.cancelAnimationFrame(heightFrame)
+  window.removeEventListener('message', onMeasurement)
+})
 </script>
 
 <template>
@@ -172,14 +253,16 @@ onUnmounted(() => observer?.disconnect())
       {{ error }}
     </div>
 
-    <div v-if="expanded && artifact" class="artifact-stage">
+    <div v-if="expanded && artifact" ref="stageRef" class="artifact-stage">
       <iframe
         v-if="artifact.kind === 'html'"
+        ref="frameRef"
         :srcdoc="sandboxedHtml"
-        sandbox=""
+        sandbox="allow-scripts"
         referrerpolicy="no-referrer"
         loading="lazy"
         class="artifact-frame"
+        :style="{ height: `${frameHeight}px` }"
         :title="$t('artifactPreview.frameTitle', { name: fileName })"
       />
       <img
@@ -261,17 +344,15 @@ onUnmounted(() => observer?.disconnect())
 .artifact-stage {
   display: flex;
   min-height: 120px;
-  max-height: 440px;
   align-items: center;
   justify-content: center;
-  overflow: auto;
+  overflow: hidden;
   border-top: 1px solid var(--border);
   background: var(--background);
 }
 .artifact-frame {
   display: block;
   width: 100%;
-  height: 380px;
   border: 0;
   background: var(--card);
 }

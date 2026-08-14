@@ -1852,6 +1852,7 @@ onUnmounted(() => {
             :day-label="lastConversationGroup.dayLabel"
             :streaming="isTurnStreaming(lastConversationGroup.turnId)"
             :artifact-root="session.cwd"
+            :auto-open-artifact="!isTurnStreaming(lastConversationGroup.turnId)"
           />
         </div>
         <SessionTypingIndicator :active="typingActive" />

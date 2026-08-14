@@ -1371,7 +1371,7 @@
     "collapse": "收起",
     "reload": "重新读取文件",
     "frameTitle": "{name} 的安全预览",
-    "sandboxNote": "静态安全预览：脚本、网络与宿主访问已禁用"
+    "sandboxNote": "安全预览：作品脚本、网络与宿主访问已禁用"
   },
   "image": {
     "pending": "待发送图片",

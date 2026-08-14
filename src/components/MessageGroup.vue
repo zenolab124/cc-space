@@ -41,6 +41,7 @@ const props = defineProps<{
   channelMarkLabel: (mark: ChannelMark) => string
   /** 末组保持整体挂载时，对其中已落账响应启用细粒度按需渲染。 */
   granularVisibility?: boolean
+  autoOpenArtifact?: boolean
 }>()
 
 const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
@@ -219,7 +220,11 @@ const responseEntries = computed<ResponseEntry[]>(() => {
           />
         </template>
       </template>
-      <ArtifactPreviewList :candidates="artifactCandidates" :root="artifactRoot" />
+      <ArtifactPreviewList
+        :candidates="artifactCandidates"
+        :root="artifactRoot"
+        :auto-open="autoOpenArtifact"
+      />
     </template>
 
     <template #without-response>
