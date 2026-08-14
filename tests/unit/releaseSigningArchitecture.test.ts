@@ -130,14 +130,13 @@ describe('macOS release signing architecture', () => {
     expect(publisher).not.toContain('git push')
   })
 
-  it('prefers curated Nightly release notes and falls back to commit subjects', () => {
+  it('keeps Nightly notes tied to commit subjects while Stable requires curated notes', () => {
     const workflow = source('../../.github/workflows/nightly.yml')
-    const curated = workflow.indexOf('CURATED_NOTES_FILE="release-notes/v${VERSION}.json"')
-    const validation = workflow.indexOf('release-notes.mjs validate "$CURATED_NOTES_FILE" "$VERSION"')
-    const fallback = workflow.indexOf('release-notes.mjs nightly "$VERSION" "$CHANGES_FILE" "$NOTES_FILE"')
+    const releaseScript = source('../../scripts/release.sh')
 
-    expect(curated).toBeGreaterThan(-1)
-    expect(validation).toBeGreaterThan(curated)
-    expect(fallback).toBeGreaterThan(validation)
+    expect(workflow).not.toContain('CURATED_NOTES_FILE')
+    expect(workflow).toContain("git log nightly..HEAD --pretty=format:'%s' -n 8")
+    expect(workflow).toContain('release-notes.mjs nightly "$VERSION" "$CHANGES_FILE" "$NOTES_FILE"')
+    expect(releaseScript).toContain('release-notes.mjs validate "$RELEASE_NOTES_FILE" "$NEXT_VERSION"')
   })
 })

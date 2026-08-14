@@ -142,10 +142,11 @@ export function createNightlyReleaseNotes(version, subjects) {
       return `${truncated}…`
     })
     .filter(Boolean))].slice(0, 8)
-  const items = (cleanSubjects.length ? cleanSubjects : ['Nightly build refresh']).map(title => ({
-    type: 'improved',
-    title,
-  }))
+  const items = (cleanSubjects.length ? cleanSubjects : ['Nightly build refresh']).map((title) => {
+    const commitType = /^([a-z]+)(?:\([^)]*\))?!?:/i.exec(title)?.[1]?.toLowerCase()
+    const type = commitType === 'feat' ? 'new' : commitType === 'fix' ? 'fixed' : 'improved'
+    return { type, title }
+  })
   return validateReleaseNotes({
     schema: 1,
     version,

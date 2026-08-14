@@ -43,11 +43,12 @@ function openFullNotes() {
 <template>
   <section v-if="parsed" class="update-notes" :aria-label="t('settings.updateNotesTitle')">
     <div class="update-notes-heading">
-      <div class="min-w-0">
-        <div class="update-notes-kicker">{{ t('settings.updateNotesTitle') }}</div>
-        <p class="update-notes-summary">{{ parsed.content.summary }}</p>
+      <div class="update-notes-kicker">
+        <span>{{ t('settings.updateNotesTitle') }}</span>
+        <span class="update-notes-kicker-separator" aria-hidden="true">·</span>
+        <span class="update-notes-version">v{{ version }}</span>
       </div>
-      <span class="update-version-badge">v{{ version }}</span>
+      <p class="update-notes-summary">{{ parsed.content.summary }}</p>
     </div>
 
     <ul v-if="parsed.content.items.length" class="update-note-list">
@@ -93,16 +94,27 @@ function openFullNotes() {
   background: color-mix(in srgb, var(--primary) 4%, var(--card));
 }
 .update-notes-heading {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  min-width: 0;
 }
 .update-notes-kicker {
-  margin-bottom: 3px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
   color: var(--primary);
   font-size: 9.5px;
   font-weight: 650;
   letter-spacing: 0.08em;
+}
+.update-notes-kicker-separator {
+  color: var(--border);
+  letter-spacing: 0;
+}
+.update-notes-version {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0;
 }
 .update-notes-summary {
   margin: 0;
@@ -110,17 +122,6 @@ function openFullNotes() {
   font-size: 12.5px;
   font-weight: 600;
   line-height: 1.55;
-}
-.update-version-badge {
-  flex-shrink: 0;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
-  border-radius: calc(var(--radius) - 2px);
-  color: var(--primary);
-  background: var(--card);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  line-height: 1.4;
 }
 .update-note-list {
   display: grid;
@@ -131,6 +132,7 @@ function openFullNotes() {
 }
 .update-note-item {
   display: grid;
+  align-items: center;
   grid-template-columns: 24px minmax(0, 1fr);
   gap: 8px;
   padding: 7px 8px;
@@ -154,7 +156,7 @@ function openFullNotes() {
 }
 .update-note-title-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-height: 18px;
 }
@@ -202,7 +204,6 @@ function openFullNotes() {
   outline-offset: 2px;
 }
 @media (max-width: 620px) {
-  .update-notes-heading { gap: 8px; }
   .update-note-title-row { align-items: flex-start; flex-direction: column; gap: 0; }
 }
 @media (prefers-reduced-motion: reduce) {

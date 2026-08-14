@@ -67,12 +67,15 @@ describe('release notes', () => {
 
   it('Nightly 去重并限制提交条目数量', () => {
     const notes = createNightlyReleaseNotes('1.2.4', [
+      'feat(ui): add preview',
       'fix: one',
       'fix: one',
       ...Array.from({ length: 12 }, (_, index) => `change ${index}`),
     ])
     expect(notes.locales['zh-CN'].items).toHaveLength(8)
-    expect(notes.locales['zh-CN'].items[0].title).toBe('fix: one')
+    expect(notes.locales['zh-CN'].items[0]).toMatchObject({ type: 'new', title: 'feat(ui): add preview' })
+    expect(notes.locales['zh-CN'].items[1]).toMatchObject({ type: 'fixed', title: 'fix: one' })
+    expect(notes.locales['zh-CN'].items[2].type).toBe('improved')
   })
 
   it('Nightly 将超长提交标题安全截断到校验上限', () => {
