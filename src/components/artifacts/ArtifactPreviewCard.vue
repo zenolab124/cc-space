@@ -373,6 +373,7 @@ onUnmounted(() => {
 .artifact-frame {
   display: block;
   width: 100%;
+  max-height: 60vh;
   border: 0;
   background: var(--card);
 }
