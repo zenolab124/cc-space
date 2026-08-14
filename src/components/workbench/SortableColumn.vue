@@ -43,12 +43,20 @@ const setHandle = (node: any) => { handleEl.value = node }
   height: 100%;
   position: relative;
   overflow: hidden;
-  transition: width 250ms cubic-bezier(0.32, 0.72, 0, 1);
+  transition:
+    width 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .sortable-col-dragging {
   opacity: 0.4;
 }
 .no-transition {
   transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sortable-col {
+    transition: none !important;
+  }
 }
 </style>

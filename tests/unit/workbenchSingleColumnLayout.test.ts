@@ -11,7 +11,7 @@ describe('workbench single-column layout', () => {
     const columns = source('../../src/components/workbench/WorkbenchColumns.vue')
     const sortable = source('../../src/components/workbench/SortableColumn.vue')
 
-    expect(columns).toContain(':fill="activeTab.columns.length === 1"')
+    expect(columns).toContain(':fill="renderedColumnCount === 1"')
     expect(columns).toContain('v-if="activeTab.columns.length > 1"')
     expect(sortable).toContain("? { width: 'auto', flex: '1 1 0' }")
   })

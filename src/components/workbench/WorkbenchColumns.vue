@@ -129,6 +129,20 @@ const { dragging, shiftDragging, onDividerMouseDown } = useColumnResize()
 // --- 幂等展开的滚动聚焦(FR-003:点击已展开卡 → 聚焦该列) ---
 
 const flashIndex = ref(-1)
+const leavingColumnCount = ref(0)
+const renderedColumnCount = computed(() => activeTab.value.columns.length + leavingColumnCount.value)
+
+watch(
+  () => activeTab.value.columns.length,
+  (count, previousCount) => {
+    if (count < previousCount) leavingColumnCount.value += previousCount - count
+  },
+  { flush: 'sync' },
+)
+
+function onColumnAfterLeave() {
+  leavingColumnCount.value = Math.max(0, leavingColumnCount.value - 1)
+}
 
 watch(focusColumnRequest, async (req) => {
   if (!req) return
@@ -153,33 +167,35 @@ watch(focusColumnRequest, async (req) => {
     >
       <!-- 空态(FR-004) -->
       <div
-        v-if="activeTab.columns.length === 0"
+        v-if="renderedColumnCount === 0"
         class="flex-1 grid place-items-center text-xs text-muted-foreground"
       >
         {{ $t('workbench.columns.empty') }}
       </div>
 
-      <SortableColumn
-        v-for="(col, i) in activeTab.columns"
-        :key="col.id"
-        :tab-id="activeTab.id"
-        :index="i"
-        :flex="activeTab.columnSizes[i]"
-        :fill="activeTab.columns.length === 1"
-        :resizing="dragging || suppressColumnTransition"
-      >
-        <template #default="{ isDragging: colDragging, handleRef }">
-          <WorkbenchColumnView :column="col" :tab-id="activeTab.id" :index="i" :dragging="colDragging" :handle-ref="handleRef" @start-race="onStartRace(col.sessionId)" />
-          <!-- 列右边缘 resize 手柄（绝对定位，不参与 flex 布局） -->
-          <div
-            v-if="activeTab.columns.length > 1"
-            class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20"
-            :class="{ 'divider-shift': shiftDragging }"
-            @pointerdown.stop
-            @mousedown="onDividerMouseDown($event, i)"
-          />
-        </template>
-      </SortableColumn>
+      <TransitionGroup name="workbench-column" @after-leave="onColumnAfterLeave">
+        <SortableColumn
+          v-for="(col, i) in activeTab.columns"
+          :key="col.id"
+          :tab-id="activeTab.id"
+          :index="i"
+          :flex="activeTab.columnSizes[i]"
+          :fill="renderedColumnCount === 1"
+          :resizing="dragging || suppressColumnTransition"
+        >
+          <template #default="{ isDragging: colDragging, handleRef }">
+            <WorkbenchColumnView :column="col" :tab-id="activeTab.id" :index="i" :dragging="colDragging" :handle-ref="handleRef" @start-race="onStartRace(col.sessionId)" />
+            <!-- 列右边缘 resize 手柄（绝对定位，不参与 flex 布局） -->
+            <div
+              v-if="activeTab.columns.length > 1"
+              class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20"
+              :class="{ 'divider-shift': shiftDragging }"
+              @pointerdown.stop
+              @mousedown="onDividerMouseDown($event, i)"
+            />
+          </template>
+        </SortableColumn>
+      </TransitionGroup>
     </div>
   </div>
 </template>
@@ -192,5 +208,27 @@ watch(focusColumnRequest, async (req) => {
 }
 .divider-shift {
   background: color-mix(in srgb, var(--primary) 25%, transparent);
+}
+.workbench-column-leave-active {
+  pointer-events: none;
+  transition:
+    width 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    flex-basis 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    margin-right 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 140ms ease !important;
+}
+.workbench-column-leave-to {
+  width: 0 !important;
+  flex-grow: 0 !important;
+  flex-basis: 0 !important;
+  margin-right: -10px;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-column-leave-active {
+    transition: none !important;
+  }
 }
 </style>

@@ -785,7 +785,6 @@ const suppressColumnTransition = ref(false)
 function reclaimColumnWidth(tab: WorkbenchTab, removedIndex: number) {
   if (removedIndex < 0 || removedIndex >= tab.columns.length) return
 
-  suppressColumnTransition.value = true
   tab.columns.splice(removedIndex, 1)
   tab.columnSizes.splice(removedIndex, 1)
 
@@ -797,7 +796,6 @@ function reclaimColumnWidth(tab: WorkbenchTab, removedIndex: number) {
     }
   }
 
-  nextTick(() => { suppressColumnTransition.value = false })
 }
 
 /** 收起列回左列(仍激活,「收起非退出」) */
