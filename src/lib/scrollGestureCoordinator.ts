@@ -11,24 +11,24 @@ type ScrollSurfaceConsumer = (delta: number, handoff: ScrollHandoff) => void
 
 const GESTURE_IDLE_MS = 160
 const MAX_HANDOFF_DELTA = 2_000
-const managedFrames = new Set<HTMLIFrameElement>()
+const managedFrames = new Map<HTMLIFrameElement, HTMLElement>()
 const scrollSurfaces = new WeakMap<HTMLElement, Partial<Record<ScrollAxis, ScrollSurfaceConsumer>>>()
 
 let hostGestureTimer = 0
 let listening = false
 
-function setFramePassThrough(frame: HTMLIFrameElement, active: boolean) {
-  frame.toggleAttribute('data-monet-scroll-pass-through', active)
+function setScrollShieldActive(shield: HTMLElement, active: boolean) {
+  shield.toggleAttribute('data-monet-scroll-shield-active', active)
 }
 
 function endHostGesture() {
   if (hostGestureTimer) window.clearTimeout(hostGestureTimer)
   hostGestureTimer = 0
-  managedFrames.forEach(frame => setFramePassThrough(frame, false))
+  managedFrames.forEach(shield => setScrollShieldActive(shield, false))
 }
 
 function beginHostGesture() {
-  managedFrames.forEach(frame => setFramePassThrough(frame, true))
+  managedFrames.forEach(shield => setScrollShieldActive(shield, true))
   if (hostGestureTimer) window.clearTimeout(hostGestureTimer)
   hostGestureTimer = window.setTimeout(endHostGesture, GESTURE_IDLE_MS)
 }
@@ -58,16 +58,17 @@ function removeHostListeners() {
 
 /**
  * 登记需要参与窗口级滚动手势协调的 iframe。
- * 外层手势存续期间 iframe 暂时退出命中测试，避免滚动目标在惯性阶段切换。
+ * 代理节点常驻 iframe 上方但默认不参与命中；外层手势存续期间由它接住滚轮，
+ * 避免依赖 WebKit 在滚动中途重新计算 iframe 自身的 pointer-events。
  */
-export function registerManagedScrollFrame(frame: HTMLIFrameElement): () => void {
-  managedFrames.add(frame)
-  if (hostGestureTimer) setFramePassThrough(frame, true)
+export function registerManagedScrollFrame(frame: HTMLIFrameElement, shield: HTMLElement): () => void {
+  managedFrames.set(frame, shield)
+  if (hostGestureTimer) setScrollShieldActive(shield, true)
   installHostListeners()
 
   return () => {
     managedFrames.delete(frame)
-    setFramePassThrough(frame, false)
+    setScrollShieldActive(shield, false)
     if (managedFrames.size === 0) removeHostListeners()
   }
 }

@@ -40,6 +40,7 @@ const { t } = useI18n()
 const cardRef = ref<HTMLElement | null>(null)
 const stageRef = ref<HTMLElement | null>(null)
 const frameRef = ref<HTMLIFrameElement | null>(null)
+const scrollShieldRef = ref<HTMLElement | null>(null)
 const artifact = ref<LoadedArtifact | null>(null)
 const loading = ref(false)
 const expanded = ref(false)
@@ -239,9 +240,9 @@ watch(stageRef, stage => {
   void nextTick(updateFrameHeight)
 })
 
-watch(frameRef, frame => {
+watch([frameRef, scrollShieldRef], ([frame, shield]) => {
   unregisterScrollFrame?.()
-  unregisterScrollFrame = frame ? registerManagedScrollFrame(frame) : null
+  unregisterScrollFrame = frame && shield ? registerManagedScrollFrame(frame, shield) : null
 }, { flush: 'post' })
 
 watch(() => props.autoOpen, maybeAutoOpen)
@@ -328,6 +329,12 @@ onUnmounted(() => {
         :style="{ height: `${frameHeight}px` }"
         :title="$t('artifactPreview.frameTitle', { name: fileName })"
       />
+      <div
+        v-if="artifact.kind === 'html'"
+        ref="scrollShieldRef"
+        class="artifact-scroll-shield"
+        aria-hidden="true"
+      />
       <img
         v-else-if="imageSource"
         :src="imageSource"
@@ -405,6 +412,7 @@ onUnmounted(() => {
 .artifact-action-button:disabled,
 .artifact-icon-button:disabled { cursor: wait; opacity: 0.55; }
 .artifact-stage {
+  position: relative;
   display: flex;
   min-height: 120px;
   align-items: center;
@@ -420,8 +428,14 @@ onUnmounted(() => {
   border: 0;
   background: var(--card);
 }
-.artifact-frame[data-monet-scroll-pass-through] {
+.artifact-scroll-shield {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
   pointer-events: none;
+}
+.artifact-scroll-shield[data-monet-scroll-shield-active] {
+  pointer-events: auto;
 }
 .artifact-image {
   display: block;
