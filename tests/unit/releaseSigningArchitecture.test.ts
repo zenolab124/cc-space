@@ -90,6 +90,21 @@ describe('macOS release signing architecture', () => {
     }
   })
 
+  it('requires stable release notes before building and injects them into the updater manifest', () => {
+    const releaseScript = source('../../scripts/release.sh')
+    const workflow = source('../../.github/workflows/release.yml')
+    const manifestScript = source('../../scripts/create-latest-json.mjs')
+
+    expect(releaseScript).toContain('release-notes/v${NEXT_VERSION}.json')
+    expect(releaseScript).toContain('REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)')
+    expect(releaseScript).toContain('RELEASE_NOTES_FILE="$REPO_ROOT/release-notes/v${NEXT_VERSION}.json"')
+    expect(releaseScript).toContain('release-notes.mjs validate')
+    expect(workflow).toContain('validate-release-notes:')
+    expect(workflow).toContain('RELEASE_NOTES_FILE="$RELEASE_NOTES_FILE" node scripts/create-latest-json.mjs')
+    expect(workflow).toContain('--notes "$USER_NOTES"')
+    expect(manifestScript).toContain('manifest.notes = encodeReleaseNotes')
+  })
+
   it('publishes a verified Nightly candidate and can restore the previous release', () => {
     const workflow = source('../../.github/workflows/nightly.yml')
     const publisher = source('../../scripts/publish-nightly.sh')

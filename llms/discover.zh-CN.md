@@ -206,7 +206,7 @@
 - TCC 权限体检（macOS）：静默检测自动化/辅助功能/屏幕录制授权状态，一键请求，denied 自愈
 - Claude Code 本体服务：四层定位链找 claude 二进制（nvm/fnm/volta 都兼容）、一键安装 CLI、一键升级、环境诊断报告
 - Claude 数据目录可自定义（多账号/自定义 CLAUDE_CONFIG_DIR 场景）
-- 应用自更新：GitHub Releases + 签名校验，静默升级
+- 应用自更新：GitHub Releases + 签名校验；发现新版时在设置中按新增/改进/修复展示双语更新说明，长清单可展开，下载进度与重启状态原位可见
 
 ### 15. 规划中（Roadmap）
 

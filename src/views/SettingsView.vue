@@ -28,6 +28,7 @@ import AgentIframeDemo from '@/components/settings/AgentIframeDemo.vue'
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
 import TurnSignalCard from '@/components/settings/TurnSignalCard.vue'
 import TrayQuotaSelect from '@/components/settings/TrayQuotaSelect.vue'
+import UpdateReleaseNotes from '@/components/settings/UpdateReleaseNotes.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useZoom } from '@/composables/useZoom'
@@ -67,7 +68,7 @@ const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
 const { toolDisplayMode, setToolDisplayMode } = useToolDisplayMode()
 const { stickyUserPromptEnabled, setStickyUserPrompt } = useStickyUserPrompt()
-const { status: updateStatus, newVersion: updateVersion, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
+const { status: updateStatus, newVersion: updateVersion, releaseNotes, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
 loadChannel()
 
 // 切通道后立刻查一次：两个通道的版本线不同，不重查用户会以为切换没生效
@@ -1318,7 +1319,7 @@ function onSaved() {
 
           <!-- 更新 -->
           <div class="mcp-card settings-card settings-update-card mb-3">
-            <div class="flex items-center gap-2">
+            <div class="settings-update-header" aria-live="polite">
               <span class="i-carbon-upgrade w-3.5 h-3.5 text-muted-foreground" />
               <span class="text-[11.5px] font-medium">{{ $t('settings.updateCurrent') }}</span>
               <span class="text-[11px] font-mono text-muted-foreground">v{{ appVersion }}</span>
@@ -1328,7 +1329,7 @@ function onSaved() {
                 <template v-if="updateStatus === 'available'">
                   <span class="text-[11px] text-primary font-medium">{{ $t('settings.updateAvailable', { version: updateVersion }) }}</span>
                   <button
-                    class="px-2 py-0.5 text-[11px] rounded bg-primary text-primary-foreground hover:shadow-paper transition-shadow"
+                    class="settings-update-primary-action"
                     @click="downloadAndInstall"
                   >{{ $t('settings.updateInstall') }}</button>
                 </template>
@@ -1340,7 +1341,7 @@ function onSaved() {
                 </template>
                 <template v-else>
                   <button
-                    class="px-2 py-0.5 text-[11px] rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                    class="settings-update-secondary-action"
                     :disabled="updateStatus === 'checking'"
                     @click="checkForUpdate"
                   >
@@ -1349,6 +1350,26 @@ function onSaved() {
                   </button>
                 </template>
               </div>
+            </div>
+
+            <UpdateReleaseNotes
+              v-if="releaseNotes && ['available', 'downloading', 'restarting'].includes(updateStatus)"
+              :notes="releaseNotes"
+              :version="updateVersion"
+              :locale="locale"
+              :channel="updateChannel"
+            />
+
+            <div
+              v-if="updateStatus === 'downloading'"
+              class="settings-update-progress"
+              role="progressbar"
+              :aria-label="$t('settings.updateDownloading', { progress: downloadProgress })"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="downloadProgress"
+            >
+              <span :style="{ width: `${downloadProgress}%` }" />
             </div>
 
             <!-- 更新通道：Nightly 为每日构建，默认永远是稳定版 -->
@@ -2739,6 +2760,56 @@ function onSaved() {
 .settings-update-card {
   margin-top: 16px;
 }
+.settings-update-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-update-primary-action,
+.settings-update-secondary-action {
+  min-height: 28px;
+  padding: 3px 9px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  transition: color 150ms ease-out, background-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+.settings-update-primary-action {
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.settings-update-primary-action:hover { box-shadow: var(--shadow-paper); }
+.settings-update-secondary-action {
+  border: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+.settings-update-secondary-action:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.settings-update-primary-action:focus-visible,
+.settings-update-secondary-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.settings-update-secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.settings-update-progress {
+  height: 3px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+}
+.settings-update-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 180ms ease-out;
+}
 .system-settings-grid {
   margin-top: 14px;
 }
@@ -2769,5 +2840,12 @@ function onSaved() {
   .channel-settings-grid,
   .system-settings-grid { grid-template-columns: 1fr; }
   .settings-page .setting-row { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .settings-update-header { align-items: flex-start; flex-wrap: wrap; }
+  .settings-update-header > .ml-auto { width: 100%; margin-left: 0; justify-content: flex-end; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-update-primary-action,
+  .settings-update-secondary-action,
+  .settings-update-progress > span { transition: none; }
 }
 </style>

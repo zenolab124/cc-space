@@ -3,11 +3,13 @@
 // 用法: node create-latest-json.mjs <version> <tarball-path> <out-path> [win-exe-path]
 // win-exe 可选(CI 发版链路传入,本地 macOS 打包不传):NSIS 安装包本身即 Windows
 // updater 工件,同目录须有 .exe.sig。
+// RELEASE_NOTES_FILE 可选；stable 发版链路强制提供，Nightly 由 CI 自动生成。
 // 上传到 GitHub Release 后,应用内 updater 经 tauri.conf plugins.updater.endpoints
 // 的 /releases/latest/download/latest.json 读取(draft release 不算 latest,
 // 手动 publish 后才对用户生效)。
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
+import { encodeReleaseNotes, readReleaseNotes } from './release-notes.mjs'
 
 const [version, tarball, outPath, winExe] = process.argv.slice(2)
 if (!version || !tarball || !outPath) {
@@ -33,6 +35,13 @@ const manifest = {
       url: releaseUrl(tarball),
     },
   },
+}
+
+if (process.env.RELEASE_NOTES_FILE) {
+  manifest.notes = encodeReleaseNotes(
+    readReleaseNotes(process.env.RELEASE_NOTES_FILE, version),
+    version,
+  )
 }
 
 if (winExe) {
