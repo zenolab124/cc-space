@@ -1809,6 +1809,7 @@ onUnmounted(() => {
               :show-thought-process="enginePresentation.showThoughtProcess"
               :day-label="historicalGroups[virtualItem.index].dayLabel"
               :streaming="isTurnStreaming(historicalGroups[virtualItem.index].turnId)"
+              :artifact-root="session.cwd"
             />
           </div>
         </div>
@@ -1827,6 +1828,7 @@ onUnmounted(() => {
               :show-thought-process="enginePresentation.showThoughtProcess"
               :day-label="group.dayLabel"
               :streaming="isTurnStreaming(group.turnId)"
+              :artifact-root="session.cwd"
             />
           </div>
         </div>
@@ -1849,6 +1851,7 @@ onUnmounted(() => {
             :show-thought-process="enginePresentation.showThoughtProcess"
             :day-label="lastConversationGroup.dayLabel"
             :streaming="isTurnStreaming(lastConversationGroup.turnId)"
+            :artifact-root="session.cwd"
           />
         </div>
         <SessionTypingIndicator :active="typingActive" />

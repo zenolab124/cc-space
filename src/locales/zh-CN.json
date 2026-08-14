@@ -1364,6 +1364,15 @@
       "imageCount": "{count} 张图片"
     }
   },
+  "artifactPreview": {
+    "groupLabel": "会话交付物",
+    "image": "图片",
+    "preview": "预览",
+    "collapse": "收起",
+    "reload": "重新读取文件",
+    "frameTitle": "{name} 的安全预览",
+    "sandboxNote": "静态安全预览：脚本、网络与宿主访问已禁用"
+  },
   "image": {
     "pending": "待发送图片",
     "remove": "移除",

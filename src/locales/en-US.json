@@ -1364,6 +1364,15 @@
       "imageCount": "{count} images"
     }
   },
+  "artifactPreview": {
+    "groupLabel": "Session artifacts",
+    "image": "Image",
+    "preview": "Preview",
+    "collapse": "Collapse",
+    "reload": "Reload file",
+    "frameTitle": "Safe preview of {name}",
+    "sandboxNote": "Static safe preview: scripts, network, and host access are disabled"
+  },
   "image": {
     "pending": "Image pending send",
     "remove": "Remove",

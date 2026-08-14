@@ -21,6 +21,8 @@ import {
 import ConversationTurn from '@/components/session/ConversationTurn.vue'
 import ContentBlockList from '@/components/ContentBlockList.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
+import ArtifactPreviewList from '@/components/artifacts/ArtifactPreviewList.vue'
+import { detectEngineSegmentArtifacts } from '@/features/artifact-preview/detectArtifacts'
 
 const props = defineProps<{
   records: ConversationRecord[]
@@ -30,6 +32,7 @@ const props = defineProps<{
   showThoughtProcess?: boolean
   dayLabel?: string | null
   streaming?: boolean
+  artifactRoot?: string | null
 }>()
 
 const { locale } = useI18n()
@@ -64,6 +67,9 @@ const responseRecords = computed(() => props.records
   .filter(record => record.segments.length > 0))
 
 const responseTimeline = computed(() => props.records.filter(record => record.role !== 'user'))
+const artifactCandidates = computed(() => props.streaming
+  ? []
+  : detectEngineSegmentArtifacts(responseTimeline.value.flatMap(record => record.segments)))
 const responseProcessEntries = computed(() => responseRecords.value.flatMap(record => record.segments
   .map((segment, index) => ({ key: `${record.id}:${index}`, segment }))
   .filter(entry => isEngineProcessSegment(entry.segment))))
@@ -178,6 +184,11 @@ const turnView = computed<ConversationTurnView>(() => ({
         />
         <EngineSegmentBlock v-else :segment="block.entry.segment" :streaming="streaming" />
       </template>
+      <ArtifactPreviewList
+        v-if="artifactRoot"
+        :candidates="artifactCandidates"
+        :root="artifactRoot"
+      />
     </template>
   </ConversationTurn>
 </template>
