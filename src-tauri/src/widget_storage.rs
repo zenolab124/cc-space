@@ -28,7 +28,7 @@ pub fn shared_snapshot_path() -> Result<Option<PathBuf>, String> {
             .to_string_lossy()
             .into_owned();
         monet_app_group_free_path(raw_path);
-        return Ok(Some(PathBuf::from(path).join(SNAPSHOT_FILE_NAME)));
+        Ok(Some(PathBuf::from(path).join(SNAPSHOT_FILE_NAME)))
     }
 
     #[cfg(not(target_os = "macos"))]

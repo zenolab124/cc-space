@@ -10,6 +10,7 @@
  * @returns 新 key 值;新 key 为空则返回迁移后的旧 key 值;皆空返回 null
  */
 export function readMigratedStorage(newKey: string, legacyKey: string): string | null {
+  if (typeof localStorage === 'undefined') return null
   const cur = localStorage.getItem(newKey)
   if (cur !== null) return cur
   const legacy = localStorage.getItem(legacyKey)
