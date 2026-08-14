@@ -15,6 +15,7 @@ describe('artifact preview security boundary', () => {
     expect(sandbox).toContain("startsWith('on')")
     expect(sandbox).toContain("`script-src 'nonce-${nonce}'`")
     expect(sandbox).toContain('new ResizeObserver(schedule)')
+    expect(sandbox).toContain('document.createRange()')
     expect(sandbox).toContain('setTimeout(() => requestAnimationFrame(measure), 100)')
     expect(sandbox).toContain("parent.postMessage({ type, token, height, fillsViewport }, '*')")
     expect(sandbox).toContain('"connect-src \'none\'"')
@@ -24,6 +25,8 @@ describe('artifact preview security boundary', () => {
     expect(sandbox).toContain("querySelectorAll('meta[http-equiv]')")
     expect(sandbox).toContain("querySelectorAll('a, area')")
     expect(sandbox).toContain("querySelectorAll('base')")
+    expect(sandbox).toContain('html { overflow-y: auto !important; }')
+    expect(sandbox).toContain('body { overflow-y: visible !important; }')
   })
 
   it('caps HTML at a portrait 3:4 frame and disposes offscreen payloads', () => {

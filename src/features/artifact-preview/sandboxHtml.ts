@@ -18,40 +18,33 @@ function measurementScript(token: string): string {
       timer = 0;
       const body = document.body;
       const viewportHeight = innerHeight;
-      const scrollHeight = body ? body.scrollHeight : 0;
-      const overflowsViewport = scrollHeight > viewportHeight + 2;
-      const bodyRect = body ? body.getBoundingClientRect() : null;
-      const bodyHeight = Math.max(
-        body ? body.offsetHeight : 0,
-        bodyRect ? bodyRect.height : 0,
-      );
-      let childTop = Number.POSITIVE_INFINITY;
-      let childBottom = Number.NEGATIVE_INFINITY;
+      let contentTop = Number.POSITIVE_INFINITY;
+      let contentBottom = Number.NEGATIVE_INFINITY;
+      const includeRect = rect => {
+        if (rect.width <= 0 && rect.height <= 0) return;
+        contentTop = Math.min(contentTop, rect.top);
+        contentBottom = Math.max(contentBottom, rect.bottom);
+      };
       if (body) {
         for (const element of body.children) {
           if (element.tagName === 'SCRIPT') continue;
-          const rect = element.getBoundingClientRect();
-          if (rect.width <= 0 && rect.height <= 0) continue;
-          childTop = Math.min(childTop, rect.top);
-          childBottom = Math.max(childBottom, rect.bottom);
+          includeRect(element.getBoundingClientRect());
         }
+        const range = document.createRange();
+        range.selectNodeContents(body);
+        includeRect(range.getBoundingClientRect());
+        range.detach();
       }
-      const childHeight = Number.isFinite(childTop) ? childBottom - childTop : 0;
+      const contentHeight = Number.isFinite(contentTop)
+        ? contentBottom - contentTop
+        : 0;
       const bodyStyle = body ? getComputedStyle(body) : null;
       const bodySpacing = bodyStyle
         ? ['marginTop', 'marginBottom', 'paddingTop', 'paddingBottom']
             .reduce((sum, property) => sum + (parseFloat(bodyStyle[property]) || 0), 0)
         : 0;
-      const intrinsicHeight = childHeight > 0 ? childHeight + bodySpacing : bodyHeight;
-      const hasViewportFloor = !overflowsViewport
-        && bodyHeight >= viewportHeight - 2
-        && intrinsicHeight < bodyHeight - 2;
-      const height = Math.ceil(Math.max(
-        overflowsViewport ? scrollHeight : 0,
-        hasViewportFloor ? intrinsicHeight : bodyHeight,
-      ));
-      const fillsViewport = !hasViewportFloor
-        && (overflowsViewport || height >= viewportHeight - 2);
+      const height = Math.ceil(contentHeight + bodySpacing);
+      const fillsViewport = height >= viewportHeight - 2;
       parent.postMessage({ type, token, height, fillsViewport }, '*');
     };
     const schedule = () => {
@@ -102,6 +95,10 @@ export function prepareSandboxedHtml(source: string, nonce: string): string {
     "base-uri 'none'",
   ].join('; ')
   document.head.prepend(policy)
+
+  const scrollPolicy = document.createElement('style')
+  scrollPolicy.textContent = 'html { overflow-y: auto !important; } body { overflow-y: visible !important; }'
+  document.head.append(scrollPolicy)
 
   const script = document.createElement('script')
   script.nonce = nonce
