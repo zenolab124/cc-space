@@ -89,6 +89,7 @@ describe('unified session surface architecture', () => {
     expect(standardController).toContain('<SessionViewport')
     expect(nativeController).toContain('<SessionTypingIndicator')
     expect(standardController).toContain('<SessionTypingIndicator')
+    expect(sharedTyping).toContain('absolute bottom-0')
     expect(standardController).toContain('ref="timelineContentElement" class="pb-2 relative"')
     const standardTimeline = standardController.slice(
       standardController.indexOf('ref="timelineContentElement"'),

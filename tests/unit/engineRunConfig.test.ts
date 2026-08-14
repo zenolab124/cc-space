@@ -4,6 +4,7 @@ import {
   engineRunConfig,
   engineRuntimeChannel,
   engineRuntimeOptions,
+  evictEngineRunConfig,
   inheritEngineRunConfig,
   isFastServiceTierUnavailableError,
   resolveFastServiceTier,
@@ -12,6 +13,16 @@ import {
 } from '../../src/engines/runConfig'
 
 const sessionId = 'codex:test:thread-1'
+const storage = new Map<string, string>()
+Object.defineProperty(globalThis, 'localStorage', {
+  value: {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear(),
+  },
+  configurable: true,
+})
 
 afterEach(() => clearEngineRunConfig(sessionId))
 
@@ -48,6 +59,17 @@ describe('engine run config', () => {
     expect(engineRunConfig(sessionId)?.effort).toBe('low')
     expect(engineRuntimeOptions(sessionId)).toEqual({ model: 'gpt-test', channelId: 'proxy' })
     expect(engineRuntimeChannel(sessionId)).toBe('proxy')
+  })
+
+  it('restores the selected channel after the in-memory cache is evicted', () => {
+    setEngineRunConfig(sessionId, {
+      model: 'gpt-test', effort: 'high', serviceTier: null, channelId: 'proxy', modelOverridden: true, effortOverridden: true,
+    })
+
+    evictEngineRunConfig(sessionId)
+
+    expect(engineRunConfig(sessionId)?.channelId).toBe('proxy')
+    expect(engineRuntimeOptions(sessionId)).toEqual({ model: 'gpt-test', channelId: 'proxy' })
   })
 
   it('inherits lane settings without sharing mutable state', () => {

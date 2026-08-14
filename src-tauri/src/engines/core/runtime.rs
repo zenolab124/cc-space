@@ -22,7 +22,11 @@ pub struct TurnRef {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum InputItem {
     Text { text: String },
     Image { media_type: String, data: String },
@@ -217,6 +221,24 @@ pub trait AgentRuntime: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_item_fields_follow_the_frontend_camel_case_contract() {
+        let item: InputItem = serde_json::from_value(serde_json::json!({
+            "kind": "image",
+            "mediaType": "image/png",
+            "data": "encoded",
+        }))
+        .unwrap();
+
+        assert_eq!(
+            item,
+            InputItem::Image {
+                media_type: "image/png".into(),
+                data: "encoded".into(),
+            },
+        );
+    }
 
     #[test]
     fn runtime_event_fields_follow_the_frontend_camel_case_contract() {

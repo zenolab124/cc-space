@@ -4,7 +4,7 @@ defineProps<{ active: boolean }>()
 
 <template>
   <div
-    class="session-typing-indicator absolute bottom-1 left-0 flex items-center gap-1 pl-5 transition-opacity duration-200"
+    class="session-typing-indicator absolute bottom-0 left-0 flex items-center gap-1 pl-5 transition-opacity duration-200"
     :class="active ? 'opacity-100' : 'opacity-0 pointer-events-none'"
     aria-hidden="true"
   >

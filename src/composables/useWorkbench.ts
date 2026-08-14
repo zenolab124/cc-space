@@ -7,7 +7,7 @@ import { fillColumnWidthsProportionally } from '@/utils/workbenchColumnLayout'
 import { readMigratedStorage } from '../utils/storageMigrate'
 import { resolveSessionRef } from '@/engines/directory'
 import type { ProjectRef, SessionRef } from '@/engines/types'
-import { clearEngineRunConfig } from '@/engines/runConfig'
+import { clearEngineRunConfig, evictEngineRunConfig } from '@/engines/runConfig'
 
 /**
  * 工作台状态模型（v2.1.0 FR-001/002/004 + NFR-002）
@@ -674,6 +674,7 @@ function stageDraftSession(cwd: string, sessionId = crypto.randomUUID()): string
 /** 回滚尚未进入任何 Tab 的草稿，并关闭已创建的通用引擎运行时。 */
 function discardStagedSession(sessionId: string) {
   teardownSession(sessionId)
+  clearEngineRunConfig(sessionId)
   delete state.value.drafts[sessionId]
   delete state.value.forkIntents[sessionId]
   localStorage.removeItem(`monet:session-settings:${sessionId}`)
@@ -875,7 +876,7 @@ function teardownSession(sessionId: string) {
     // 会话彻底离开工作台 = 关闭语义:其挂载的运行命令一并停止(切走/收起不触发)
     useRunners().stopAllForSession(sessionId).catch(() => {})
     evictSessionTransients(sessionId)
-    clearEngineRunConfig(sessionId)
+    evictEngineRunConfig(sessionId)
     delete state.value.pendingTasks[sessionId]
     delete state.value.engineDrafts[sessionId]
   }
