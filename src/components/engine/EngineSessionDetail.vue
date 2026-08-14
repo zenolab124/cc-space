@@ -44,6 +44,7 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
 import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
+import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
@@ -62,6 +63,7 @@ const props = withDefaults(defineProps<{
   mode?: 'archive' | 'workbench'
   hideInput?: boolean
 }>(), { mode: 'archive', hideInput: false })
+provide(SESSION_FILE_ROOT, computed(() => props.session.cwd))
 
 const { t, locale } = useI18n()
 const records = ref<ConversationRecord[]>([])

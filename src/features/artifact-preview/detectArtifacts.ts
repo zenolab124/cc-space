@@ -19,6 +19,7 @@ export interface ArtifactFileEvidence {
 const markdown = new MarkdownIt({ html: false, linkify: false })
 const ARTIFACT_EXTENSION_RE = /\.(html?|svg|gif|png|jpe?g|webp)$/i
 const LINE_SUFFIX_RE = /(\.(?:html?|svg|gif|png|jpe?g|webp)):\d+(?::\d+)?$/i
+const LOCATION_SUFFIX_RE = /:\d+(?::\d+)?$/
 const REMOTE_SCHEME_RE = /^(?:https?|data|javascript|blob):/i
 
 export function artifactKind(path: string): ArtifactKind | null {
@@ -38,7 +39,7 @@ function decodePath(value: string): string {
   }
 }
 
-export function normalizeArtifactLink(value: string): string | null {
+export function normalizeLocalFileLink(value: string): string | null {
   let path = value.trim().replace(/^<|>$/g, '')
   if (!path || REMOTE_SCHEME_RE.test(path) || path.startsWith('#')) return null
   if (/^file:/i.test(path)) {
@@ -51,6 +52,13 @@ export function normalizeArtifactLink(value: string): string | null {
     return null
   }
   path = decodePath(path.split(/[?#]/, 1)[0] ?? '')
+  path = path.replace(LOCATION_SUFFIX_RE, '')
+  return path || null
+}
+
+export function normalizeArtifactLink(value: string): string | null {
+  let path = normalizeLocalFileLink(value)
+  if (!path) return null
   path = path.replace(LINE_SUFFIX_RE, '$1')
   return path && artifactKind(path) ? path : null
 }

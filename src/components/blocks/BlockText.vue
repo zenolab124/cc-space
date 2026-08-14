@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, inject, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { useI18n } from 'vue-i18n'
 import type { ContentBlock } from '@/types'
 import { renderMarkdownPlain, renderMarkdownCached, renderMarkdownDeferred } from '@/composables/useMarkdown'
+import { useNotifications } from '@/composables/useNotifications'
+import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
+import { openExternalUrl } from '@/composables/useFileOpener'
+import { normalizeLocalFileLink } from '@/features/artifact-preview/detectArtifacts'
 import { createStreamSplitter } from '@/lib/stream-markdown/findSafeSplit'
 import { useStreamSegments } from '@/composables/useStreamSegments'
 import MdSegment from './MdSegment.vue'
@@ -16,6 +22,10 @@ const props = defineProps<{
   block: Extract<ContentBlock, { type: 'text' }>
   streaming?: boolean
 }>()
+
+const { t } = useI18n()
+const { notifyTransient } = useNotifications()
+const sessionFileRoot = inject(SESSION_FILE_ROOT, null)
 
 const expanded = ref(false)
 const isLargeText = computed(() => props.block.text.length > TEXT_TRUNCATE_LEN)
@@ -97,16 +107,43 @@ const legacyHtml = computed(() => {
   return renderMarkdownCached(displayText.value)
 })
 
+async function openMarkdownLink(href: string) {
+  try {
+    if (/^https?:\/\//i.test(href) || href.startsWith('//')) {
+      await openExternalUrl(href.startsWith('//') ? `https:${href}` : href)
+      return
+    }
+    const path = normalizeLocalFileLink(href)
+    const root = sessionFileRoot?.value
+    if (!path || !root) throw new Error(t('artifactPreview.fileLinkUnavailable'))
+    await invoke('open_workspace_file', { root, path })
+  } catch (cause) {
+    notifyTransient(t('common.openFailed'), String(cause))
+  }
+}
+
 function onProseClick(e: MouseEvent) {
-  const btn = (e.target as HTMLElement).closest('.code-copy-btn')
-  if (!btn) return
-  e.preventDefault()
-  const pre = btn.closest('.code-block-wrapper')?.querySelector('pre')
-  if (!pre) return
-  navigator.clipboard.writeText(pre.textContent ?? '').then(() => {
-    btn.setAttribute('data-copied', '')
-    setTimeout(() => btn.removeAttribute('data-copied'), 1500)
-  })
+  const target = e.target as HTMLElement
+  const anchor = target.closest<HTMLAnchorElement>('a[href]')
+  if (anchor) {
+    const href = anchor.getAttribute('href')?.trim()
+    if (!href || href.startsWith('#')) return
+    e.preventDefault()
+    e.stopPropagation()
+    void openMarkdownLink(href)
+    return
+  }
+
+  const btn = target.closest('.code-copy-btn')
+  if (btn) {
+    e.preventDefault()
+    const pre = btn.closest('.code-block-wrapper')?.querySelector('pre')
+    if (!pre) return
+    navigator.clipboard.writeText(pre.textContent ?? '').then(() => {
+      btn.setAttribute('data-copied', '')
+      setTimeout(() => btn.removeAttribute('data-copied'), 1500)
+    })
+  }
 }
 </script>
 

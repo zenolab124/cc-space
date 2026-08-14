@@ -17,14 +17,16 @@ function measurementScript(token: string): string {
     const measure = () => {
       timer = 0;
       const body = document.body;
-      const root = document.documentElement;
+      const viewportHeight = innerHeight;
+      const scrollHeight = body ? body.scrollHeight : 0;
+      const overflowsViewport = scrollHeight > viewportHeight + 2;
       const height = Math.ceil(Math.max(
-        root.scrollHeight,
-        root.getBoundingClientRect().height,
-        body ? body.scrollHeight : 0,
+        overflowsViewport ? scrollHeight : 0,
+        body ? body.offsetHeight : 0,
         body ? body.getBoundingClientRect().height : 0,
       ));
-      parent.postMessage({ type, token, height }, '*');
+      const fillsViewport = overflowsViewport || height >= viewportHeight - 2;
+      parent.postMessage({ type, token, height, fillsViewport }, '*');
     };
     const schedule = () => {
       if (!timer) timer = setTimeout(() => requestAnimationFrame(measure), 100);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   detectArtifactCandidates,
   normalizeArtifactLink,
+  normalizeLocalFileLink,
 } from '@/features/artifact-preview/detectArtifacts'
 
 describe('normalizeArtifactLink', () => {
@@ -18,6 +19,20 @@ describe('normalizeArtifactLink', () => {
     expect(normalizeArtifactLink('https://example.com/demo.html')).toBeNull()
     expect(normalizeArtifactLink('javascript:alert(1)')).toBeNull()
     expect(normalizeArtifactLink('./output/demo.ts')).toBeNull()
+  })
+})
+
+describe('normalizeLocalFileLink', () => {
+  it('accepts previewable and ordinary local files', () => {
+    expect(normalizeLocalFileLink('./output/demo.html')).toBe('./output/demo.html')
+    expect(normalizeLocalFileLink('./notes/readme.md')).toBe('./notes/readme.md')
+    expect(normalizeLocalFileLink('/workspace/report.pdf#page=2')).toBe('/workspace/report.pdf')
+  })
+
+  it('decodes paths and rejects non-file schemes', () => {
+    expect(normalizeLocalFileLink('./my%20report.pdf:12:4')).toBe('./my report.pdf')
+    expect(normalizeLocalFileLink('https://example.com/report.pdf')).toBeNull()
+    expect(normalizeLocalFileLink('mailto:hello@example.com')).toBeNull()
   })
 })
 

@@ -79,6 +79,7 @@ import SessionIdentityBar from './session/SessionIdentityBar.vue'
 import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
+import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
 import { useHtmlVisual } from '@/features'
 import SessionBannerOverlay from './session/SessionBannerOverlay.vue'
 import SessionAnchorNav, { type AnchorItem } from './SessionAnchorNav.vue'
@@ -897,6 +898,7 @@ const currentSession = computed<{ summary: SessionSummary; projectId: string } |
   if (cwd) return { summary: draftSummary(sid, cwd), projectId: cwdToProjectId(cwd) }
   return null
 })
+provide(SESSION_FILE_ROOT, computed(() => currentSession.value?.summary.cwd))
 
 // 会话切换时设置 runner 项目上下文 + 增量水合
 // （immediate watch 会在注册当下同步执行 getter，必须位于 currentSession 定义之后）

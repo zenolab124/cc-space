@@ -1371,6 +1371,7 @@
     "collapse": "收起",
     "reload": "重新读取文件",
     "frameTitle": "{name} 的安全预览",
+    "fileLinkUnavailable": "当前会话没有可用的工作目录",
     "sandboxNote": "安全预览：作品脚本、网络与宿主访问已禁用"
   },
   "image": {

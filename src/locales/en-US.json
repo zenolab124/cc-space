@@ -1371,6 +1371,7 @@
     "collapse": "Collapse",
     "reload": "Reload file",
     "frameTitle": "Safe preview of {name}",
+    "fileLinkUnavailable": "This session has no available working directory",
     "sandboxNote": "Safe preview: artifact scripts, network, and host access are disabled"
   },
   "image": {

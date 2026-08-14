@@ -44,8 +44,10 @@ let visibilityObserver: IntersectionObserver | null = null
 let stageResizeObserver: ResizeObserver | null = null
 let disposeTimer: number | null = null
 let heightFrame = 0
-let measuredContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
-let pendingContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
+let measuredContentHeight = Number.POSITIVE_INFINITY
+let pendingContentHeight = Number.POSITIVE_INFINITY
+let contentFillsViewport = true
+let pendingFillsViewport = true
 let loadRevision = 0
 let autoOpenAttempted = false
 let inPreviewRange = true
@@ -71,6 +73,17 @@ const sandboxedHtml = computed(() => {
   return prepareSandboxedHtml(source, sandboxNonce.value)
 })
 
+function resetFrameMeasurement() {
+  measuredContentHeight = Number.POSITIVE_INFINITY
+  pendingContentHeight = Number.POSITIVE_INFINITY
+  contentFillsViewport = true
+  pendingFillsViewport = true
+  const width = stageRef.value?.clientWidth ?? cardRef.value?.clientWidth ?? 0
+  frameHeight.value = width > 0
+    ? clampArtifactFrameHeight(Number.POSITIVE_INFINITY, width)
+    : MIN_ARTIFACT_FRAME_HEIGHT
+}
+
 async function loadPreview() {
   if (loading.value) return
   const revision = ++loadRevision
@@ -83,8 +96,7 @@ async function loadPreview() {
     })
     if (revision !== loadRevision) return
     sandboxNonce.value = loaded.kind === 'html' ? crypto.randomUUID() : ''
-    measuredContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
-    frameHeight.value = MIN_ARTIFACT_FRAME_HEIGHT
+    resetFrameMeasurement()
     artifact.value = loaded
     expanded.value = true
   } catch (cause) {
@@ -123,8 +135,7 @@ function disposePreview() {
   expanded.value = false
   artifact.value = null
   sandboxNonce.value = ''
-  measuredContentHeight = MIN_ARTIFACT_FRAME_HEIGHT
-  frameHeight.value = MIN_ARTIFACT_FRAME_HEIGHT
+  resetFrameMeasurement()
 }
 
 function scheduleDispose() {
@@ -144,23 +155,31 @@ function maybeAutoOpen() {
 function updateFrameHeight() {
   const width = stageRef.value?.clientWidth ?? 0
   if (width <= 0) return
-  const nextHeight = clampArtifactFrameHeight(measuredContentHeight, width)
+  const contentHeight = contentFillsViewport ? Number.POSITIVE_INFINITY : measuredContentHeight
+  const nextHeight = clampArtifactFrameHeight(contentHeight, width)
   if (Math.abs(nextHeight - frameHeight.value) >= 2) frameHeight.value = nextHeight
 }
 
-function scheduleFrameHeight(contentHeight: number) {
+function scheduleFrameHeight(contentHeight: number, fillsViewport: boolean) {
   pendingContentHeight = contentHeight
+  pendingFillsViewport = fillsViewport
   if (heightFrame) return
   heightFrame = window.requestAnimationFrame(() => {
     heightFrame = 0
     measuredContentHeight = pendingContentHeight
+    contentFillsViewport = pendingFillsViewport
     updateFrameHeight()
   })
 }
 
 function onMeasurement(event: MessageEvent) {
   const frame = frameRef.value
-  const data = event.data as { type?: unknown; token?: unknown; height?: unknown } | null
+  const data = event.data as {
+    type?: unknown
+    token?: unknown
+    height?: unknown
+    fillsViewport?: unknown
+  } | null
   if (
     !frame
     || event.source !== frame.contentWindow
@@ -170,8 +189,9 @@ function onMeasurement(event: MessageEvent) {
     || typeof data.height !== 'number'
     || !Number.isFinite(data.height)
     || data.height < 0
+    || typeof data.fillsViewport !== 'boolean'
   ) return
-  scheduleFrameHeight(data.height)
+  scheduleFrameHeight(data.height, data.fillsViewport)
 }
 
 watch(stageRef, stage => {

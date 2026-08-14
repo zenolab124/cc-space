@@ -320,6 +320,7 @@ pub fn run() {
             commands::open_external_url,
             commands::read_local_image,
             artifact_preview::read_artifact_preview,
+            artifact_preview::open_workspace_file,
             metadata::get_all_meta,
             metadata::get_all_meta_v2,
             metadata::update_meta,

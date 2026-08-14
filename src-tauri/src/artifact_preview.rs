@@ -63,7 +63,7 @@ fn artifact_format(path: &Path) -> Option<ArtifactFormat> {
     Some(format)
 }
 
-fn resolve_artifact_path(root: &Path, requested: &Path) -> Result<PathBuf, String> {
+fn resolve_workspace_file(root: &Path, requested: &Path) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
         .map_err(|error| format!("无法访问会话工作目录: {error}"))?;
@@ -78,12 +78,12 @@ fn resolve_artifact_path(root: &Path, requested: &Path) -> Result<PathBuf, Strin
     };
     let candidate = candidate
         .canonicalize()
-        .map_err(|error| format!("交付物不存在或无法访问: {error}"))?;
+        .map_err(|error| format!("文件不存在或无法访问: {error}"))?;
     if !candidate.starts_with(&root) {
-        return Err("交付物不在当前会话工作目录内".to_string());
+        return Err("文件不在当前会话工作目录内".to_string());
     }
     if !candidate.is_file() {
-        return Err("交付物不是普通文件".to_string());
+        return Err("目标不是普通文件".to_string());
     }
     Ok(candidate)
 }
@@ -104,7 +104,7 @@ fn validate_image_bytes(media_type: &str, bytes: &[u8]) -> bool {
 
 #[tauri::command]
 pub fn read_artifact_preview(root: String, path: String) -> Result<ArtifactPreview, String> {
-    let resolved = resolve_artifact_path(Path::new(&root), Path::new(&path))?;
+    let resolved = resolve_workspace_file(Path::new(&root), Path::new(&path))?;
     let format = artifact_format(&resolved).ok_or_else(|| "不支持预览此文件格式".to_string())?;
     let metadata = fs::metadata(&resolved).map_err(|error| error.to_string())?;
     if metadata.len() > format.max_bytes {
@@ -140,9 +140,15 @@ pub fn read_artifact_preview(root: String, path: String) -> Result<ArtifactPrevi
     })
 }
 
+#[tauri::command]
+pub fn open_workspace_file(root: String, path: String) -> Result<(), String> {
+    let resolved = resolve_workspace_file(Path::new(&root), Path::new(&path))?;
+    crate::file_opener::open_path(&resolved, false)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{read_artifact_preview, resolve_artifact_path};
+    use super::{read_artifact_preview, resolve_workspace_file};
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -164,7 +170,7 @@ mod tests {
         fs::create_dir_all(root.join("output")).unwrap();
         fs::write(root.join("output/demo.html"), "<h1>demo</h1>").unwrap();
 
-        let resolved = resolve_artifact_path(&root, Path::new("output/demo.html")).unwrap();
+        let resolved = resolve_workspace_file(&root, Path::new("output/demo.html")).unwrap();
         assert_eq!(
             resolved,
             root.join("output/demo.html").canonicalize().unwrap()
@@ -182,7 +188,7 @@ mod tests {
         let outside_file = outside.join("demo.html");
         fs::write(&outside_file, "<h1>outside</h1>").unwrap();
 
-        let error = resolve_artifact_path(&root, &outside_file).unwrap_err();
+        let error = resolve_workspace_file(&root, &outside_file).unwrap_err();
         assert!(error.contains("不在当前会话工作目录内"));
 
         fs::remove_dir_all(root).unwrap();
@@ -201,7 +207,7 @@ mod tests {
         fs::write(outside.join("demo.html"), "<h1>outside</h1>").unwrap();
         symlink(outside.join("demo.html"), root.join("demo.html")).unwrap();
 
-        let error = resolve_artifact_path(&root, Path::new("demo.html")).unwrap_err();
+        let error = resolve_workspace_file(&root, Path::new("demo.html")).unwrap_err();
         assert!(error.contains("不在当前会话工作目录内"));
 
         fs::remove_dir_all(root).unwrap();
