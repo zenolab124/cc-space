@@ -129,4 +129,15 @@ describe('macOS release signing architecture', () => {
     expect(publisher).toContain('gh release create "${RESTORE_ARGS[@]}" "${OLD_ASSETS[@]}"')
     expect(publisher).not.toContain('git push')
   })
+
+  it('prefers curated Nightly release notes and falls back to commit subjects', () => {
+    const workflow = source('../../.github/workflows/nightly.yml')
+    const curated = workflow.indexOf('CURATED_NOTES_FILE="release-notes/v${VERSION}.json"')
+    const validation = workflow.indexOf('release-notes.mjs validate "$CURATED_NOTES_FILE" "$VERSION"')
+    const fallback = workflow.indexOf('release-notes.mjs nightly "$VERSION" "$CHANGES_FILE" "$NOTES_FILE"')
+
+    expect(curated).toBeGreaterThan(-1)
+    expect(validation).toBeGreaterThan(curated)
+    expect(fallback).toBeGreaterThan(validation)
+  })
 })

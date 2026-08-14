@@ -210,12 +210,18 @@ jobs:
           TARBALL=$(ls src-tauri/target/release/bundle/updater/*.app.tar.gz)
           CHANGES_FILE="$RUNNER_TEMP/nightly-changes.txt"
           NOTES_FILE="$RUNNER_TEMP/nightly-release-notes.json"
-          if git rev-parse --verify nightly >/dev/null 2>&1; then
-            git log nightly..HEAD --pretty=format:'%s' -n 8 > "$CHANGES_FILE"
+          CURATED_NOTES_FILE="release-notes/v${VERSION}.json"
+          if [ -f "$CURATED_NOTES_FILE" ]; then
+            node scripts/release-notes.mjs validate "$CURATED_NOTES_FILE" "$VERSION"
+            cp "$CURATED_NOTES_FILE" "$NOTES_FILE"
           else
-            git log --since='24 hours ago' --pretty=format:'%s' -n 8 > "$CHANGES_FILE"
+            if git rev-parse --verify nightly >/dev/null 2>&1; then
+              git log nightly..HEAD --pretty=format:'%s' -n 8 > "$CHANGES_FILE"
+            else
+              git log --since='24 hours ago' --pretty=format:'%s' -n 8 > "$CHANGES_FILE"
+            fi
+            node scripts/release-notes.mjs nightly "$VERSION" "$CHANGES_FILE" "$NOTES_FILE"
           fi
-          node scripts/release-notes.mjs nightly "$VERSION" "$CHANGES_FILE" "$NOTES_FILE"
           RELEASE_NOTES_FILE="$NOTES_FILE" node scripts/create-latest-json.mjs "$VERSION" "$TARBALL" \
             src-tauri/target/release/bundle/updater/nightly.json
           echo "NIGHTLY_RELEASE_NOTES_FILE=$NOTES_FILE" >> "$GITHUB_ENV"
