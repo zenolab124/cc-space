@@ -3,7 +3,7 @@
   "recordTypes": {
     "supported": ["user", "assistant", "ai-title", "custom-title", "system"],
     "ignored": {
-      "last-prompt": "CLI 内部缓存的上次输入提示，无用户可见内容，解析层有意跳过",
+      "last-prompt": "CLI 内部缓存的上次输入提示，不作为用户消息渲染；解析层仅使用 leafUuid 识别 Rewind 后的活动分支",
       "attachment": "harness 注入给模型的系统上下文增量（output_style/todo_reminder/skill_listing/deferred_tools_delta 等子类型），非用户内容；将来若做「显示系统注入」开关再启用",
       "queue-operation": "流式期间消息排队的 enqueue/dequeue 痕迹，排队消息最终会以 user 记录落盘，无需重复渲染",
       "file-history-snapshot": "checkpoint 文件备份索引（多为空快照），做 rewind 集成时再启用",
