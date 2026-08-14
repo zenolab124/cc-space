@@ -1,4 +1,5 @@
 export const ARTIFACT_SIZE_MESSAGE = 'monet:artifact-size'
+export const ARTIFACT_WHEEL_BOUNDARY_MESSAGE = 'monet:artifact-wheel-boundary'
 export const MIN_ARTIFACT_FRAME_HEIGHT = 240
 
 export function clampArtifactFrameHeight(contentHeight: number, frameWidth: number): number {
@@ -12,6 +13,7 @@ export function clampArtifactFrameHeight(contentHeight: number, frameWidth: numb
 function measurementScript(token: string): string {
   return `(() => {
     const type = ${JSON.stringify(ARTIFACT_SIZE_MESSAGE)};
+    const wheelType = ${JSON.stringify(ARTIFACT_WHEEL_BOUNDARY_MESSAGE)};
     const token = ${JSON.stringify(token)};
     let timer = 0;
     const measure = () => {
@@ -55,6 +57,48 @@ function measurementScript(token: string): string {
     if (document.body) observer.observe(document.body);
     addEventListener('load', schedule, { once: true });
     schedule();
+
+    let wheelAxis = null;
+    let wheelIdleTimer = 0;
+    const canScroll = (element, axis, delta) => {
+      if (!(element instanceof Element)) return false;
+      const style = getComputedStyle(element);
+      const overflow = axis === 'x' ? style.overflowX : style.overflowY;
+      if (overflow !== 'auto' && overflow !== 'scroll') return false;
+      const position = axis === 'x' ? element.scrollLeft : element.scrollTop;
+      const extent = axis === 'x'
+        ? element.scrollWidth - element.clientWidth
+        : element.scrollHeight - element.clientHeight;
+      if (extent <= 1) return false;
+      return delta < 0 ? position > 1 : position < extent - 1;
+    };
+    const hasScrollableTarget = (target, axis, delta) => {
+      for (let element = target instanceof Element ? target : null; element; element = element.parentElement) {
+        if (canScroll(element, axis, delta)) return true;
+      }
+      const root = document.scrollingElement;
+      return root ? canScroll(root, axis, delta) : false;
+    };
+    addEventListener('wheel', event => {
+      if (event.ctrlKey) return;
+      const deltaX = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+      const deltaY = event.shiftKey && !event.deltaX ? 0 : event.deltaY;
+      if (!deltaX && !deltaY) return;
+      if (!wheelAxis) wheelAxis = Math.abs(deltaX) > Math.abs(deltaY) ? 'x' : 'y';
+      if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = setTimeout(() => { wheelAxis = null; }, 160);
+      const delta = wheelAxis === 'x' ? deltaX : deltaY;
+      if (!delta || hasScrollableTarget(event.target, wheelAxis, delta)) return;
+      event.preventDefault();
+      parent.postMessage({
+        type: wheelType,
+        token,
+        axis: wheelAxis,
+        deltaX,
+        deltaY,
+        deltaMode: event.deltaMode,
+      }, '*');
+    }, { passive: false });
   })();`
 }
 

@@ -1,4 +1,5 @@
 import { onMounted, onUnmounted, type Ref } from 'vue'
+import { registerScrollSurface } from '@/lib/scrollGestureCoordinator'
 
 /**
  * 工作台横向滚动接管（嵌套滚动 wheel 捕获，动机见 pitfalls/nested-scroll-wheel-capture.md）。
@@ -26,6 +27,7 @@ export function useHorizontalWheelScroll(containerRef: Ref<HTMLElement | undefin
   let lastTs = 0
   let lastTarget: EventTarget | null = null
   let lastAllowInner = false
+  let unregisterScrollSurface: (() => void) | null = null
 
   // 60fps 基准下每帧吃掉剩余距离的比例。0.45 偏跟手（用户校准，0.35 感知滞后）；
   // 帧间隔变化时按 dt 指数校正，追赶速度与刷新率无关
@@ -88,6 +90,12 @@ export function useHorizontalWheelScroll(containerRef: Ref<HTMLElement | undefin
     }
     if (lastAllowInner) return
     e.preventDefault()
+    queueDelta(e.deltaX)
+  }
+
+  function queueDelta(delta: number) {
+    const el = containerRef.value
+    if (!el) return
     if (!animating) {
       // 手势起点与真实位置对齐并缓存滚动上限（整个手势期唯一的布局读时机）：
       // scrollLeft 可能被外部改过（聚焦列 scrollIntoView 等）
@@ -95,16 +103,20 @@ export function useHorizontalWheelScroll(containerRef: Ref<HTMLElement | undefin
       target = current
       maxScroll = Math.max(0, el.scrollWidth - el.clientWidth)
     }
-    target += e.deltaX
+    target += delta
     startAnim()
   }
 
   onMounted(() => {
-    containerRef.value?.addEventListener('wheel', onWheelCapture, { capture: true, passive: false })
+    const element = containerRef.value
+    element?.addEventListener('wheel', onWheelCapture, { capture: true, passive: false })
+    if (element) unregisterScrollSurface = registerScrollSurface(element, 'x', queueDelta)
   })
 
   onUnmounted(() => {
     containerRef.value?.removeEventListener('wheel', onWheelCapture, { capture: true } as EventListenerOptions)
+    unregisterScrollSurface?.()
+    unregisterScrollSurface = null
     if (rafId) cancelAnimationFrame(rafId)
     animating = false
     lastTarget = null

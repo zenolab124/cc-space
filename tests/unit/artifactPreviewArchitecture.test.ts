@@ -4,6 +4,7 @@ import { clampArtifactFrameHeight } from '@/features/artifact-preview/sandboxHtm
 
 const card = readFileSync('src/components/artifacts/ArtifactPreviewCard.vue', 'utf8')
 const sandbox = readFileSync('src/features/artifact-preview/sandboxHtml.ts', 'utf8')
+const scrollCoordinator = readFileSync('src/lib/scrollGestureCoordinator.ts', 'utf8')
 const backend = readFileSync('src-tauri/src/artifact_preview.rs', 'utf8')
 const blockText = readFileSync('src/components/blocks/BlockText.vue', 'utf8')
 
@@ -18,6 +19,11 @@ describe('artifact preview security boundary', () => {
     expect(sandbox).toContain('document.createRange()')
     expect(sandbox).toContain('setTimeout(() => requestAnimationFrame(measure), 100)')
     expect(sandbox).toContain("parent.postMessage({ type, token, height, fillsViewport }, '*')")
+    expect(sandbox).toContain("ARTIFACT_WHEEL_BOUNDARY_MESSAGE")
+    expect(sandbox).toContain("addEventListener('wheel'")
+    expect(sandbox).toContain("event.preventDefault()")
+    expect(scrollCoordinator).toContain("data-monet-scroll-pass-through")
+    expect(scrollCoordinator).toContain("GESTURE_IDLE_MS = 160")
     expect(sandbox).toContain('"connect-src \'none\'"')
     expect(card).toContain('referrerpolicy="no-referrer"')
     expect(card).toContain('event.source !== frame.contentWindow')

@@ -10,10 +10,16 @@ import {
 } from '@/features/artifact-preview/detectArtifacts'
 import {
   ARTIFACT_SIZE_MESSAGE,
+  ARTIFACT_WHEEL_BOUNDARY_MESSAGE,
   MIN_ARTIFACT_FRAME_HEIGHT,
   clampArtifactFrameHeight,
   prepareSandboxedHtml,
 } from '@/features/artifact-preview/sandboxHtml'
+import {
+  handoffManagedFrameWheel,
+  registerManagedScrollFrame,
+  type ScrollAxis,
+} from '@/lib/scrollGestureCoordinator'
 
 interface LoadedArtifact {
   fileName: string
@@ -43,6 +49,7 @@ const frameHeight = ref(MIN_ARTIFACT_FRAME_HEIGHT)
 let visibilityObserver: IntersectionObserver | null = null
 let stageResizeObserver: ResizeObserver | null = null
 let disposeTimer: number | null = null
+let unregisterScrollFrame: (() => void) | null = null
 let heightFrame = 0
 let measuredContentHeight = Number.POSITIVE_INFINITY
 let pendingContentHeight = Number.POSITIVE_INFINITY
@@ -175,20 +182,46 @@ function scheduleFrameHeight(contentHeight: number, fillsViewport: boolean) {
   })
 }
 
-function onMeasurement(event: MessageEvent) {
+function onSandboxMessage(event: MessageEvent) {
   const frame = frameRef.value
   const data = event.data as {
     type?: unknown
     token?: unknown
     height?: unknown
     fillsViewport?: unknown
+    axis?: unknown
+    deltaX?: unknown
+    deltaY?: unknown
+    deltaMode?: unknown
   } | null
   if (
     !frame
     || event.source !== frame.contentWindow
     || !data
-    || data.type !== ARTIFACT_SIZE_MESSAGE
     || data.token !== sandboxNonce.value
+  ) return
+
+  if (data.type === ARTIFACT_WHEEL_BOUNDARY_MESSAGE) {
+    if (
+      (data.axis !== 'x' && data.axis !== 'y')
+      || typeof data.deltaX !== 'number'
+      || !Number.isFinite(data.deltaX)
+      || typeof data.deltaY !== 'number'
+      || !Number.isFinite(data.deltaY)
+      || typeof data.deltaMode !== 'number'
+      || ![0, 1, 2].includes(data.deltaMode)
+    ) return
+    handoffManagedFrameWheel(frame, {
+      axis: data.axis as ScrollAxis,
+      deltaX: data.deltaX,
+      deltaY: data.deltaY,
+      deltaMode: data.deltaMode,
+    })
+    return
+  }
+
+  if (
+    data.type !== ARTIFACT_SIZE_MESSAGE
     || typeof data.height !== 'number'
     || !Number.isFinite(data.height)
     || data.height < 0
@@ -206,10 +239,15 @@ watch(stageRef, stage => {
   void nextTick(updateFrameHeight)
 })
 
+watch(frameRef, frame => {
+  unregisterScrollFrame?.()
+  unregisterScrollFrame = frame ? registerManagedScrollFrame(frame) : null
+}, { flush: 'post' })
+
 watch(() => props.autoOpen, maybeAutoOpen)
 
 onMounted(() => {
-  window.addEventListener('message', onMeasurement)
+  window.addEventListener('message', onSandboxMessage)
   const root = cardRef.value?.closest<HTMLElement>('.session-viewport-scroll') ?? null
   if (typeof IntersectionObserver === 'undefined') {
     maybeAutoOpen()
@@ -232,8 +270,10 @@ onUnmounted(() => {
   clearDisposeTimer()
   visibilityObserver?.disconnect()
   stageResizeObserver?.disconnect()
+  unregisterScrollFrame?.()
+  unregisterScrollFrame = null
   if (heightFrame) window.cancelAnimationFrame(heightFrame)
-  window.removeEventListener('message', onMeasurement)
+  window.removeEventListener('message', onSandboxMessage)
 })
 </script>
 
@@ -379,6 +419,9 @@ onUnmounted(() => {
   max-height: 60vh;
   border: 0;
   background: var(--card);
+}
+.artifact-frame[data-monet-scroll-pass-through] {
+  pointer-events: none;
 }
 .artifact-image {
   display: block;

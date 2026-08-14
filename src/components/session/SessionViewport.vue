@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { VNodeRef } from 'vue'
+import { onUnmounted, type VNodeRef } from 'vue'
+import { registerScrollSurface } from '@/lib/scrollGestureCoordinator'
 
 const props = defineProps<{
   scrollRef?: (element: HTMLElement | null) => void
@@ -10,9 +11,24 @@ const emit = defineEmits<{
   (event: 'wheel', value: WheelEvent): void
 }>()
 
+let unregisterScrollSurface: (() => void) | null = null
+
 const bindScroll: VNodeRef = (value) => {
-  props.scrollRef?.(value instanceof HTMLElement ? value : null)
+  unregisterScrollSurface?.()
+  unregisterScrollSurface = null
+  const element = value instanceof HTMLElement ? value : null
+  props.scrollRef?.(element)
+  if (!element) return
+  unregisterScrollSurface = registerScrollSurface(element, 'y', (delta) => {
+    emit('wheel', new WheelEvent('wheel', { deltaY: delta }))
+    element.scrollTop += delta
+  })
 }
+
+onUnmounted(() => {
+  unregisterScrollSurface?.()
+  unregisterScrollSurface = null
+})
 </script>
 
 <template>
