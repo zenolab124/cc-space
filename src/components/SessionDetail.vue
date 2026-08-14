@@ -96,6 +96,8 @@ import { renderMarkdownDeferred } from '@/composables/useMarkdown'
 import { persistKeyOf } from '@/lib/stream-markdown/constants'
 import { useFileLedger } from '@/composables/useFileLedger'
 import FileLedgerPanel from './FileLedgerPanel.vue'
+import ArtifactPreviewList from './artifacts/ArtifactPreviewList.vue'
+import { detectContentBlockArtifacts } from '@/features/artifact-preview/detectArtifacts'
 import RunnerPanel from './runner/RunnerPanel.vue'
 import {
   elementScroll,
@@ -1219,6 +1221,11 @@ function findLandedUserUuid(
 const pendingLandedUuid = computed(() => {
   const s = stream.value
   return findLandedUserUuid(records.value, s.pendingUserMessage, !!s.pendingImages?.length, s.pendingSentAt ?? 0)
+})
+
+const streamingArtifactCandidates = computed(() => {
+  if (stream.value.streaming) return []
+  return detectContentBlockArtifacts(stream.value.streamingTurns.flatMap(turn => turn.content))
 })
 
 // 落账接管后清理 pending 状态(显示切换已由 v-if 原子完成,这里只是后勤)
@@ -3415,6 +3422,11 @@ async function onReload() {
               :streaming="!!turn.live"
             />
           </div>
+          <ArtifactPreviewList
+            v-if="currentSession?.summary.cwd"
+            :candidates="streamingArtifactCandidates"
+            :root="currentSession.summary.cwd"
+          />
         </AssistantResponseFrame>
 
         <div v-if="stream.streaming && stream.streamingTurns.length === 0" class="flex gap-3">

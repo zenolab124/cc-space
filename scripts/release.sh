@@ -9,6 +9,7 @@ set -euo pipefail
 
 BUMP=${1:-patch}
 SIGN_ID=${SIGN_ID:-Monet Signing}
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 if [[ "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
   echo "✗ 版本升级类型只支持 patch、minor 或 major。" >&2
@@ -48,7 +49,13 @@ CANDIDATES+=("$NIGHTLY_VERSION")
 
 NEXT_VERSION=$(node scripts/next-build-version.mjs "$BUMP" "${CANDIDATES[@]}")
 echo "全局下一版本: $NEXT_VERSION"
+RELEASE_NOTES_FILE="$REPO_ROOT/release-notes/v${NEXT_VERSION}.json"
+if [[ ! -f "$RELEASE_NOTES_FILE" ]]; then
+  echo "✗ 缺少稳定版发布说明 $RELEASE_NOTES_FILE，请先整理双语更新内容并提交。" >&2
+  exit 1
+fi
+node scripts/release-notes.mjs validate "$RELEASE_NOTES_FILE" "$NEXT_VERSION"
 pnpm version "$NEXT_VERSION"
 pnpm tauri build --bundles app --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$SIGN_ID\"}}}"
 bash scripts/bundle-tray.sh
-SIGN_ID="$SIGN_ID" src-widget/build.sh
+SIGN_ID="$SIGN_ID" RELEASE_NOTES_FILE="$RELEASE_NOTES_FILE" src-widget/build.sh

@@ -13,6 +13,8 @@ import SystemEventRow from './SystemEventRow.vue'
 import UserMsgContent from './UserMsgContent.vue'
 import DividerMark from './DividerMark.vue'
 import ConversationTurn from './session/ConversationTurn.vue'
+import ArtifactPreviewList from './artifacts/ArtifactPreviewList.vue'
+import { detectContentBlockArtifacts } from '@/features/artifact-preview/detectArtifacts'
 
 // 消息组渲染:一个用户消息 + 后续回复(assistant/system)。抽出后被 SessionDetail 三处调用:
 // (1) 虚拟化 items 循环 (2) shouldVirtualize=false 全铺 v-for (3) 末组豁免独立铺。
@@ -67,6 +69,15 @@ const turnView = computed<ConversationTurnView>(() => ({
   },
   lazy: false,
 }))
+const artifactRoot = computed(() => {
+  const records = [props.group.user, ...props.group.responses]
+  const record = records.find((candidate): candidate is Extract<VisibleRecord, { type: 'user' | 'assistant' }> =>
+    candidate?.type === 'user' || candidate?.type === 'assistant')
+  return record?.cwd ?? ''
+})
+const artifactCandidates = computed(() => detectContentBlockArtifacts(
+  props.group.responses.flatMap(record => record.type === 'assistant' ? props.contentBlocks(record) : []),
+))
 
 interface ResponsePart {
   record: VisibleRecord
@@ -208,6 +219,7 @@ const responseEntries = computed<ResponseEntry[]>(() => {
           />
         </template>
       </template>
+      <ArtifactPreviewList :candidates="artifactCandidates" :root="artifactRoot" />
     </template>
 
     <template #without-response>

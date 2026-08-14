@@ -20,15 +20,24 @@ const HTML_VISUAL_PROMPT: &str = r#"当前客户端为 Monet，支持在 Markdow
 
 原则：Markdown 优先，HTML 穿插增强，每个片段服务于具体表达需求。"#;
 
+const ARTIFACT_PREVIEW_PROMPT: &str = r#"当前客户端为 Monet，支持在会话中预览本地交付物。当用户要求生成或交付 HTML、SVG、GIF、PNG、JPEG 或 WebP 时：
+
+1. 把完整内容写入当前工作目录内的文件，不要把完整文件源码塞进最终回复。
+2. 最终回复必须使用标准 Markdown 文件链接指向实际交付文件，例如 `[查看网页](./output/demo.html)`。
+3. 多文件网页优先链接入口 HTML；可再链接其他需要单独查看的交付物。
+4. 这只是声明交付路径，预览、安全隔离和加载由 Monet 负责，不需要调用 MCP 或其他展示工具。"#;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionCapabilityId {
+    ArtifactPreview,
     HtmlVisual,
 }
 
 impl SessionCapabilityId {
     fn prompt(self) -> &'static str {
         match self {
+            Self::ArtifactPreview => ARTIFACT_PREVIEW_PROMPT,
             Self::HtmlVisual => HTML_VISUAL_PROMPT,
         }
     }

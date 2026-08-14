@@ -25,7 +25,19 @@ permissions:
   contents: write
 
 jobs:
+  validate-release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate localized release notes
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/release-notes.mjs validate "release-notes/v${VERSION}.json" "$VERSION"
+
   build-windows:
+    needs: validate-release-notes
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -182,9 +194,10 @@ jobs:
       - name: Merge windows into latest.json
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_NOTES_FILE="release-notes/v${VERSION}.json"
           TARBALL=$(ls src-tauri/target/release/bundle/updater/*.app.tar.gz)
           WIN_EXE=$(ls windows-artifacts/*.exe)
-          node scripts/create-latest-json.mjs "$VERSION" "$TARBALL" \
+          RELEASE_NOTES_FILE="$RELEASE_NOTES_FILE" node scripts/create-latest-json.mjs "$VERSION" "$TARBALL" \
             src-tauri/target/release/bundle/updater/latest.json "$WIN_EXE"
           cat src-tauri/target/release/bundle/updater/latest.json
 
@@ -193,6 +206,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_NOTES_FILE="release-notes/v${VERSION}.json"
+          USER_NOTES=$(node scripts/release-notes.mjs markdown "$RELEASE_NOTES_FILE" "$VERSION")
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; refusing to modify its assets." >&2
             exit 1
@@ -210,4 +226,5 @@ jobs:
             --draft \
             --title "Monet ${GITHUB_REF_NAME}" \
             --generate-notes \
+            --notes "$USER_NOTES" \
             "${ASSETS[@]}"

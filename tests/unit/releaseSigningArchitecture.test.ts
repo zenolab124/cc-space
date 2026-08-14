@@ -90,6 +90,21 @@ describe('macOS release signing architecture', () => {
     }
   })
 
+  it('requires stable release notes before building and injects them into the updater manifest', () => {
+    const releaseScript = source('../../scripts/release.sh')
+    const workflow = source('../../.github/workflows/release.yml')
+    const manifestScript = source('../../scripts/create-latest-json.mjs')
+
+    expect(releaseScript).toContain('release-notes/v${NEXT_VERSION}.json')
+    expect(releaseScript).toContain('REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)')
+    expect(releaseScript).toContain('RELEASE_NOTES_FILE="$REPO_ROOT/release-notes/v${NEXT_VERSION}.json"')
+    expect(releaseScript).toContain('release-notes.mjs validate')
+    expect(workflow).toContain('validate-release-notes:')
+    expect(workflow).toContain('RELEASE_NOTES_FILE="$RELEASE_NOTES_FILE" node scripts/create-latest-json.mjs')
+    expect(workflow).toContain('--notes "$USER_NOTES"')
+    expect(manifestScript).toContain('manifest.notes = encodeReleaseNotes')
+  })
+
   it('publishes a verified Nightly candidate and can restore the previous release', () => {
     const workflow = source('../../.github/workflows/nightly.yml')
     const publisher = source('../../scripts/publish-nightly.sh')
@@ -113,5 +128,16 @@ describe('macOS release signing architecture', () => {
     expect(publisher).toContain('expected="sha256:$(shasum -a 256')
     expect(publisher).toContain('gh release create "${RESTORE_ARGS[@]}" "${OLD_ASSETS[@]}"')
     expect(publisher).not.toContain('git push')
+  })
+
+  it('prefers curated Nightly release notes and falls back to commit subjects', () => {
+    const workflow = source('../../.github/workflows/nightly.yml')
+    const curated = workflow.indexOf('CURATED_NOTES_FILE="release-notes/v${VERSION}.json"')
+    const validation = workflow.indexOf('release-notes.mjs validate "$CURATED_NOTES_FILE" "$VERSION"')
+    const fallback = workflow.indexOf('release-notes.mjs nightly "$VERSION" "$CHANGES_FILE" "$NOTES_FILE"')
+
+    expect(curated).toBeGreaterThan(-1)
+    expect(validation).toBeGreaterThan(curated)
+    expect(fallback).toBeGreaterThan(validation)
   })
 })

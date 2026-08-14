@@ -8,6 +8,7 @@ set -euo pipefail
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
 : "${GITHUB_RUN_ATTEMPT:?GITHUB_RUN_ATTEMPT is required}"
+: "${NIGHTLY_RELEASE_NOTES_FILE:?NIGHTLY_RELEASE_NOTES_FILE is required}"
 
 shopt -s nullglob
 ASSETS=(
@@ -23,7 +24,8 @@ fi
 
 CANDIDATE_TAG="nightly-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 RELEASE_TITLE="Nightly $VERSION"
-RELEASE_NOTES="每日构建，含未经验证的改动。仅供在设置中切到 Nightly 通道的用户使用。提交 ${GITHUB_SHA:0:7}"
+RELEASE_NOTES=$(node scripts/release-notes.mjs markdown "$NIGHTLY_RELEASE_NOTES_FILE" "$VERSION")
+RELEASE_NOTES+=$'\n\n提交 '"${GITHUB_SHA:0:7}"
 BACKUP_DIR=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/monet-nightly-backup.XXXXXX")
 CANDIDATE_ID=""
 OLD_RELEASE_ID=""

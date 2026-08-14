@@ -12,11 +12,23 @@ export function useColumnResize() {
 
   function onDividerMouseDown(e: MouseEvent, index: number) {
     e.preventDefault()
+    const tab = activeTab.value
+    const columnElement = (e.currentTarget as HTMLElement | null)?.closest<HTMLElement>('[data-workbench-column]')
+    const renderedColumns = columnElement?.parentElement
+      ? Array.from(columnElement.parentElement.children)
+          .filter((element): element is HTMLElement => (
+            element instanceof HTMLElement && element.hasAttribute('data-workbench-column')
+          ))
+      : []
+    // 弹性铺满只影响渲染宽度；开始手调前先实体化，避免首帧跳回持久化基准宽。
+    if (renderedColumns.length === tab.columnSizes.length) {
+      const renderedWidths = renderedColumns.map(column => Math.round(column.getBoundingClientRect().width))
+      if (renderedWidths.every(width => width > 0)) tab.columnSizes = renderedWidths
+    }
+
     dragging.value = true
     const isShift = e.shiftKey
     shiftDragging.value = isShift
-
-    const tab = activeTab.value
     const startX = e.clientX
 
     if (isShift) {

@@ -79,6 +79,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 - Rich rendering: markdown, syntax highlighting (light/dark dual theme), thinking summaries (normal click expands one; Shift-click toggles all and remembers the default), image lightbox (click to fullscreen, Esc to close)
 - HTML visual enhancement (optional toggle): both Claude Code and Codex Workbench sessions receive controlled formatting instructions that teach the AI to embed HTML in replies — side-by-side comparison cards, collapsible sections, info cards, inline SVG diagrams — so answers stop being a monotone vertical text stream; script-class dangerous tags are filtered, rendering is safe
+- Inline deliverable previews: local HTML, SVG, GIF, PNG, JPEG, and WebP files linked by the Agent in its final response automatically become preview cards with no additional MCP; HTML loads on demand in a scriptless, network-isolated iframe, images load near the viewport, and previews remain available after reopening the conversation
 - Three tool-call display modes: full cards, collapsed items, or grouped consecutive processes; collapsed rows retain action summaries and running/failure state, while expansion preserves purpose-built Bash copying, side-by-side Edit diffs, and Read/Write file navigation; normal clicks stay local and Shift-click toggles all while remembering the default
 - In-session navigation: an anchor rail on the left (hover to preview each turn's question, click to jump); the current turn's user message pins to the top with previous/next-turn buttons; a back-to-bottom float — glide through a several-hundred-turn session
 - Tokens transparent throughout: per-reply in/cache/new/out quadruple, per-turn totals, and a context-usage bar in the top bar (warns as it fills) — see when context will overflow and where tokens go, in real time
@@ -206,7 +207,7 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 - TCC permission checkup (macOS): silently detects Automation/Accessibility/Screen Recording grants, one-click request, self-heals denied records
 - Claude Code services: a four-layer locator chain finds the claude binary (nvm/fnm/volta all work), one-click CLI install, one-click upgrade, environment diagnostic report
 - Custom Claude data root (multi-account / custom CLAUDE_CONFIG_DIR setups)
-- App self-update: GitHub Releases + signature verification, silent upgrades
+- App self-update: GitHub Releases + signature verification; when a release is available, Settings shows localized New / Improved / Fixed notes with expandable details, download progress, and restart status in place
 
 ### 3.15 Planned (roadmap)
 

@@ -3,7 +3,10 @@ import { resolveSessionCapabilities, sessionCapabilityFingerprint, type SessionC
 
 export function collectSessionCapabilities(): SessionCapabilityId[] {
   const { enabled: htmlVisualEnabled } = useHtmlVisual()
-  return resolveSessionCapabilities({ htmlVisual: htmlVisualEnabled.value })
+  return resolveSessionCapabilities({
+    artifactPreview: true,
+    htmlVisual: htmlVisualEnabled.value,
+  })
 }
 
 export function collectSessionCapabilityFingerprint(): string {

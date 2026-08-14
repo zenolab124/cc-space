@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+mod artifact_preview;
 mod cache;
 mod channels;
 /// pub：定位逻辑同时被 monet-routine-runner 以 #[path] 方式复用
@@ -318,6 +319,7 @@ pub fn run() {
             commands::open_path,
             commands::open_external_url,
             commands::read_local_image,
+            artifact_preview::read_artifact_preview,
             metadata::get_all_meta,
             metadata::get_all_meta_v2,
             metadata::update_meta,

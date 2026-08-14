@@ -27,10 +27,11 @@ const setHandle = (node: any) => { handleEl.value = node }
   <div
     ref="el"
     class="sortable-col"
+    data-workbench-column
     :class="{ 'sortable-col-dragging': isDragging, 'no-transition': resizing }"
     :style="fill
       ? { width: 'auto', flex: '1 1 0' }
-      : { width: `${flex}px`, flex: '0 0 auto' }"
+      : { width: `${flex}px`, flex: `${flex} 0 auto` }"
   >
     <slot :is-dragging="isDragging" :handle-ref="setHandle" />
   </div>
@@ -42,12 +43,20 @@ const setHandle = (node: any) => { handleEl.value = node }
   height: 100%;
   position: relative;
   overflow: hidden;
-  transition: width 250ms cubic-bezier(0.32, 0.72, 0, 1);
+  transition:
+    width 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .sortable-col-dragging {
   opacity: 0.4;
 }
 .no-transition {
   transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sortable-col {
+    transition: none !important;
+  }
 }
 </style>

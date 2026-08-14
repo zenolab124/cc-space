@@ -19,7 +19,7 @@ describe('多引擎统计聚合', () => {
     const updater = source('../../src-tauri/src/bin/widget_updater.rs')
 
     expect(updater).toContain('stats.sessions')
-    expect(updater).toContain('collect_project_stats(start_ts, &stats.sessions)')
+    expect(updater).toContain('collect_project_stats(start_ts, end_exclusive_ts, &stats.sessions)')
     expect(updater).not.toContain('collect_jsonl(&config::projects_dir()')
   })
 

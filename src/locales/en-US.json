@@ -743,6 +743,13 @@
     "updateInstall": "Download & Install",
     "updateError": "Update check failed",
     "updateCurrent": "Current version",
+    "updateNotesTitle": "What's new",
+    "updateNotesNew": "New",
+    "updateNotesImproved": "Improved",
+    "updateNotesFixed": "Fixed",
+    "updateNotesMore": "Show {count} more",
+    "updateNotesCollapse": "Show less",
+    "updateNotesFull": "View full notes",
     "traySlotSession": "Session (5-hour)",
     "traySlotFiveHour": "5 hours",
     "traySlotWeekly": "Weekly",
@@ -1356,6 +1363,15 @@
       "done": "Done",
       "imageCount": "{count} images"
     }
+  },
+  "artifactPreview": {
+    "groupLabel": "Session artifacts",
+    "image": "Image",
+    "preview": "Preview",
+    "collapse": "Collapse",
+    "reload": "Reload file",
+    "frameTitle": "Safe preview of {name}",
+    "sandboxNote": "Static safe preview: scripts, network, and host access are disabled"
   },
   "image": {
     "pending": "Image pending send",

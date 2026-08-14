@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import i18n from '../locales'
 import { evictSessionTransients } from './useStreaming'
 import { useRunners } from './useRunners'
+import { fillColumnWidthsProportionally } from '@/utils/workbenchColumnLayout'
 import { readMigratedStorage } from '../utils/storageMigrate'
 import { resolveSessionRef } from '@/engines/directory'
 import type { ProjectRef, SessionRef } from '@/engines/types'
@@ -784,7 +785,6 @@ const suppressColumnTransition = ref(false)
 function reclaimColumnWidth(tab: WorkbenchTab, removedIndex: number) {
   if (removedIndex < 0 || removedIndex >= tab.columns.length) return
 
-  suppressColumnTransition.value = true
   tab.columns.splice(removedIndex, 1)
   tab.columnSizes.splice(removedIndex, 1)
 
@@ -792,12 +792,10 @@ function reclaimColumnWidth(tab: WorkbenchTab, removedIndex: number) {
     const totalAfter = tab.columnSizes.reduce((s, w) => s + w, 0)
     const freeAfter = containerFreeWidth(tab.columnSizes.length)
     if (totalAfter < freeAfter) {
-      const neighbor = Math.min(removedIndex, tab.columnSizes.length - 1)
-      tab.columnSizes[neighbor] += freeAfter - totalAfter
+      tab.columnSizes = fillColumnWidthsProportionally(tab.columnSizes, freeAfter)
     }
   }
 
-  nextTick(() => { suppressColumnTransition.value = false })
 }
 
 /** 收起列回左列(仍激活,「收起非退出」) */
