@@ -6,8 +6,8 @@ import { flattenResultText, type ToolResultData } from '@/utils/toolPair'
 import type { ToolUseBlock } from '@/utils/toolDisplay'
 import { isOrchestrationTool, toolDisplayTitle, toolSummary } from '@/utils/toolDisplay'
 import MessageBlock from './MessageBlock.vue'
-import BlockImage from './blocks/BlockImage.vue'
 import EngineAssetImage from './engine/EngineAssetImage.vue'
+import ToolResultPreviewCard from './ToolResultPreviewCard.vue'
 import {
   TOOL_EXECUTION_CONTEXT,
   TOOL_FOLD_INTERACTION,
@@ -188,27 +188,17 @@ watch(() => foldState.requestedToolId.value, requested => {
     >
       <MessageBlock :block="tool" />
     </div>
-    <div
-      v-if="orchestration && expanded && result"
-      :id="resultContentId"
-      class="tool-fold-result"
-      :class="{ 'is-error': result.is_error }"
-    >
-      <pre v-if="resultText" class="tool-fold-result-text">{{ resultText }}</pre>
-      <BlockImage
-        v-for="(image, index) in resultImages"
-        :key="`inline:${index}`"
-        :block="image"
-        :record-uuid="result.recordUuid"
-      />
-      <EngineAssetImage
-        v-for="attachment in result.attachments"
-        :key="attachment.asset.nativeId"
-        :attachment="attachment"
-        auto-load
-        compact
-      />
-    </div>
+    <ToolResultPreviewCard
+      v-if="orchestration && result"
+      :content-id="resultContentId"
+      :text="resultText"
+      :images="resultImages"
+      :attachments="result.attachments"
+      :record-uuid="result.recordUuid"
+      :expanded="expanded"
+      :is-error="result.is_error"
+      @toggle="toggle"
+    />
     <div
       v-if="!orchestration && result?.attachments?.length"
       class="tool-fold-assets"
@@ -303,21 +293,6 @@ watch(() => foldState.requestedToolId.value, requested => {
 .tool-fold-image-badge > :first-child { width: 11px; height: 11px; }
 .tool-fold-card { margin: 2px 0 6px 18px; }
 .tool-fold-card > :deep(*) { margin-top: 0; }
-.tool-fold-result {
-  margin: 2px 0 6px 18px;
-  padding: 2px 0 2px 9px;
-  border-left: 1px solid var(--border);
-  color: var(--muted-foreground);
-}
-.tool-fold-result.is-error { color: var(--destructive); border-left-color: color-mix(in srgb, var(--destructive) 30%, transparent); }
-.tool-fold-result-text {
-  margin: 0;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
 .tool-fold-assets { margin: 2px 0 6px 32px; }
 .tool-fold-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-fold-dots i {

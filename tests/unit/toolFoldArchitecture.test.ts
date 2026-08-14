@@ -12,6 +12,7 @@ describe('工具组单层折叠', () => {
     const list = source('../../src/components/ContentBlockList.vue')
     const items = source('../../src/components/ToolProcessItems.vue')
     const item = source('../../src/components/ToolProcessItem.vue')
+    const resultCard = source('../../src/components/ToolResultPreviewCard.vue')
 
     expect(group).toContain('nested')
     expect(items).toContain('nested?: boolean')
@@ -21,7 +22,14 @@ describe('工具组单层折叠', () => {
     expect(list).toContain('v-else-if="isOrchestrationToolSegment(segment.tools)"')
     expect(item).toContain('v-if="foldable && canExpand"')
     expect(item).toContain('toolDisplayTitle(props.tool)')
-    expect(item).toContain('v-if="orchestration && expanded && result"')
+    expect(item).toContain('v-if="orchestration && result"')
+    expect(item).toContain('<ToolResultPreviewCard')
+    expect(resultCard).toContain('tool-result-clamp-3')
+    expect(resultCard).toContain("hasImages.value ? 'tool-result-clamp-2' : 'tool-result-clamp-3'")
+    expect(resultCard.indexOf('class="tool-result-preview-images"')).toBeLessThan(
+      resultCard.indexOf('class="tool-result-preview-text"'),
+    )
+    expect(resultCard).toContain("@click=\"emit('toggle', $event)\"")
     expect(item).toContain(':aria-expanded="expanded"')
     expect(item).toContain(':aria-controls="resultContentId"')
     expect(item).toContain('tool-fold-line:focus-visible')
