@@ -43,6 +43,8 @@ function snapshot(patch: Partial<RunConfigSnapshot> = {}): RunConfigSnapshot {
   return {
     channels: [official],
     defaultSessionChannel: null,
+    defaultSessionModel: null,
+    defaultSessionEffort: null,
     cliSettings: {
       model: 'cli-model',
       effort_level: 'high',
@@ -102,7 +104,7 @@ describe('resolveRunConfig', () => {
     })
   })
 
-  it('渠道默认形成启动覆盖，ultracode 保留虚拟 effort 值', () => {
+  it('会话引擎默认形成启动覆盖，ultracode 保留虚拟 effort 值', () => {
     const channel: ChannelInfo = {
       ...official,
       id: 'proxy',
@@ -112,7 +114,11 @@ describe('resolveRunConfig', () => {
     }
     const result = resolveRunConfig(
       settings({ channelId: 'proxy' }),
-      snapshot({ channels: [official, channel] }),
+      snapshot({
+        channels: [official, channel],
+        defaultSessionModel: 'vendor-model',
+        defaultSessionEffort: 'ultracode',
+      }),
     )
     expect(result.channelId).toBe('proxy')
     expect(result.launch).toMatchObject({

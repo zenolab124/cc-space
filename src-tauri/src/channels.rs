@@ -1679,7 +1679,7 @@ pub(crate) fn codex_runtime_channel_options(id: &str) -> Result<Map<String, Valu
     let auth_mode = extension.connection.as_ref()
         .map(|connection| connection.auth_mode.as_str()).filter(|value| !value.is_empty())
         .or_else(|| Some(channel.auth_mode.as_str()).filter(|value| !value.is_empty()))
-        .unwrap_or_else(|| if token.is_empty() { "none" } else { "bearer" });
+        .unwrap_or(if token.is_empty() { "none" } else { "bearer" });
     let mut provider = Map::from_iter([
         ("name".to_string(), Value::String(id.to_string())),
         ("base_url".to_string(), Value::String(base_url.to_string())),

@@ -74,7 +74,9 @@ fn run_version(path: &Path) -> Option<String> {
         .or_else(|| parse_semver(&String::from_utf8_lossy(&output.stderr)))
 }
 
-fn version_parts(version: &str) -> Option<((u64, u64, u64), Option<&str>)> {
+type VersionParts<'a> = ((u64, u64, u64), Option<&'a str>);
+
+fn version_parts(version: &str) -> Option<VersionParts<'_>> {
     let normalized = version.trim().trim_start_matches('v');
     let (core, prerelease) = normalized
         .split_once('-')
