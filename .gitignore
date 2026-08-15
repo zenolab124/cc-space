@@ -14,6 +14,7 @@ docs/
 studio/
 .playwright-mcp/
 .scratch-*
+output/
 
 # Widget Extension build artifacts
 src-widget/build/
