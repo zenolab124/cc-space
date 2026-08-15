@@ -49,6 +49,16 @@ describe('artifact preview security boundary', () => {
     expect(card).toContain('contentFillsViewport')
   })
 
+  it('opens image artifacts in an accessible lightbox', () => {
+    expect(card).toContain('class="artifact-image-open"')
+    expect(card).toContain('@click="openImageLightbox"')
+    expect(card).toContain('class="artifact-image-lightbox"')
+    expect(card).toContain('aria-modal="true"')
+    expect(card).toContain("event.key === 'Escape'")
+    expect(card).toContain('@click.self="closeImageLightbox()"')
+    expect(card).toContain('@wheel.prevent.stop')
+  })
+
   it('canonicalizes both roots and files before containment checks', () => {
     expect(backend).toContain('let root = root')
     expect(backend).toContain('.canonicalize()')

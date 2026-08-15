@@ -41,10 +41,13 @@ const cardRef = ref<HTMLElement | null>(null)
 const stageRef = ref<HTMLElement | null>(null)
 const frameRef = ref<HTMLIFrameElement | null>(null)
 const scrollShieldRef = ref<HTMLElement | null>(null)
+const imageOpenButtonRef = ref<HTMLButtonElement | null>(null)
+const lightboxCloseRef = ref<HTMLButtonElement | null>(null)
 const artifact = ref<LoadedArtifact | null>(null)
 const loading = ref(false)
 const expanded = ref(false)
 const error = ref<string | null>(null)
+const imageLightboxOpen = ref(false)
 const sandboxNonce = ref('')
 const frameHeight = ref(MIN_ARTIFACT_FRAME_HEIGHT)
 let visibilityObserver: IntersectionObserver | null = null
@@ -124,6 +127,7 @@ function togglePreview() {
 }
 
 function reloadPreview() {
+  closeImageLightbox(false)
   loadRevision++
   artifact.value = null
   sandboxNonce.value = ''
@@ -137,6 +141,7 @@ function clearDisposeTimer() {
 }
 
 function disposePreview() {
+  closeImageLightbox(false)
   clearDisposeTimer()
   loadRevision++
   loading.value = false
@@ -144,6 +149,22 @@ function disposePreview() {
   artifact.value = null
   sandboxNonce.value = ''
   resetFrameMeasurement()
+}
+
+function openImageLightbox() {
+  if (!imageSource.value) return
+  imageLightboxOpen.value = true
+  void nextTick(() => lightboxCloseRef.value?.focus())
+}
+
+function closeImageLightbox(restoreFocus = true) {
+  if (!imageLightboxOpen.value) return
+  imageLightboxOpen.value = false
+  if (restoreFocus) void nextTick(() => imageOpenButtonRef.value?.focus())
+}
+
+function onLightboxKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeImageLightbox()
 }
 
 function scheduleDispose() {
@@ -247,6 +268,11 @@ watch([frameRef, scrollShieldRef], ([frame, shield]) => {
 
 watch(() => props.autoOpen, maybeAutoOpen)
 
+watch(imageLightboxOpen, open => {
+  if (open) window.addEventListener('keydown', onLightboxKeydown)
+  else window.removeEventListener('keydown', onLightboxKeydown)
+})
+
 onMounted(() => {
   window.addEventListener('message', onSandboxMessage)
   const root = cardRef.value?.closest<HTMLElement>('.session-viewport-scroll') ?? null
@@ -274,6 +300,7 @@ onUnmounted(() => {
   unregisterScrollFrame?.()
   unregisterScrollFrame = null
   if (heightFrame) window.cancelAnimationFrame(heightFrame)
+  window.removeEventListener('keydown', onLightboxKeydown)
   window.removeEventListener('message', onSandboxMessage)
 })
 </script>
@@ -335,20 +362,57 @@ onUnmounted(() => {
         class="artifact-scroll-shield"
         aria-hidden="true"
       />
-      <img
+      <button
         v-else-if="imageSource"
-        :src="imageSource"
-        :alt="fileName"
-        loading="lazy"
-        decoding="async"
-        class="artifact-image"
-      />
+        ref="imageOpenButtonRef"
+        type="button"
+        class="artifact-image-open"
+        :aria-label="`${t('artifactPreview.preview')}: ${fileName}`"
+        @click="openImageLightbox"
+      >
+        <img
+          :src="imageSource"
+          :alt="fileName"
+          loading="lazy"
+          decoding="async"
+          class="artifact-image"
+        />
+      </button>
     </div>
 
     <p v-if="expanded && artifact?.kind === 'html'" class="artifact-sandbox-note">
       <span class="i-carbon-locked h-3 w-3" aria-hidden="true" />
       {{ $t('artifactPreview.sandboxNote') }}
     </p>
+
+    <Teleport to="body">
+      <div
+        v-if="imageLightboxOpen && imageSource"
+        class="artifact-image-lightbox"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="fileName"
+        @click.self="closeImageLightbox()"
+        @wheel.prevent.stop
+      >
+        <img
+          :src="imageSource"
+          :alt="fileName"
+          class="artifact-image-lightbox-content"
+          decoding="async"
+        />
+        <button
+          ref="lightboxCloseRef"
+          type="button"
+          class="artifact-image-lightbox-close"
+          :aria-label="t('common.close')"
+          :title="t('common.close')"
+          @click="closeImageLightbox()"
+        >
+          <span class="i-carbon-close h-5 w-5" aria-hidden="true" />
+        </button>
+      </div>
+    </Teleport>
   </article>
 </template>
 
@@ -442,6 +506,57 @@ onUnmounted(() => {
   max-width: 100%;
   max-height: 420px;
   object-fit: contain;
+}
+.artifact-image-open {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.artifact-image-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.artifact-image-lightbox {
+  position: fixed;
+  z-index: 9999;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 5vw;
+  background: rgb(0 0 0 / 0.76);
+  backdrop-filter: blur(4px);
+}
+.artifact-image-lightbox-content {
+  display: block;
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 6px;
+}
+.artifact-image-lightbox-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / 0.24);
+  border-radius: 50%;
+  color: white;
+  background: rgb(0 0 0 / 0.48);
+}
+.artifact-image-lightbox-close:hover { background: rgb(0 0 0 / 0.7); }
+.artifact-image-lightbox-close:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 2px;
 }
 .artifact-sandbox-note {
   display: flex;
