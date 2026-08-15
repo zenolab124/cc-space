@@ -149,7 +149,8 @@ const channelOptions = computed(() => {
     { id: OFFICIAL_DIRECT_CHANNEL_ID, name: t('topbar.channelOfficialDirect') },
   ]
   for (const ch of channels.value) {
-    if (ch.id !== OFFICIAL_CHANNEL_ID && ch.id !== OFFICIAL_DIRECT_CHANNEL_ID && ch.enabled && (standaloneMode.value || ch.scope !== 'agent-only') && channelSupportsEngine(ch, 'claude-code')) {
+    if (ch.id !== OFFICIAL_CHANNEL_ID && ch.id !== OFFICIAL_DIRECT_CHANNEL_ID && ch.enabled
+      && (standaloneMode.value || channelSupportsEngine(ch, 'claude-code'))) {
       result.push({ id: ch.id, name: ch.name })
     }
   }

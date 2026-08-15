@@ -7,6 +7,7 @@ export interface ChannelInfo {
   name: string
   note: string | null
   baseUrl: string | null
+  authMode: 'bearer' | 'none'
   authTokenMasked: string | null
   extraEnvKeys: string[]
   valid: boolean
@@ -37,13 +38,6 @@ export interface CodexChannelInfo {
   availableModels: string[]
 }
 
-export interface CodexProviderInfo {
-  id: string
-  name: string
-  baseUrl: string | null
-  source: 'builtin' | 'config'
-}
-
 /** 通用会话外壳只消费这组字段；引擎原生渠道结构在此处适配。 */
 export interface EngineChannelBindingInfo {
   providerId: string | null
@@ -59,6 +53,8 @@ export type SessionEngineId = 'claude-code' | 'codex'
 interface ChannelListResult {
   channels: ChannelInfo[]
   defaultSessionChannels?: Partial<Record<SessionEngineId, string | null>>
+  defaultSessionModels?: Partial<Record<SessionEngineId, string | null>>
+  defaultSessionEfforts?: Partial<Record<SessionEngineId, string | null>>
   /** 兼容旧后端版本。 */
   defaultSessionChannel?: string | null
   defaultAgentChannel: string | null
@@ -82,9 +78,9 @@ export function engineChannelBinding(
   if (engineId === 'codex' && channel.codex) {
     return {
       providerId: channel.codex.providerId,
-      defaultModel: channel.codex.defaultModel,
-      defaultEffort: channel.codex.defaultEffort,
-      availableModels: channel.codex.availableModels,
+      defaultModel: null,
+      defaultEffort: null,
+      availableModels: channel.availableModels,
     }
   }
   return null
@@ -105,6 +101,8 @@ const defaultSessionChannels = ref<Record<SessionEngineId, string | null>>({
   'claude-code': null,
   codex: null,
 })
+const defaultSessionModels = ref<Record<SessionEngineId, string | null>>({ 'claude-code': null, codex: null })
+const defaultSessionEfforts = ref<Record<SessionEngineId, string | null>>({ 'claude-code': null, codex: null })
 /** Claude Code 的兼容别名，供现有会话配置解析继续使用。 */
 const defaultSessionChannel = computed(() => defaultSessionChannels.value['claude-code'])
 const defaultAgentChannel = ref<string | null>(null)
@@ -120,6 +118,14 @@ export async function refreshChannels(): Promise<void> {
         ?? r.defaultSessionChannel
         ?? null,
       codex: r.defaultSessionChannels?.codex ?? null,
+    }
+    defaultSessionModels.value = {
+      'claude-code': r.defaultSessionModels?.['claude-code'] ?? null,
+      codex: r.defaultSessionModels?.codex ?? null,
+    }
+    defaultSessionEfforts.value = {
+      'claude-code': r.defaultSessionEfforts?.['claude-code'] ?? null,
+      codex: r.defaultSessionEfforts?.codex ?? null,
     }
     defaultAgentChannel.value = r.defaultAgentChannel
     defaultAgentModel.value = r.defaultAgentModel
@@ -158,6 +164,7 @@ export interface SaveChannelPayload {
   id: string
   name: string
   baseUrl: string
+  authMode?: 'bearer' | 'none'
   authToken?: string
   note?: string
   protocol?: string
@@ -170,14 +177,8 @@ export interface SaveChannelPayload {
   defaultEffort?: string
   engineSupport?: string[]
   codex?: {
-    mode: 'external' | 'managed'
+    mode: 'managed'
     providerId: string
-    baseUrl?: string
-    authMode: 'bearer' | 'openai' | 'none'
-    authToken?: string
-    defaultModel?: string
-    defaultEffort?: string
-    availableModels?: string[]
   }
 }
 
@@ -186,6 +187,7 @@ async function saveChannel(payload: SaveChannelPayload): Promise<void> {
     id: payload.id,
     name: payload.name,
     baseUrl: payload.baseUrl,
+    authMode: payload.authMode ?? null,
     authToken: payload.authToken ?? null,
     note: payload.note ?? null,
     protocol: payload.protocol ?? null,
@@ -198,10 +200,6 @@ async function saveChannel(payload: SaveChannelPayload): Promise<void> {
     codex: payload.codex ?? null,
   })
   await refreshChannels()
-}
-
-async function listCodexProviders(): Promise<CodexProviderInfo[]> {
-  return invoke<CodexProviderInfo[]>('list_codex_providers')
 }
 
 /** official 渠道的默认模型/思考强度(全量替换语义,空/null = 清除) */
@@ -257,6 +255,16 @@ async function setDefaultSessionChannel(engine: SessionEngineId, id: string | nu
     ...defaultSessionChannels.value,
     [engine]: id,
   }
+}
+
+async function setDefaultSessionRuntime(
+  engine: SessionEngineId,
+  model: string | null,
+  effort: string | null,
+): Promise<void> {
+  await invoke('set_default_session_runtime', { engine, model, effort })
+  defaultSessionModels.value = { ...defaultSessionModels.value, [engine]: model }
+  defaultSessionEfforts.value = { ...defaultSessionEfforts.value, [engine]: effort }
 }
 
 async function setDefaultAgentModel(channel: string | null, model: string | null): Promise<void> {
@@ -349,8 +357,7 @@ async function probeAllChannels(): Promise<void> {
   // 内置虚拟渠道(official/official-direct)无文件无探测目标,跳过
   const ids = channels.value
     .filter(c => c.id !== OFFICIAL_CHANNEL_ID
-      && c.id !== OFFICIAL_DIRECT_CHANNEL_ID
-      && channelSupportsEngine(c, 'claude-code'))
+      && c.id !== OFFICIAL_DIRECT_CHANNEL_ID)
     .map(c => c.id)
   await Promise.allSettled(ids.map(id => probeChannel(id)))
 }
@@ -380,6 +387,8 @@ export function useChannels() {
   return {
     channels,
     defaultSessionChannels,
+    defaultSessionModels,
+    defaultSessionEfforts,
     defaultSessionChannel,
     defaultAgentChannel,
     defaultAgentModel,
@@ -389,11 +398,11 @@ export function useChannels() {
     agentPreferences,
     refreshChannels,
     saveChannel,
-    listCodexProviders,
     setOfficialDefaults,
     deleteChannel,
     setChannelEnabled,
     setDefaultSessionChannel,
+    setDefaultSessionRuntime,
     setDefaultAgentModel,
     setDefaultAgentEffort,
     setAgentFeatureModel,

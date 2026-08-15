@@ -41,6 +41,8 @@ export interface ResolvedRunConfig {
 export interface RunConfigSnapshot {
   channels: readonly ChannelInfo[]
   defaultSessionChannel: string | null
+  defaultSessionModel: string | null
+  defaultSessionEffort: string | null
   cliSettings: CliSettings
 }
 
@@ -86,11 +88,8 @@ export function resolveRunConfig(
   snapshot: RunConfigSnapshot,
 ): ResolvedRunConfig {
   const channelId = resolveChannelFromSnapshot(settings.channelId, snapshot)
-  const channel = snapshot.channels.find(item =>
-    item.id === (channelId ?? OFFICIAL_CHANNEL_ID),
-  ) ?? null
-  const channelDefaultModel = channel?.defaultModel ?? null
-  const channelDefaultEffort = sanitizeEffort(channel?.defaultEffort)
+  const channelDefaultModel = snapshot.defaultSessionModel
+  const channelDefaultEffort = sanitizeEffort(snapshot.defaultSessionEffort)
   const cliDefaultModel = snapshot.cliSettings.model ?? null
   const cliDefaultEffort = snapshot.cliSettings.ultracode
     ? 'ultracode'
@@ -171,7 +170,7 @@ export function useRunConfig(
   settings: ComputedRef<SessionSettings>,
   cwd: ComputedRef<string | null | undefined>,
 ): { runConfig: ComputedRef<ResolvedRunConfig> } {
-  const { channels, defaultSessionChannel } = useChannels()
+  const { channels, defaultSessionChannel, defaultSessionModels, defaultSessionEfforts } = useChannels()
   const { cliDefaults, refreshCliDefaults } = useCliDefaults(cwd)
 
   watch(cwd, () => {
@@ -181,6 +180,8 @@ export function useRunConfig(
   const runConfig = computed<ResolvedRunConfig>(() => resolveRunConfig(settings.value, {
     channels: channels.value,
     defaultSessionChannel: defaultSessionChannel.value,
+    defaultSessionModel: defaultSessionModels.value['claude-code'],
+    defaultSessionEffort: defaultSessionEfforts.value['claude-code'],
     cliSettings: cliDefaults.value,
   }))
   return { runConfig }

@@ -49,7 +49,7 @@ import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { rebindDraftChannel, sameRuntimeChannel, type DraftChannelReplacement } from '@/engines/draftChannel'
-import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels } from '@/composables/useChannels'
+import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels, type SessionEngineId } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
 import { groupConversationRecords } from '@/engines/conversationGroups'
 import { isRenderableEngineSegment } from '@/engines/processGroups'
@@ -141,7 +141,7 @@ const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
 const { confirm, confirmMulti } = useConfirm()
-const { channels, defaultSessionChannels } = useChannels()
+const { channels, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts } = useChannels()
 const toolFoldState = provideToolFoldState()
 provide(TOOL_FOLD_INTERACTION, stopTimelineFollow)
 let unlistenSnapshot: UnlistenFn | null = null
@@ -280,7 +280,6 @@ function configuredDefaultChannelId(): string | null {
   if (!id) return null
   const channel = channels.value.find(item => item.id === id)
   return channel?.enabled
-    && channel.scope !== 'agent-only'
     && channelSupportsEngine(channel, sessionEngineId.value)
     ? id
     : null
@@ -290,6 +289,13 @@ const activeChannel = computed(() => selectedChannel.value
   : null)
 const effectiveChannel = computed(() => activeChannel.value ?? providerChannel.value)
 const activeChannelBinding = computed(() => engineChannelBinding(effectiveChannel.value, sessionEngineId.value))
+const usesConfiguredSessionDefault = computed(() => selectedChannel.value === configuredDefaultChannelId())
+const engineDefaultModel = computed(() => usesConfiguredSessionDefault.value
+  ? defaultSessionModels.value[sessionEngineId.value as SessionEngineId] ?? null
+  : null)
+const engineDefaultEffort = computed(() => usesConfiguredSessionDefault.value
+  ? defaultSessionEfforts.value[sessionEngineId.value as SessionEngineId] ?? null
+  : null)
 const capsuleModels = computed(() => {
   const descriptors = models.value.map(model => ({
     id: model.model,
@@ -301,14 +307,14 @@ const capsuleModels = computed(() => {
     serviceTiers: model.serviceTiers,
   }))
   const configured = activeChannelBinding.value
-  const extras = [configured?.defaultModel, ...(configured?.availableModels ?? [])]
+  const extras = [engineDefaultModel.value, ...(configured?.availableModels ?? [])]
     .filter((model): model is string => !!model)
     .filter(model => !descriptors.some(item => item.id === model))
     .map(model => ({
       id: model,
       label: model,
       hidden: false,
-      defaultEffort: configured?.defaultEffort ?? null,
+      defaultEffort: engineDefaultEffort.value,
       efforts: ['low', 'medium', 'high', 'xhigh'].map(id => ({ id, description: null })),
       defaultServiceTier: null,
       serviceTiers: [],
@@ -337,8 +343,8 @@ const capsuleConfig = computed<EngineCapsuleConfig>(() => ({
   serviceTier: selectedServiceTier.value,
   fastTier: selectedFastTier.value,
   fastModeUnavailableReason: fastModeUnavailableReason.value,
-  defaultModel: activeChannelBinding.value?.defaultModel ?? null,
-  defaultEffort: activeChannelBinding.value?.defaultEffort ?? null,
+  defaultModel: engineDefaultModel.value,
+  defaultEffort: engineDefaultEffort.value,
   models: capsuleModels.value,
 }))
 const conversationGroups = computed(() => {
@@ -976,7 +982,7 @@ async function loadRuntimeConfiguration() {
     const stored = engineRunConfig(sessionId)
     selectedChannel.value = resolveInitialEngineChannel(stored, configuredDefaultChannelId())
     const defaultModel = models.value.find(model => model.model === stored?.model)
-      ?? models.value.find(model => model.model === activeChannelBinding.value?.defaultModel)
+      ?? models.value.find(model => model.model === engineDefaultModel.value)
       ?? models.value.find(model => model.model === timelineModel.value)
       ?? models.value.find(model => model.isDefault)
       ?? models.value.find(model => !model.hidden)
@@ -985,7 +991,7 @@ async function loadRuntimeConfiguration() {
     const storedEffortSupported = defaultModel?.efforts.some(item => item.id === stored?.effort) === true
     selectedEffort.value = storedEffortSupported
       ? stored!.effort
-      : activeChannelBinding.value?.defaultEffort
+      : engineDefaultEffort.value
         ?? timelineEffort.value
         ?? defaultModel?.defaultEffort
         ?? null
@@ -1482,14 +1488,16 @@ function onEngineChannelChange(channelId: string | null) {
     ? channels.value.find(item => item.id === selectedChannel.value) ?? null
     : null
   const binding = engineChannelBinding(channel, sessionEngineId.value)
-  if (binding?.defaultModel) {
-    selectedModel.value = binding.defaultModel
-    modelOverridden.value = false
-  }
-  if (binding?.defaultEffort) {
-    selectedEffort.value = binding.defaultEffort
-    effortOverridden.value = false
-  }
+  const nextDefaultModel = engineDefaultModel.value
+    ?? binding?.availableModels[0]
+    ?? models.value.find(item => item.isDefault)?.model
+    ?? null
+  selectedModel.value = nextDefaultModel
+  selectedEffort.value = engineDefaultEffort.value
+    ?? models.value.find(item => item.model === nextDefaultModel)?.defaultEffort
+    ?? null
+  modelOverridden.value = false
+  effortOverridden.value = false
 }
 
 function onEngineModelChange(model: string | null) {
@@ -1500,7 +1508,7 @@ function onEngineModelChange(model: string | null) {
     return
   }
   modelOverridden.value = false
-  selectedModel.value = activeChannelBinding.value?.defaultModel
+  selectedModel.value = engineDefaultModel.value
     ?? models.value.find(item => item.isDefault)?.model
     ?? models.value.find(item => !item.hidden)?.model
     ?? null
@@ -1509,7 +1517,7 @@ function onEngineModelChange(model: string | null) {
 function onEngineEffortChange(effort: string | null) {
   effortOverridden.value = effort !== null
   selectedEffort.value = effort
-    ?? activeChannelBinding.value?.defaultEffort
+    ?? engineDefaultEffort.value
     ?? models.value.find(item => item.model === selectedModel.value)?.defaultEffort
     ?? null
 }

@@ -774,6 +774,7 @@
     "defaultSessionChannel": "Default Session Channel",
     "defaultSessionChannelHint": "Claude Code and Codex use separate default connections.",
     "sessionEngineDefaultHint": "Used by new sessions",
+    "followEngineDefault": "Follow engine default",
     "claudeCodeLabel": "Claude Code",
     "codexLabel": "Codex",
     "defaultAgentChannel": "Default Augmentation Channel",
@@ -793,6 +794,7 @@
     "addChannel": "+ Add Channel",
     "deleteChannelConfirm": "Delete channel \"{name}\"? This will delete channels/{id}.json and cannot be undone.",
     "probeChannel": "Probe",
+    "modelsCount": "models",
     "channelDeleted": "Channel deleted",
     "deleteFailed": "Delete failed",
     "setDefaultFailed": "Failed to set default channel",
@@ -870,8 +872,16 @@
       "nameLabel": "Name",
       "namePlaceholder": "Display name, any language",
       "engineSupportLabel": "Supported engines",
-      "engineSupportHint": "The channel identity is shared; each engine keeps its own configuration format.",
+      "engineSupportHint": "This only enables session-engine adapters. With none selected, the connection can still power augmentation features.",
       "engineRequired": "Select at least one supported engine",
+      "connectionTitle": "Shared connection",
+      "connectionShared": "one source for every consumer",
+      "authModeLabel": "Authentication",
+      "protocolHint": "Used only for model discovery and direct augmentation calls. Claude Code always uses Messages; Codex always uses Responses.",
+      "modelsLabel": "Model catalog",
+      "modelsHint": "The complete model list exposed by this channel. Codex shows all models; Claude role mappings add semantics without hiding the rest.",
+      "claudeAdapterHint": "Model IDs pass through by default. The mapping below only adds Opus, Sonnet, Haiku, and other role shortcuts.",
+      "codexAdapterHint": "Monet injects a Responses provider using the shared Base URL, API key, and model catalog above. The Provider ID is only an internal Codex identifier.",
       "noteLabel": "Note",
       "notePlaceholder": "Optional",
       "tokenKeepPlaceholder": "Leave empty to keep current",
@@ -918,8 +928,8 @@
       "defaultsHint": "Preset used when a session has no manual override; stored in the channel file itself, so terminal claude --settings behaves the same.",
       "modelMap": {
         "title": "Advanced · Model Mapping",
-        "badge": "à la CC Switch",
-        "intro": "Redirect the official roles (Fable/Opus/Sonnet/Haiku) to this channel’s actual models; the session dropdown will show these roles. Leave blank to skip mapping and use the channel default.",
+        "badge": "Optional",
+        "intro": "Add Fable, Opus, Sonnet, and Haiku role shortcuts for frequently used models. Unmapped models remain visible by their real IDs and pass through directly.",
         "fetchModels": "Fetch models",
         "fetching": "Fetching…",
         "fetchHint": "Probes the channel’s /v1/models; candidates autocomplete on success",
@@ -930,7 +940,7 @@
         "modelPlaceholder": "Model ID",
         "namePlaceholder": "Optional",
         "oneMHint": "Check to use the 1M context for this model (appends the [1m] suffix on save)",
-        "customHint": "The custom slot’s value enters the CLI /model menu and passes model validation directly."
+        "customHint": "The custom slot is retained for older Claude Code versions that require explicit model registration; other catalog IDs pass through directly."
       }
     },
     "officialDefaults": {

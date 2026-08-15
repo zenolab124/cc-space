@@ -774,6 +774,7 @@
     "defaultSessionChannel": "默认会话渠道",
     "defaultSessionChannelHint": "Claude Code 与 Codex 分别使用各自的默认连接。",
     "sessionEngineDefaultHint": "新建会话默认使用",
+    "followEngineDefault": "跟随引擎默认",
     "claudeCodeLabel": "Claude Code",
     "codexLabel": "Codex",
     "defaultAgentChannel": "默认智能增强渠道",
@@ -793,6 +794,7 @@
     "addChannel": "+ 新增渠道",
     "deleteChannelConfirm": "删除渠道「{name}」?将删除 channels/{id}.json 文件，不可恢复。",
     "probeChannel": "探活",
+    "modelsCount": "个模型",
     "channelDeleted": "渠道已删除",
     "deleteFailed": "删除失败",
     "setDefaultFailed": "设置默认渠道失败",
@@ -870,8 +872,16 @@
       "nameLabel": "名称",
       "namePlaceholder": "展示用名称，可中文",
       "engineSupportLabel": "支持的引擎",
-      "engineSupportHint": "渠道名称与入口共用；每个引擎使用自己的配置格式。",
+      "engineSupportHint": "这里只声明会话引擎适配；不选择时，连接仍可单独用于智能增强。",
       "engineRequired": "至少选择一个支持的引擎",
+      "connectionTitle": "共享连接",
+      "connectionShared": "所有消费者共用一份",
+      "authModeLabel": "认证方式",
+      "protocolHint": "仅用于模型发现和智能增强直调；Claude Code 固定走 Messages，Codex 固定走 Responses。",
+      "modelsLabel": "模型目录",
+      "modelsHint": "渠道提供的完整模型清单。Codex 全量展示；Claude Code 的角色映射只增加语义，不会过滤其余模型。",
+      "claudeAdapterHint": "模型 ID 默认直接透传。下面的映射只为常用模型增加 Opus / Sonnet / Haiku 等角色入口。",
+      "codexAdapterHint": "Monet 以 Responses Provider 接入，共用上方 Base URL、API Key 和模型目录；Provider ID 仅用于 Codex 内部标识。",
       "noteLabel": "备注",
       "notePlaceholder": "可选",
       "tokenKeepPlaceholder": "留空保持不变",
@@ -918,8 +928,8 @@
       "defaultsHint": "会话未手动指定时使用的预设；写入渠道文件本身，终端 claude --settings 同样生效。",
       "modelMap": {
         "title": "高级选项 · 模型映射",
-        "badge": "参照 CC Switch",
-        "intro": "把官方角色（Fable/Opus/Sonnet/Haiku）重定向到该渠道的实际模型，会话下拉将显示这些角色。留空则不映射，走渠道默认。",
+        "badge": "可选",
+        "intro": "给常用模型增加 Fable / Opus / Sonnet / Haiku 角色快捷入口。未映射的模型仍以真实 ID 显示并直接透传。",
         "fetchModels": "获取模型列表",
         "fetching": "获取中…",
         "fetchHint": "探活渠道 /v1/models，成功后候选自动补全",
@@ -930,7 +940,7 @@
         "modelPlaceholder": "模型 ID",
         "namePlaceholder": "可空",
         "oneMHint": "勾选表示该模型用 1M 上下文（存储时追加 [1m] 后缀）",
-        "customHint": "自定义槽的值会进入 CLI /model 菜单，并直接通过模型校验。"
+        "customHint": "自定义槽仅用于兼容需要显式注册模型的旧版 Claude Code；模型目录中的其他 ID 会直接透传。"
       }
     },
     "officialDefaults": {

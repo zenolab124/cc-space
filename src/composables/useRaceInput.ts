@@ -60,7 +60,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
   } = useWorkbench()
   const { projects } = useProjects()
   const { engines, health } = useEngines()
-  const { channels, defaultSessionChannel, defaultSessionChannels } = useChannels()
+  const { channels, defaultSessionChannel, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts } = useChannels()
   const raceError = ref<string | null>(null)
   const raceMutationLoading = ref(false)
   const broadcasting = ref(false)
@@ -322,6 +322,8 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       const snapshot = {
         channels: channels.value,
         defaultSessionChannel: defaultSessionChannel.value,
+        defaultSessionModel: defaultSessionModels.value['claude-code'],
+        defaultSessionEffort: defaultSessionEfforts.value['claude-code'],
         cliSettings: readCliDefaults(race.cwd),
       }
       inputText.value = ''

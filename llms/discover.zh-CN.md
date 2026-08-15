@@ -174,12 +174,12 @@
 
 > 如果你手上攒了不止一个渠道——官方订阅、几家第三方 API、自建代理、本地模型——Monet 天生为你设计：不同会话各用各的渠道模型，聊到一半随时热切换，价格与能力各取所长。这是 Monet 的看家亮点之一。
 
-- 统一渠道 CRUD：每个渠道显式声明支持 Claude Code、Codex 或两者；名称与选择入口共用，每个引擎保留自己的原生接入格式
-- Claude Code 绑定支持 Anthropic Messages / OpenAI Chat Completions，渠道文件仍是标准 settings 格式，终端里 `claude --settings <文件>` 可直接复用
-- Codex 绑定可引用用户已有的 `model_provider`，也可由 Monet 在新建、恢复、分叉时注入 Responses Provider；后一种不会改写 Codex 的 `config.toml`
-- 两个引擎使用同一枚渠道/模型/思考强度胶囊，并按渠道声明过滤候选；渠道级默认模型、强度和可用模型随引擎绑定生效
-- 凭据安全红线：token 不进命令行参数（进程列表里看不到）；Claude 运行时临时文件即用即删，Codex 托管 Provider 通过命令式认证按需取用
-- Claude Code 渠道支持在线探测与模型列表拉取
+- 统一渠道 CRUD：每个渠道只保存一份 Base URL、API Key 和完整模型目录，再声明是否启用 Claude Code、Codex 或两者；不启用会话引擎时仍可用于智能增强
+- Claude Code adapter 固定走 Messages API：模型 ID 默认直接透传，Opus / Sonnet / Haiku 等角色映射只增加快捷语义，不会隐藏渠道里的其余模型
+- Codex adapter 固定注入 Responses Provider，不改写 Codex 的 `config.toml`；渠道模型目录全部进入 Codex 模型选择器，无需 Claude 式角色映射
+- 会话默认连接、模型与思考强度按引擎独立保存；智能增强的默认值和逐功能偏好另行配置，不寄生在 Claude Code 绑定中
+- 凭据安全红线：token 只在渠道连接中保存一份、不进命令行参数；Claude 运行时临时文件即用即删，Codex Provider 通过命令式认证按需取用
+- 渠道支持在线探测与完整模型列表拉取
 - Apple 本地模型：检测到 Apple Foundation Models 可用时自动注册为免费本地渠道
 - 从 cc-switch 一键迁移导入渠道配置
 - 每个 AI 增值功能可指定专用渠道和模型（比如标题用便宜模型、审查用强模型）

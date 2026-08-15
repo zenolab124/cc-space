@@ -23,7 +23,6 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
 import { useLocale } from '@/composables/useLocale'
 import ChannelForm from '@/components/settings/ChannelForm.vue'
-import OfficialDefaultsForm from '@/components/settings/OfficialDefaultsForm.vue'
 import AgentIframeDemo from '@/components/settings/AgentIframeDemo.vue'
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
 import TurnSignalCard from '@/components/settings/TurnSignalCard.vue'
@@ -45,10 +44,12 @@ import type { EffortSetting } from '@/composables/useSessionSettings'
 
 const { t } = useI18n()
 const {
-  channels, defaultSessionChannels, defaultAgentChannel, defaultAgentModel, defaultAgentEffort,
+  channels, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts,
+  defaultAgentChannel, defaultAgentModel, defaultAgentEffort,
   probeResults, probing,
   revealedTokens, revealToken, hideToken, agentPreferences,
-    deleteChannel, setChannelEnabled, setDefaultSessionChannel, setDefaultAgentModel, setDefaultAgentEffort,
+    deleteChannel, setChannelEnabled, setDefaultSessionChannel, setDefaultSessionRuntime,
+    setDefaultAgentModel, setDefaultAgentEffort,
   setAgentFeatureModel, revealChannelsDir,
   probeChannel, probeAllChannels, loadAgentPreferences,
   scanCcSwitch, importCcSwitch,
@@ -257,7 +258,6 @@ const activeTab = ref<Tab>('system')
 
 const editing = ref<'new' | ChannelInfo | null>(null)
 /** official 渠道轻量编辑(仅默认模型/思考强度两字段) */
-const editingOfficial = ref<ChannelInfo | null>(null)
 
 const ccSwitchProviders = ref<CcSwitchProvider[]>([])
 const ccSwitchSelected = ref<Set<string>>(new Set())
@@ -533,12 +533,33 @@ async function onDelete(ch: ChannelInfo) {
 const supportsClaude = (channel: ChannelInfo) => channelSupportsEngine(channel, 'claude-code')
 const supportsCodex = (channel: ChannelInfo) => channelSupportsEngine(channel, 'codex')
 const sessionChannelsFor = (engine: SessionEngineId) => channels.value.filter(c =>
-  c.scope !== 'agent-only' && channelSupportsEngine(c, engine),
+  channelSupportsEngine(c, engine),
 )
 
 async function onSessionDefaultChange(engine: SessionEngineId, id: string) {
   try {
     await setDefaultSessionChannel(engine, id === OFFICIAL_CHANNEL_ID ? null : id)
+    await setDefaultSessionRuntime(engine, null, null)
+  } catch (e) {
+    notifyTransient(t('settings.setDefaultFailed'), String(e))
+  }
+}
+
+function sessionDefaultModelsFor(engine: SessionEngineId): string[] {
+  const channelId = defaultSessionChannels.value[engine] ?? OFFICIAL_CHANNEL_ID
+  if (channelId === OFFICIAL_CHANNEL_ID) {
+    return engine === 'claude-code' ? [...new Set(MODELS.map(model => model.id))] : []
+  }
+  return channels.value.find(channel => channel.id === channelId)?.availableModels ?? []
+}
+
+async function onSessionRuntimeChange(engine: SessionEngineId, field: 'model' | 'effort', value: string) {
+  try {
+    await setDefaultSessionRuntime(
+      engine,
+      field === 'model' ? value || null : defaultSessionModels.value[engine],
+      field === 'effort' ? value || null : defaultSessionEfforts.value[engine],
+    )
   } catch (e) {
     notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
@@ -940,6 +961,39 @@ function onSaved() {
                     {{ builtinChannelName(ch) }}
                   </option>
                 </select>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="form-field min-w-0">
+                    <span class="setting-hint">{{ $t('settings.channelForm.defaultModelLabel') }}</span>
+                    <input
+                      class="form-input min-w-0 font-mono"
+                      type="text"
+                      :value="defaultSessionModels[engine] ?? ''"
+                      :list="`session-default-models-${engine}`"
+                      :placeholder="$t('settings.followEngineDefault')"
+                      spellcheck="false"
+                      @change="onSessionRuntimeChange(engine, 'model', ($event.target as HTMLInputElement).value.trim())"
+                    />
+                    <datalist :id="`session-default-models-${engine}`">
+                      <option v-for="model in sessionDefaultModelsFor(engine)" :key="model" :value="model" />
+                    </datalist>
+                  </label>
+                  <label class="form-field min-w-0">
+                    <span class="setting-hint">{{ $t('settings.channelForm.defaultEffortLabel') }}</span>
+                    <select
+                      class="form-select min-w-0"
+                      :value="defaultSessionEfforts[engine] ?? ''"
+                      @change="onSessionRuntimeChange(engine, 'effort', ($event.target as HTMLSelectElement).value)"
+                    >
+                      <option value="">{{ $t('settings.followEngineDefault') }}</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                      <option value="xhigh">xHigh</option>
+                      <option v-if="engine === 'claude-code'" value="max">Max</option>
+                      <option v-if="engine === 'claude-code'" value="ultracode">Ultracode</option>
+                    </select>
+                  </label>
+                </div>
               </section>
             </div>
           </section>
@@ -995,20 +1049,17 @@ function onSaved() {
                         <button class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('common.edit')" @click.stop="editing = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                         <button class="icon-btn icon-btn-sm icon-btn-ghost icon-btn-danger" v-tooltip="$t('common.delete')" @click.stop="onDelete(ch)"><span class="i-carbon-trash-can w-3 h-3" /></button>
                       </template>
-                      <button v-else-if="ch.id === OFFICIAL_CHANNEL_ID" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.officialDefaults.edit')" @click.stop="editingOfficial = ch"><span class="i-carbon-edit w-3 h-3" /></button>
                     </div>
                   </div>
                   <div class="chain-row-2">
                     <span v-if="ch.id === OFFICIAL_CHANNEL_ID" class="text-muted-foreground/60 italic">{{ cliEnvTarget.kind === 'third-party' && cliEnvTarget.host ? `→ ${cliEnvTarget.host}` : $t('channel.cliTargetOfficial') }}</span>
                     <span v-else-if="ch.id === APPLE_FM_CHANNEL_ID" class="text-muted-foreground/60 italic">{{ $t('settings.appleFmLocal') }}</span>
-                    <span v-else-if="ch.baseUrl && supportsClaude(ch)" class="font-mono truncate">{{ ch.baseUrl }}</span>
-                    <span v-else-if="ch.codex && supportsCodex(ch)" class="font-mono truncate">{{ ch.codex.mode === 'managed' ? ch.codex.baseUrl : ch.codex.providerId }}</span>
-                    <span v-if="ch.defaultModel && supportsClaude(ch)" class="chain-model-tag">{{ ch.defaultModel }}</span>
-                    <span v-if="supportsCodex(ch) && ch.codex?.defaultModel" class="chain-model-tag text-codex">{{ ch.codex.defaultModel }}</span>
+                    <span v-else-if="ch.baseUrl" class="font-mono truncate">{{ ch.baseUrl }}</span>
+                    <span v-if="ch.availableModels.length" class="chain-model-tag">{{ ch.availableModels.length }} {{ $t('settings.modelsCount') }}</span>
                     <span class="ml-auto shrink-0 flex items-center gap-1.5">
                       <template v-if="probing[ch.id]"><span class="i-carbon-renew w-2.5 h-2.5 animate-spin" /></template>
                       <template v-else-if="probeResults[ch.id]"><span class="inline-block w-1.5 h-1.5 rounded-full" :class="probeResults[ch.id].online ? 'bg-green-600' : 'bg-destructive'" /><span v-if="probeResults[ch.id].latencyMs" class="text-muted-foreground/50">{{ probeResults[ch.id].latencyMs }}ms</span></template>
-                      <button v-if="!isBuiltinChannel(ch.id) && supportsClaude(ch)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
+                      <button v-if="!isBuiltinChannel(ch.id)" class="icon-btn icon-btn-sm icon-btn-ghost" v-tooltip="$t('settings.probeChannel')" @click.stop="probeChannel(ch.id)"><span class="i-carbon-activity w-3 h-3" /></button>
                     </span>
                   </div>
                 </div>
@@ -1025,13 +1076,6 @@ function onSaved() {
             @cancel="editing = null"
           />
 
-          <OfficialDefaultsForm
-            v-if="editingOfficial"
-            :channel="editingOfficial"
-            class="mt-3"
-            @saved="editingOfficial = null"
-            @cancel="editingOfficial = null"
-          />
 
           <div class="flex items-center gap-2 mt-3">
             <button

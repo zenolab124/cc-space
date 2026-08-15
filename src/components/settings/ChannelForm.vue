@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useChannels, type ChannelInfo, type CodexProviderInfo, APPLE_FM_CHANNEL_ID } from '@/composables/useChannels'
+import { useChannels, type ChannelInfo, APPLE_FM_CHANNEL_ID } from '@/composables/useChannels'
 import ChannelModelMap from './ChannelModelMap.vue'
 
 const props = defineProps<{
@@ -14,39 +14,24 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { saveChannel, revealToken, probeResults, probing, probeChannel, listCodexProviders } = useChannels()
+const { saveChannel, revealToken, probing, probeChannel } = useChannels()
 
 const isNew = computed(() => props.channel === null)
 
 const id = ref(props.channel?.id ?? '')
 const name = ref(props.channel?.name ?? '')
 const baseUrl = ref(props.channel?.baseUrl ?? '')
+const authMode = ref<'bearer' | 'none'>(props.channel?.authMode ?? 'bearer')
 const authToken = ref('')
 const note = ref(props.channel?.note ?? '')
-const engineSupport = ref<string[]>(props.channel?.engineSupport?.length
-  ? [...props.channel.engineSupport]
+const engineSupport = ref<string[]>(props.channel
+  ? props.channel.scope === 'agent-only' ? [] : [...props.channel.engineSupport]
   : ['claude-code'])
 const protocol = ref(props.channel?.protocol ?? 'anthropic')
-const scope = ref(props.channel?.scope ?? 'full')
-const agentModel = ref(props.channel?.agentModel ?? '')
 const tokenVisible = ref(false)
-const codexMode = ref<'external' | 'managed'>(props.channel?.codex?.mode ?? 'external')
-const codexProviderId = ref(props.channel?.codex?.providerId ?? (codexMode.value === 'managed' ? `monet-${id.value || 'proxy'}` : ''))
+const modelsText = ref((props.channel?.availableModels ?? []).join('\n'))
+const codexProviderId = ref(props.channel?.codex?.providerId ?? `monet-${id.value || 'proxy'}`)
 const codexManagedProviderIdAuto = ref(!props.channel?.codex?.providerId)
-const codexBaseUrl = ref(props.channel?.codex?.baseUrl ?? '')
-const codexAuthMode = ref<'bearer' | 'openai' | 'none'>(props.channel?.codex?.authMode ?? 'bearer')
-const codexAuthToken = ref('')
-const codexTokenVisible = ref(false)
-const codexDefaultModel = ref(props.channel?.codex?.defaultModel ?? '')
-const codexDefaultEffort = ref(props.channel?.codex?.defaultEffort ?? '')
-const codexModelsText = ref((props.channel?.codex?.availableModels ?? []).join(', '))
-const codexProviders = ref<CodexProviderInfo[]>([])
-const codexProvidersLoading = ref(false)
-const codexProvidersError = ref<string | null>(null)
-const codexExternalManual = ref(false)
-/** 渠道默认模型(env.ANTHROPIC_MODEL,保存时合并进 modelEnv)与默认思考强度(顶层 effortLevel/ultracode) */
-const defaultModel = ref(props.channel?.defaultModel ?? '')
-const defaultEffort = ref(props.channel?.defaultEffort ?? '')
 
 /** 模型映射 env(编辑回显源 = 渠道当前 modelEnv;子组件变更时更新) */
 const sourceModelEnv = computed<Record<string, string>>(() => props.channel?.modelEnv ?? {})
@@ -59,39 +44,8 @@ function onModelEnvUpdate(env: Record<string, string>) {
 const isVirtual = computed(() => props.channel?.id === APPLE_FM_CHANNEL_ID)
 const supportsClaude = computed(() => engineSupport.value.includes('claude-code'))
 const supportsCodex = computed(() => engineSupport.value.includes('codex'))
-const codexProviderIds = computed(() => new Set(codexProviders.value.map(provider => provider.id)))
-const codexCurrentProviderMissing = computed(() => {
-  const providerId = codexProviderId.value.trim()
-  return Boolean(providerId) && !codexProviderIds.value.has(providerId)
-})
 
 const managedProviderIdPlaceholder = computed(() => `monet-${id.value.trim() || 'proxy'}`)
-
-function codexProviderLabel(provider: CodexProviderInfo): string {
-  const label = provider.name && provider.name !== provider.id
-    ? `${provider.name} · ${provider.id}`
-    : provider.id
-  return provider.source === 'builtin'
-    ? `${label} (${t('settings.channelForm.codexProviderBuiltin')})`
-    : label
-}
-
-async function loadCodexProviders() {
-  if (codexProvidersLoading.value) return
-  codexProvidersLoading.value = true
-  codexProvidersError.value = null
-  try {
-    codexProviders.value = await listCodexProviders()
-  } catch (error) {
-    codexProvidersError.value = String(error)
-  } finally {
-    codexProvidersLoading.value = false
-  }
-}
-
-function toggleCodexManualProvider() {
-  codexExternalManual.value = !codexExternalManual.value
-}
 
 function onCodexManagedProviderIdInput() {
   codexManagedProviderIdAuto.value = false
@@ -99,9 +53,7 @@ function onCodexManagedProviderIdInput() {
 
 function toggleEngine(engineId: string) {
   if (engineSupport.value.includes(engineId)) {
-    if (engineSupport.value.length > 1) {
-      engineSupport.value = engineSupport.value.filter(engine => engine !== engineId)
-    }
+    engineSupport.value = engineSupport.value.filter(engine => engine !== engineId)
     return
   }
   engineSupport.value = [...engineSupport.value, engineId]
@@ -125,44 +77,34 @@ async function onProbe() {
     return
   }
   formError.value = null
-  await probeChannel(target, { baseUrl: url, token: authToken.value.trim(), protocol: protocol.value })
+  const result = await probeChannel(target, { baseUrl: url, token: authToken.value.trim(), protocol: protocol.value })
+  if (result?.models.length) {
+    const merged = [...new Set([...parsedModels.value, ...result.models])].sort()
+    modelsText.value = merged.join('\n')
+  }
 }
 
-const modelOptions = computed(() => {
-  const channelId = props.channel?.id ?? id.value
-  const probeModels = probeResults.value[channelId]?.models ?? []
-  const savedModels = props.channel?.availableModels ?? []
-  return [...new Set([...probeModels, ...savedModels])].sort()
-})
+const parsedModels = computed(() => [...new Set(modelsText.value
+  .split(/[,，\n]/)
+  .map(model => model.trim())
+  .filter(Boolean))].sort())
+const modelOptions = computed(() => parsedModels.value)
 
 const saving = ref(false)
 const formError = ref<string | null>(null)
 
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/
 
-watch([codexMode, id], ([mode]) => {
-  if (mode === 'managed' && codexManagedProviderIdAuto.value) {
+watch(id, () => {
+  if (codexManagedProviderIdAuto.value) {
     codexProviderId.value = managedProviderIdPlaceholder.value
-  }
-})
-
-watch([supportsCodex, codexMode], ([supports, mode]) => {
-  if (supports && mode === 'external') {
-    void loadCodexProviders()
   }
 })
 
 onMounted(async () => {
   if (!isNew.value && props.channel) {
-    const [claudeToken, codexToken] = await Promise.all([
-      revealToken(props.channel.id, 'claude-code'),
-      props.channel.codex ? revealToken(props.channel.id, 'codex') : Promise.resolve(null),
-    ])
-    if (claudeToken) authToken.value = claudeToken
-    if (codexToken) codexAuthToken.value = codexToken
-  }
-  if (supportsCodex.value && codexMode.value === 'external') {
-    await loadCodexProviders()
+    const token = await revealToken(props.channel.id)
+    if (token) authToken.value = token
   }
 })
 
@@ -177,15 +119,11 @@ async function onSave() {
     formError.value = t('settings.channelForm.nameError')
     return
   }
-  if (!engineSupport.value.length) {
-    formError.value = t('settings.channelForm.engineRequired')
-    return
-  }
-  if (supportsClaude.value && !isVirtual.value && !baseUrl.value.trim()) {
+  if (!isVirtual.value && !baseUrl.value.trim()) {
     formError.value = t('settings.channelForm.baseUrlError')
     return
   }
-  if (supportsClaude.value && !isVirtual.value && protocol.value !== 'openai' && !authToken.value.trim()) {
+  if (!isVirtual.value && authMode.value === 'bearer' && !authToken.value.trim()) {
     formError.value = t('settings.channelForm.tokenError')
     return
   }
@@ -193,48 +131,23 @@ async function onSave() {
     formError.value = t('settings.channelForm.codexProviderError')
     return
   }
-  if (supportsCodex.value && codexMode.value === 'managed' && !codexBaseUrl.value.trim()) {
-    formError.value = t('settings.channelForm.codexBaseUrlError')
-    return
-  }
-  if (supportsCodex.value && codexMode.value === 'managed' && codexAuthMode.value === 'bearer' && !codexAuthToken.value.trim()) {
-    formError.value = t('settings.channelForm.codexTokenError')
-    return
-  }
   saving.value = true
   try {
-    // 默认模型归主表单持有,保存时合并进映射 env(子组件产出恒不含 ANTHROPIC_MODEL)
-    const mergedEnv: Record<string, string> = { ...modelEnv.value }
-    delete mergedEnv['ANTHROPIC_MODEL']
-    const dm = defaultModel.value.trim()
-    if (dm) mergedEnv['ANTHROPIC_MODEL'] = dm
     await saveChannel({
       id: trimmedId,
       name: name.value.trim(),
-      baseUrl: !supportsClaude.value || isVirtual.value ? '' : baseUrl.value.trim().replace(/\/+$/, ''),
+      baseUrl: isVirtual.value ? '' : baseUrl.value.trim().replace(/\/+$/, ''),
+      authMode: authMode.value,
       authToken: authToken.value.trim() || undefined,
       note: note.value.trim() || undefined,
       protocol: protocol.value,
-      scope: scope.value,
-      agentModel: agentModel.value.trim() || undefined,
-      availableModels: modelOptions.value.length > 0 ? modelOptions.value : undefined,
+      availableModels: parsedModels.value,
       // 整命名空间替换语义:虚拟渠道不传(保持 undefined→null 不动 env);其余传构建后的 env(空对象=清除映射)
-      modelEnv: isVirtual.value ? undefined : mergedEnv,
-      // 替换语义:空串=清除默认(移除顶层 effortLevel/ultracode);虚拟渠道不传
-      defaultEffort: isVirtual.value ? undefined : defaultEffort.value,
+      modelEnv: isVirtual.value ? undefined : modelEnv.value,
       engineSupport: [...engineSupport.value],
       codex: supportsCodex.value ? {
-        mode: codexMode.value,
+        mode: 'managed',
         providerId: codexProviderId.value.trim(),
-        baseUrl: codexBaseUrl.value.trim().replace(/\/+$/, '') || undefined,
-        authMode: codexAuthMode.value,
-        authToken: codexAuthToken.value.trim() || undefined,
-        defaultModel: codexDefaultModel.value.trim() || undefined,
-        defaultEffort: codexDefaultEffort.value || undefined,
-        availableModels: codexModelsText.value
-          .split(/[,，\n]/)
-          .map(model => model.trim())
-          .filter(Boolean),
       } : undefined,
     })
     emit('saved')
@@ -267,18 +180,61 @@ async function onSave() {
       <input v-model="name" type="text" :placeholder="$t('settings.channelForm.namePlaceholder')" class="form-input" />
     </label>
 
+    <section v-if="!isVirtual" class="engine-binding connection-binding">
+      <div class="engine-binding-head">
+        <span class="i-carbon-link h-3.5 w-3.5 text-primary" />
+        <span>{{ $t('settings.channelForm.connectionTitle') }}</span>
+        <span class="ml-auto text-[9px] font-normal text-muted-foreground">{{ $t('settings.channelForm.connectionShared') }}</span>
+      </div>
+
+      <label class="form-field">
+        <span class="form-label">Base URL <span class="text-muted-foreground font-normal">{{ $t('settings.channelForm.baseUrlHint') }}</span></span>
+        <input v-model="baseUrl" type="text" placeholder="https://api.example.com" class="form-input font-mono" spellcheck="false" />
+      </label>
+
+      <label class="form-field">
+        <span class="form-label">{{ $t('settings.channelForm.authModeLabel') }}</span>
+        <select v-model="authMode" class="form-input">
+          <option value="bearer">API Key / Bearer Token</option>
+          <option value="none">{{ $t('settings.channelForm.codexAuthNone') }}</option>
+        </select>
+      </label>
+
+      <div v-if="authMode === 'bearer'" class="form-field">
+        <span class="form-label">API Key</span>
+        <div class="relative">
+          <input v-model="authToken" :type="tokenVisible ? 'text' : 'password'" placeholder="sk-…" class="form-input font-mono w-full pr-8" autocomplete="off" />
+          <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors" @click="tokenVisible = !tokenVisible">
+            <span :class="tokenVisible ? 'i-carbon-view-off' : 'i-carbon-view'" class="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <label class="form-field">
+        <span class="form-label">{{ $t('settings.channelForm.protocolLabel') }}</span>
+        <select v-model="protocol" class="form-input">
+          <option value="anthropic">Anthropic-compatible</option>
+          <option value="openai">OpenAI-compatible</option>
+        </select>
+        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.protocolHint') }}</span>
+      </label>
+
+      <label class="form-field">
+        <span class="flex items-center justify-between gap-2">
+          <span class="form-label">{{ $t('settings.channelForm.modelsLabel') }}</span>
+          <button type="button" class="text-[10px] text-primary hover:underline disabled:opacity-50" :disabled="modelMapProbing" @click="onProbe">
+            {{ modelMapProbing ? $t('settings.channelForm.modelMap.fetching') : $t('settings.channelForm.modelMap.fetchModels') }}
+          </button>
+        </span>
+        <textarea v-model="modelsText" rows="3" class="form-input resize-y font-mono" placeholder="claude-sonnet-4-5&#10;gpt-5.2" spellcheck="false" />
+        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.modelsHint') }}</span>
+      </label>
+    </section>
+
     <div class="form-field">
       <span class="form-label">{{ $t('settings.channelForm.engineSupportLabel') }}</span>
       <div class="flex items-center gap-1.5">
-        <button
-          v-for="engine in [{ id: 'claude-code', label: 'Claude Code' }, { id: 'codex', label: 'Codex' }]"
-          :key="engine.id"
-          type="button"
-          class="engine-chip"
-          :class="{ active: engineSupport.includes(engine.id) }"
-          :aria-pressed="engineSupport.includes(engine.id)"
-          @click="toggleEngine(engine.id)"
-        >
+        <button v-for="engine in [{ id: 'claude-code', label: 'Claude Code' }, { id: 'codex', label: 'Codex' }]" :key="engine.id" type="button" class="engine-chip" :class="{ active: engineSupport.includes(engine.id) }" :aria-pressed="engineSupport.includes(engine.id)" @click="toggleEngine(engine.id)">
           <span class="h-1.5 w-1.5 rounded-full" :class="engine.id === 'codex' ? 'bg-codex' : 'bg-claude'" />
           {{ engine.label }}
         </button>
@@ -290,238 +246,29 @@ async function onSave() {
       <div class="engine-binding-head">
         <span class="h-1.5 w-1.5 rounded-full bg-claude" />
         <span>Claude Code</span>
-        <span class="ml-auto font-mono text-[9px] font-normal text-muted-foreground">settings / env</span>
+        <span class="ml-auto font-mono text-[9px] font-normal text-muted-foreground">Messages</span>
       </div>
-    <label class="form-field">
-      <span class="form-label">{{ $t('settings.channelForm.protocolLabel') }}</span>
-      <select v-model="protocol" class="form-input">
-        <option value="anthropic">Anthropic Messages API</option>
-        <option value="openai">OpenAI Chat Completions</option>
-      </select>
-    </label>
-
-    <label class="form-field">
-      <span class="form-label">Base URL <span class="text-muted-foreground font-normal">{{ $t('settings.channelForm.baseUrlHint') }}</span></span>
-      <input
-        v-model="baseUrl"
-        type="text"
-        placeholder="https://api.example.com/anthropic"
-        class="form-input font-mono"
-        spellcheck="false"
+      <p class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.claudeAdapterHint') }}</p>
+      <ChannelModelMap
+        :model-env="sourceModelEnv"
+        :model-options="modelOptions"
+        :probing="modelMapProbing"
+        :dom-key="id || 'new'"
+        @update:env="onModelEnvUpdate"
+        @probe="onProbe"
       />
-    </label>
-
-    <div class="form-field">
-      <span class="form-label">Auth Token <span v-if="protocol === 'openai'" class="text-muted-foreground/60 font-normal italic">{{ $t('settings.channelForm.tokenOptional') }}</span></span>
-      <div class="relative">
-        <input
-          v-model="authToken"
-          :type="tokenVisible ? 'text' : 'password'"
-          placeholder="sk-…"
-          class="form-input font-mono w-full pr-8"
-          autocomplete="off"
-        />
-        <button
-          type="button"
-          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-          @click="tokenVisible = !tokenVisible"
-        >
-          <span :class="tokenVisible ? 'i-carbon-view-off' : 'i-carbon-view'" class="w-3.5 h-3.5" />
-        </button>
-      </div>
-    </div>
-
-    <label class="form-field">
-      <span class="form-label">{{ $t('settings.channelForm.scopeLabel') }}</span>
-      <select v-model="scope" class="form-input">
-        <option value="full">{{ $t('settings.channelForm.scopeFullHint') }}</option>
-        <option value="agent-only">{{ $t('settings.channelForm.scopeAgentOnlyHint') }}</option>
-      </select>
-    </label>
-
-    <!-- 渠道运行预设:默认模型 + 默认思考强度(会话解析链的渠道层;agent-only 渠道不进会话链,隐藏) -->
-    <div v-if="scope === 'full' && !isVirtual" class="grid grid-cols-2 gap-2">
-      <div class="form-field">
-        <span class="form-label">{{ $t('settings.channelForm.defaultModelLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
-        <input
-          v-model="defaultModel"
-          type="text"
-          :list="`default-model-opts-${id}`"
-          :placeholder="$t('settings.channelForm.defaultModelPlaceholder')"
-          class="form-input font-mono"
-          spellcheck="false"
-        />
-        <datalist :id="`default-model-opts-${id}`">
-          <option v-for="m in modelOptions" :key="m" :value="m" />
-        </datalist>
-      </div>
-      <div class="form-field">
-        <span class="form-label">{{ $t('settings.channelForm.defaultEffortLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
-        <select v-model="defaultEffort" class="form-input">
-          <option value="">{{ $t('settings.channelForm.defaultEffortNone') }}</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-          <option value="xhigh">xHigh</option>
-          <option value="max">Max</option>
-          <option value="ultracode">Ultracode</option>
-        </select>
-      </div>
-      <p class="text-[10px] text-muted-foreground/60 leading-snug col-span-2 -mt-1">{{ $t('settings.channelForm.defaultsHint') }}</p>
-    </div>
-
-    <div class="form-field">
-      <span class="form-label">Agent Model <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
-      <input
-        v-model="agentModel"
-        type="text"
-        :list="`agent-model-opts-${id}`"
-        placeholder="e.g. gpt-4o-mini"
-        class="form-input font-mono"
-        spellcheck="false"
-      />
-      <datalist :id="`agent-model-opts-${id}`">
-        <option v-for="m in modelOptions" :key="m" :value="m" />
-      </datalist>
-      <span class="text-[10px] text-muted-foreground/70">{{ $t('settings.channelForm.agentModelHint') }}</span>
-    </div>
-
-    <!-- 高级选项 · 模型映射(虚拟渠道隐藏) -->
-    <ChannelModelMap
-      v-if="!isVirtual"
-      :model-env="sourceModelEnv"
-      :model-options="modelOptions"
-      :probing="modelMapProbing"
-      :dom-key="id || 'new'"
-      @update:env="onModelEnvUpdate"
-      @probe="onProbe"
-    />
     </section>
 
     <section v-if="supportsCodex" class="engine-binding">
       <div class="engine-binding-head">
         <span class="h-1.5 w-1.5 rounded-full bg-codex" />
         <span>Codex</span>
-        <span class="ml-auto font-mono text-[9px] font-normal text-muted-foreground">model_provider / Responses</span>
+        <span class="ml-auto font-mono text-[9px] font-normal text-muted-foreground">Responses</span>
       </div>
-
       <label class="form-field">
-        <span class="form-label">{{ $t('settings.channelForm.codexModeLabel') }}</span>
-        <select v-model="codexMode" class="form-input">
-          <option value="external">{{ $t('settings.channelForm.codexModeExternal') }}</option>
-          <option value="managed">{{ $t('settings.channelForm.codexModeManaged') }}</option>
-        </select>
-        <span class="text-[10px] leading-snug text-muted-foreground/70">
-          {{ $t(codexMode === 'external' ? 'settings.channelForm.codexModeExternalHint' : 'settings.channelForm.codexModeManagedHint') }}
-        </span>
-      </label>
-
-      <div v-if="codexMode === 'external'" class="form-field">
-        <div class="flex items-center justify-between gap-2">
-          <span class="form-label">{{ $t('settings.channelForm.codexProviderLabel') }}</span>
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-              :disabled="codexProvidersLoading"
-              :aria-label="$t('settings.channelForm.codexProviderRefresh')"
-              @click="loadCodexProviders"
-            >
-              <span class="i-carbon-renew inline-block h-3 w-3" :class="{ 'animate-spin': codexProvidersLoading }" />
-            </button>
-            <button
-              type="button"
-              class="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-              @click="toggleCodexManualProvider"
-            >
-              {{ $t(codexExternalManual ? 'settings.channelForm.codexProviderPickExisting' : 'settings.channelForm.codexProviderManual') }}
-            </button>
-          </div>
-        </div>
-        <select v-if="!codexExternalManual" v-model="codexProviderId" class="form-input font-mono">
-          <option disabled value="">
-            {{ codexProvidersLoading ? $t('settings.channelForm.codexProviderLoading') : $t('settings.channelForm.codexProviderSelectPlaceholder') }}
-          </option>
-          <option v-for="provider in codexProviders" :key="provider.id" :value="provider.id">
-            {{ codexProviderLabel(provider) }}
-          </option>
-          <option v-if="codexCurrentProviderMissing" :value="codexProviderId">
-            {{ codexProviderId }}（{{ $t('settings.channelForm.codexProviderCurrent') }}）
-          </option>
-        </select>
-        <input
-          v-else
-          v-model="codexProviderId"
-          type="text"
-          :placeholder="$t('settings.channelForm.codexProviderManualPlaceholder')"
-          class="form-input font-mono"
-          spellcheck="false"
-        />
-        <span class="text-[10px] leading-snug text-muted-foreground/70">
-          {{ codexProvidersError ? $t('settings.channelForm.codexProviderLoadError') : $t('settings.channelForm.codexProviderHint') }}
-        </span>
-      </div>
-
-      <label v-else class="form-field">
         <span class="form-label">{{ $t('settings.channelForm.codexProviderLabel') }}</span>
-        <input
-          v-model="codexProviderId"
-          type="text"
-          :placeholder="managedProviderIdPlaceholder"
-          class="form-input font-mono"
-          spellcheck="false"
-          @input="onCodexManagedProviderIdInput"
-        />
-        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.codexProviderManagedHint') }}</span>
-      </label>
-
-      <template v-if="codexMode === 'managed'">
-        <label class="form-field">
-          <span class="form-label">Base URL <span class="text-muted-foreground font-normal">{{ $t('settings.channelForm.baseUrlHint') }}</span></span>
-          <input v-model="codexBaseUrl" type="text" placeholder="https://api.example.com/v1" class="form-input font-mono" spellcheck="false" />
-        </label>
-
-        <label class="form-field">
-          <span class="form-label">{{ $t('settings.channelForm.codexAuthLabel') }}</span>
-          <select v-model="codexAuthMode" class="form-input">
-            <option value="bearer">Bearer Token</option>
-            <option value="openai">{{ $t('settings.channelForm.codexAuthOpenai') }}</option>
-            <option value="none">{{ $t('settings.channelForm.codexAuthNone') }}</option>
-          </select>
-        </label>
-
-        <div v-if="codexAuthMode === 'bearer'" class="form-field">
-          <span class="form-label">Bearer Token</span>
-          <div class="relative">
-            <input v-model="codexAuthToken" :type="codexTokenVisible ? 'text' : 'password'" placeholder="sk-…" class="form-input font-mono w-full pr-8" autocomplete="off" />
-            <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground" @click="codexTokenVisible = !codexTokenVisible">
-              <span :class="codexTokenVisible ? 'i-carbon-view-off' : 'i-carbon-view'" class="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      </template>
-
-      <div class="grid grid-cols-2 gap-2">
-        <label class="form-field">
-          <span class="form-label">{{ $t('settings.channelForm.defaultModelLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
-          <input v-model="codexDefaultModel" type="text" placeholder="gpt-5.6-sol" class="form-input font-mono" spellcheck="false" />
-        </label>
-        <label class="form-field">
-          <span class="form-label">{{ $t('settings.channelForm.defaultEffortLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
-          <select v-model="codexDefaultEffort" class="form-input">
-            <option value="">{{ $t('settings.channelForm.defaultEffortNone') }}</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">xHigh</option>
-          </select>
-        </label>
-      </div>
-
-      <label class="form-field">
-        <span class="form-label">{{ $t('settings.channelForm.codexModelsLabel') }} <span class="text-muted-foreground/60 font-normal italic">{{ $t('common.optional') }}</span></span>
-        <textarea v-model="codexModelsText" rows="2" class="form-input resize-none font-mono" placeholder="gpt-5.6-sol, gpt-5.6-terra" spellcheck="false" />
-        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.codexModelsHint') }}</span>
+        <input v-model="codexProviderId" type="text" :placeholder="managedProviderIdPlaceholder" class="form-input font-mono" spellcheck="false" @input="onCodexManagedProviderIdInput" />
+        <span class="text-[10px] leading-snug text-muted-foreground/70">{{ $t('settings.channelForm.codexAdapterHint') }}</span>
       </label>
     </section>
 

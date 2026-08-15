@@ -174,12 +174,12 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 
 > If you've accumulated more than one channel — an official subscription, a few third-party APIs, a self-hosted proxy, a local model — Monet was practically built for you: different sessions on different channels and models, hot-switching mid-conversation, price and capability each used where they shine. This is one of Monet's signature strengths.
 
-- Unified channel CRUD: every channel explicitly declares support for Claude Code, Codex, or both. The name and selector entry are shared while each engine keeps its native connection format
-- Claude Code bindings support Anthropic Messages and OpenAI Chat Completions. Channel files remain standard settings files that can be reused with `claude --settings <file>`
-- A Codex binding can reference an existing `model_provider` or let Monet inject a Responses Provider for create, resume, and fork; managed bindings never rewrite Codex's `config.toml`
-- Both engines use the same channel/model/effort capsule, filtered by channel capabilities; per-binding default model, effort, and available-model lists feed that shared selector
-- Credential red lines: tokens never enter command-line arguments (invisible in process lists). Claude runtime temp files are deleted after use; managed Codex Providers fetch credentials through command-backed authentication only when needed
-- Claude Code channels support liveness probing and model-list discovery
+- Unified channel CRUD: each channel stores one Base URL, API key, and complete model catalog, then enables Claude Code, Codex, both, or neither; connections with no session-engine adapter can still power augmentation features
+- The Claude Code adapter always uses the Messages API: model IDs pass through by default, while Opus, Sonnet, Haiku, and other role mappings add shortcuts without hiding remaining channel models
+- The Codex adapter injects a Responses Provider without modifying Codex `config.toml`; every catalog model appears in the Codex model picker with no Claude-style role mapping
+- Default connection, model, and effort are stored independently per session engine; augmentation defaults and per-feature preferences are configured separately instead of living under Claude Code
+- Credential safety: the token is stored once on the shared connection and never enters command-line arguments; Claude runtime files are temporary, while the Codex Provider fetches credentials on demand through command-based auth
+- Channels support online probing and complete model-list discovery
 - Apple local models: when Apple Foundation Models are available on the machine, they auto-register as a free local channel
 - One-click migration from cc-switch
 - Each AI value-add feature can pin its own channel and model (cheap model for titles, strong model for review)
