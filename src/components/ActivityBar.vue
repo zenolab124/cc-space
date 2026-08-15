@@ -5,7 +5,6 @@ import { useUiState, type AppSection } from '@/composables/useUiState'
 import { useTheme } from '@/composables/useTheme'
 import { useNotifications } from '@/composables/useNotifications'
 import { useUpdater } from '@/composables/useUpdater'
-import { useEngineNotices } from '@/composables/useEngineNotices'
 import { useEngines } from '@/engines/useEngines'
 
 const { t } = useI18n()
@@ -13,9 +12,8 @@ const { activeSection, switchSection } = useUiState()
 const { activeTheme, activeThemeLabel, cycleActiveTheme } = useTheme()
 const { badgeCount } = useNotifications()
 const { status: updateStatus } = useUpdater()
-const { hasEngineNotice } = useEngineNotices()
 const { engines } = useEngines()
-const hasSettingsNotice = computed(() => updateStatus.value === 'available' || hasEngineNotice.value)
+const hasSettingsNotice = computed(() => updateStatus.value === 'available')
 
 const hasWorkshop = computed(() => engines.value.some(engine => engine.enabled && engine.capabilities.facets.assets))
 const hasAutomation = computed(() => engines.value.some(engine => engine.enabled && engine.capabilities.facets.automation))

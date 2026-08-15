@@ -1503,7 +1503,6 @@
     "runtime": "Interactive runtime",
     "available": "Available",
     "unavailable": "Unavailable",
-    "noticeAvailable": "This engine has a new version or compatibility notice",
     "status": {
       "available": "Available",
       "degraded": "Degraded",

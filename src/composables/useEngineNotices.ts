@@ -57,9 +57,6 @@ export function useEngineNotices() {
   return {
     codexInfo,
     checking,
-    hasEngineNotice: computed(() => !!codexInfo.value
-      && (codexInfo.value.updateAvailable
-        || codexInfo.value.cacheVersionMismatch)),
     codexCreateDelayRisk: computed(() => !!codexInfo.value
       && codexInfo.value.cacheVersionMismatch),
     refreshEngineNotices,

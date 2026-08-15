@@ -1503,7 +1503,6 @@
     "runtime": "交互运行时",
     "available": "可用",
     "unavailable": "不可用",
-    "noticeAvailable": "该引擎有新的版本或兼容性提醒",
     "status": {
       "available": "可用",
       "degraded": "部分可用",

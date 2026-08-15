@@ -45,7 +45,6 @@ import {
   type SessionReadingEngineId,
 } from '@/composables/sessionReadingEngines'
 import { useUpdater } from '@/composables/useUpdater'
-import { useEngineNotices } from '@/composables/useEngineNotices'
 import { MODELS } from '@/utils/modelContext'
 import EngineCenter from '@/components/settings/EngineCenter.vue'
 import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
@@ -85,7 +84,6 @@ const {
 } = useToolDisplayMode()
 const { stickyUserPromptFor, setStickyUserPromptFor } = useStickyUserPrompt()
 const { status: updateStatus, newVersion: updateVersion, releaseNotes, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
-const { hasEngineNotice } = useEngineNotices()
 loadChannel()
 
 // 切通道后立刻查一次：两个通道的版本线不同，不重查用户会以为切换没生效
@@ -765,7 +763,6 @@ function onSaved() {
       </button>
       <button :class="['side-item', { active: activeTab === 'engines' }]" @click="activeTab = 'engines'">
         <span class="i-carbon-ibm-watson-discovery w-3.5 h-3.5" />{{ $t('engineSettings.nav') }}
-        <span v-if="hasEngineNotice" class="side-dot" />
       </button>
       <button :class="['side-item', { active: activeTab === 'channels' }]" @click="activeTab = 'channels'">
         <span class="i-carbon-connect w-3.5 h-3.5" />{{ $t('settings.channels') }}
