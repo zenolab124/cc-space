@@ -19,7 +19,8 @@ describe('workbench column animation', () => {
     expect(reclaim).toContain('tab.columnSizes.splice(removedIndex, 1)')
     expect(reclaim).not.toContain('setTimeout')
     expect(reclaim).not.toContain('suppressColumnTransition.value')
-    expect(columns).toContain('<TransitionGroup name="workbench-column" @after-leave="onColumnAfterLeave">')
+    expect(columns).toContain('name="workbench-column"')
+    expect(columns).toContain('@after-leave="onColumnAfterLeave"')
     expect(columns).toContain('.workbench-column-leave-to')
   })
 
@@ -41,6 +42,15 @@ describe('workbench column animation', () => {
     expect(columns).toContain('margin-left: -10px')
     expect(columns).toMatch(/\.workbench-column-enter-from\s*\{[\s\S]*?width: 0 !important;/)
     expect(columns).toMatch(/\.workbench-column-enter-from\s*\{[\s\S]*?flex-grow: 0 !important;/)
+  })
+
+  it('realigns the latest focused column after its enter animation', () => {
+    const columns = source('../../src/components/workbench/WorkbenchColumns.vue')
+
+    expect(columns).toContain('@after-enter="onColumnAfterEnter"')
+    expect(columns).toContain(':data-workbench-session-id="col.sessionId"')
+    expect(columns).toContain('column.dataset.workbenchSessionId !== request.sessionId')
+    expect(columns).toContain('scrollColumnIntoView(request.sessionId)')
   })
 
   it('defers single-column fill and the empty state until leaving DOM is gone', () => {

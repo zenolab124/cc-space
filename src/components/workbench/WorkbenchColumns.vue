@@ -144,13 +144,27 @@ function onColumnAfterLeave() {
   leavingColumnCount.value = Math.max(0, leavingColumnCount.value - 1)
 }
 
+function scrollColumnIntoView(sessionId: string) {
+  const column = Array.from(
+    containerRef.value?.querySelectorAll<HTMLElement>('[data-workbench-session-id]') ?? [],
+  ).find(element => element.dataset.workbenchSessionId === sessionId)
+  column?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })
+}
+
+function onColumnAfterEnter(element: Element) {
+  const request = focusColumnRequest.value
+  if (!request) return
+  const column = element as HTMLElement
+  if (column.dataset.workbenchSessionId !== request.sessionId) return
+  scrollColumnIntoView(request.sessionId)
+}
+
 watch(focusColumnRequest, async (req) => {
   if (!req) return
   const idx = activeTab.value.columns.findIndex(c => c.sessionId === req.sessionId)
   if (idx < 0) return
   await nextTick()
-  const colEl = containerRef.value?.querySelectorAll('.sortable-col')[idx] as HTMLElement | undefined
-  colEl?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })
+  scrollColumnIntoView(req.sessionId)
   flashIndex.value = idx
   window.setTimeout(() => {
     flashIndex.value = -1
@@ -174,10 +188,15 @@ watch(focusColumnRequest, async (req) => {
         {{ $t('workbench.columns.empty') }}
       </div>
 
-      <TransitionGroup name="workbench-column" @after-leave="onColumnAfterLeave">
+      <TransitionGroup
+        name="workbench-column"
+        @after-enter="onColumnAfterEnter"
+        @after-leave="onColumnAfterLeave"
+      >
         <SortableColumn
           v-for="(col, i) in activeTab.columns"
           :key="col.id"
+          :data-workbench-session-id="col.sessionId"
           :tab-id="activeTab.id"
           :index="i"
           :flex="activeTab.columnSizes[i]"
