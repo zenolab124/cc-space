@@ -16,6 +16,8 @@ import {
 import type { ToolResultData } from '@/utils/toolPair'
 import {
   TOOL_EXECUTION_CONTEXT,
+  useToolDisplayMode,
+  type ToolDisplayMode,
   type ToolVisualState,
 } from '@/composables/useToolDisplay'
 import ConversationTurn from '@/components/session/ConversationTurn.vue'
@@ -27,6 +29,7 @@ import { detectEngineSegmentArtifacts } from '@/features/artifact-preview/detect
 
 const props = defineProps<{
   records: ConversationRecord[]
+  engineId: string
   engineName: string
   model: string | null
   accent?: EngineAccent
@@ -38,6 +41,7 @@ const props = defineProps<{
 }>()
 
 const { locale } = useI18n()
+const { toolDisplayModeFor } = useToolDisplayMode()
 
 function isRenderable(segment: EngineSegment): boolean {
   return isRenderableEngineSegment(segment, props.showThoughtProcess !== false)
@@ -70,6 +74,7 @@ const responseRecords = computed(() => props.records
 
 const responseTimeline = computed(() => props.records
   .filter(record => record.role !== 'user' && record.sourceMeta.turnError !== true))
+const engineMeta = computed(() => engineResponseMeta(props.records, props.model))
 const turnError = computed(() => props.records
   .filter(record => record.sourceMeta.turnError === true)
   .flatMap(record => record.segments)
@@ -85,12 +90,24 @@ const responseProcessEntries = computed(() => responseRecords.value.flatMap(reco
   .filter(entry => isEngineProcessSegment(entry.segment))))
 type ResponseBlockView =
   | Extract<EngineResponseBlock, { kind: 'content' }>
-  | (Extract<EngineResponseBlock, { kind: 'process' }> & { projection: EngineProcessProjection })
+  | (Extract<EngineResponseBlock, { kind: 'process' }> & {
+      projection: EngineProcessProjection
+      displayMode: ToolDisplayMode
+    })
 
 const responseBlocks = computed<ResponseBlockView[]>(() => buildEngineResponseBlocks(
   responseRecords.value,
+  true,
+  record => toolDisplayModeFor(
+    props.engineId,
+    typeof record.sourceMeta?.model === 'string' ? record.sourceMeta.model : engineMeta.value.model,
+  ),
 ).map(block => block.kind === 'process'
-  ? { ...block, projection: projectEngineProcessEntries(block.entries, responseProcessEntries.value) }
+  ? {
+      ...block,
+      projection: projectEngineProcessEntries(block.entries, responseProcessEntries.value),
+      displayMode: block.processGroupKey as ToolDisplayMode,
+    }
   : block))
 
 const toolResults = computed(() => {
@@ -147,8 +164,6 @@ const completedAt = computed(() => [...responseTimeline.value]
   .reverse()
   .find(record => record.timestamp)?.timestamp ?? null)
 
-const engineMeta = computed(() => engineResponseMeta(props.records, props.model))
-
 const responseMeta = computed<AssistantResponseMeta>(() => ({
   ...engineMeta.value,
   completedText: timeLabelOf(completedAt.value),
@@ -191,6 +206,7 @@ const turnView = computed<ConversationTurnView>(() => ({
           v-if="block.kind === 'process'"
           :blocks="block.projection.blocks"
           :streaming="streaming"
+          :display-mode="block.displayMode"
         />
         <EngineSegmentBlock v-else :segment="block.entry.segment" :streaming="streaming" />
       </template>

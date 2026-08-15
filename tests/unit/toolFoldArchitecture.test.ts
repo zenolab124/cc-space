@@ -6,8 +6,8 @@ function source(path: string): string {
   return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
 }
 
-describe('工具组单层折叠', () => {
-  it('分组模式由外层统一折叠,工具项不再创建第二层折叠', () => {
+describe('工具调用分层折叠', () => {
+  it('外层展开后先显示紧凑结果卡,点击结果卡才显示完整内容', () => {
     const group = source('../../src/components/ToolProcessGroup.vue')
     const list = source('../../src/components/ContentBlockList.vue')
     const items = source('../../src/components/ToolProcessItems.vue')
@@ -22,8 +22,12 @@ describe('工具组单层折叠', () => {
     expect(list).toContain('v-else-if="isOrchestrationToolSegment(segment.tools)"')
     expect(item).toContain('v-if="foldable && canExpand"')
     expect(item).toContain('toolDisplayTitle(props.tool)')
-    expect(item).toContain('v-if="orchestration && result"')
+    expect(item).toContain('const resultExpanded = ref(false)')
+    expect(item).toContain('v-if="orchestration && result && (!foldable || expanded)"')
     expect(item).toContain('<ToolResultPreviewCard')
+    expect(item).toContain(':expanded="resultExpanded"')
+    expect(item).toContain('@toggle="toggleResult"')
+    expect(item).toContain('if (!value) resultExpanded.value = false')
     expect(resultCard).toContain('tool-result-clamp-3')
     expect(resultCard).toContain("hasImages.value ? 'tool-result-clamp-2' : 'tool-result-clamp-3'")
     expect(resultCard.indexOf('class="tool-result-preview-images"')).toBeLessThan(

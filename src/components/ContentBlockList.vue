@@ -7,7 +7,7 @@ import {
   isToolUseBlock,
   segmentToolBlocks,
 } from '@/utils/toolDisplay'
-import { useToolDisplayMode } from '@/composables/useToolDisplay'
+import { useToolDisplayMode, type ToolDisplayMode } from '@/composables/useToolDisplay'
 import MessageBlock from './MessageBlock.vue'
 import ToolProcessGroup from './ToolProcessGroup.vue'
 import ToolProcessItems from './ToolProcessItems.vue'
@@ -17,9 +17,12 @@ const props = defineProps<{
   blockRecordUuids?: Array<string | null | undefined>
   streaming?: boolean
   recordUuid?: string | null
+  /** 调用方已按响应模型解析出的展示方式；缺省时沿用全局默认。 */
+  displayMode?: ToolDisplayMode
 }>()
 
-const { toolDisplayMode } = useToolDisplayMode()
+const { toolDisplayMode: defaultToolDisplayMode } = useToolDisplayMode()
+const toolDisplayMode = computed(() => props.displayMode ?? defaultToolDisplayMode.value)
 const segments = computed(() => {
   let blockIndex = 0
   return segmentToolBlocks(props.blocks).map(segment => {

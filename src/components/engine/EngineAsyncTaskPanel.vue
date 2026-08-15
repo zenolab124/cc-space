@@ -174,6 +174,7 @@ watch(
           v-for="group in groups"
           :key="group.key"
           :records="group.records"
+          :engine-id="session.engine.engineId"
           :engine-name="engineName"
           :model="selected.model"
           :accent="accent ?? 'primary'"

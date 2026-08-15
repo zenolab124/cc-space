@@ -71,6 +71,32 @@ describe('engine process groups', () => {
     expect(blocks.map(block => block.kind)).toEqual(['content', 'content'])
   })
 
+  it('splits consecutive process blocks when their model display rules differ', () => {
+    const blocks = buildEngineResponseBlocks([
+      {
+        id: 'model-a-call',
+        sourceMeta: { model: 'model-a' },
+        segments: [{ kind: 'toolCall', id: 'call-a', name: 'read', input: {} }],
+      },
+      {
+        id: 'model-a-result',
+        sourceMeta: { model: 'model-a' },
+        segments: [{ kind: 'toolResult', callId: 'call-a', content: 'ok', isError: false }],
+      },
+      {
+        id: 'model-b-call',
+        sourceMeta: { model: 'model-b' },
+        segments: [{ kind: 'toolCall', id: 'call-b', name: 'read', input: {} }],
+      },
+    ], true, record => record.sourceMeta?.model === 'model-b' ? 'cards' : 'grouped')
+
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0]).toMatchObject({ kind: 'process', processGroupKey: 'grouped' })
+    expect(blocks[0].kind === 'process' && blocks[0].entries).toHaveLength(2)
+    expect(blocks[1]).toMatchObject({ kind: 'process', processGroupKey: 'cards' })
+    expect(blocks[1].kind === 'process' && blocks[1].entries).toHaveLength(1)
+  })
+
   it('projects neutral tools and commands into the shared content block contract', () => {
     const projection = projectEngineProcessEntries([
       { key: 'call', segment: { kind: 'toolCall', id: 'tool-1', name: 'read', input: { path: 'a.ts' } } },

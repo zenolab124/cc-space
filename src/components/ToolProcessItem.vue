@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, watch, type ComputedRef } from 'vue'
+import { computed, inject, ref, watch, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ContentBlock } from '@/types'
 import { flattenResultText, type ToolResultData } from '@/utils/toolPair'
@@ -66,6 +66,7 @@ const expanded = computed(() => {
     || foldState.itemDefaultExpanded.value
     || autoExpanded.value
 })
+const resultExpanded = ref(false)
 
 const iconClass = computed(() => {
   const name = props.tool.name.toLowerCase()
@@ -102,6 +103,15 @@ function toggle(event: MouseEvent) {
     foldState.expandedItems.add(props.tool.id)
   }
 }
+
+function toggleResult() {
+  onInteraction()
+  resultExpanded.value = !resultExpanded.value
+}
+
+watch(expanded, value => {
+  if (!value) resultExpanded.value = false
+})
 
 watch(() => foldState.requestedToolId.value, requested => {
   if (requested === props.tool.id) foldState.expandedItems.add(props.tool.id)
@@ -189,15 +199,15 @@ watch(() => foldState.requestedToolId.value, requested => {
       <MessageBlock :block="tool" />
     </div>
     <ToolResultPreviewCard
-      v-if="orchestration && result"
+      v-if="orchestration && result && (!foldable || expanded)"
       :content-id="resultContentId"
       :text="resultText"
       :images="resultImages"
       :attachments="result.attachments"
       :record-uuid="result.recordUuid"
-      :expanded="expanded"
+      :expanded="resultExpanded"
       :is-error="result.is_error"
-      @toggle="toggle"
+      @toggle="toggleResult"
     />
     <div
       v-if="!orchestration && result?.attachments?.length"

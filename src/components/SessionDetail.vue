@@ -266,7 +266,7 @@ const toolResultMap = computed(() => {
 provide('toolResultMap', toolResultMap)
 
 const toolFoldState = provideToolFoldState()
-const { toolDisplayMode } = useToolDisplayMode()
+const { toolDisplayModeFor, toolDisplayModeRevision } = useToolDisplayMode()
 const { stickyUserPromptEnabled } = useStickyUserPrompt()
 
 // --- 异步任务面板（后台 Bash / Agent / Workflow / Monitor / Wakeup）---
@@ -2476,7 +2476,7 @@ function locateToolUse(toolUseId: string) {
   })
 }
 
-watch(toolDisplayMode, async () => {
+watch(toolDisplayModeRevision, async () => {
   const sc = scrollContainer.value
   if (!sc) return
   const wasFollowing = followStreaming.value
@@ -3448,6 +3448,7 @@ async function onReload() {
             <ContentBlockList
               :blocks="filterConsumedResults(turn.content)"
               :streaming="!!turn.live"
+              :display-mode="toolDisplayModeFor('claude-code', turn.model)"
             />
           </div>
           <ArtifactPreviewList

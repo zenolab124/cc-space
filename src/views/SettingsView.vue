@@ -34,7 +34,12 @@ import { useZoom } from '@/composables/useZoom'
 import { useTheme } from '@/composables/useTheme'
 import { useHtmlVisual } from '@/features'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
-import { TOOL_DISPLAY_MODES, useToolDisplayMode, type ToolDisplayMode } from '@/composables/useToolDisplay'
+import {
+  TOOL_DISPLAY_MODES,
+  toolDisplayModelKey,
+  useToolDisplayMode,
+  type ToolDisplayMode,
+} from '@/composables/useToolDisplay'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { useUpdater } from '@/composables/useUpdater'
 import { useEngineNotices } from '@/composables/useEngineNotices'
@@ -71,7 +76,14 @@ const { zoomLevel, setZoom, MIN_ZOOM, MAX_ZOOM, STEP } = useZoom()
 const { activeTheme, activeThemeLabel } = useTheme()
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
-const { toolDisplayMode, setToolDisplayMode } = useToolDisplayMode()
+const {
+  toolDisplayMode,
+  toolDisplayModeOverrides,
+  setToolDisplayMode,
+  toolDisplayModeFor,
+  toolDisplayModeOverrideFor,
+  setToolDisplayModeFor,
+} = useToolDisplayMode()
 const { stickyUserPromptEnabled, setStickyUserPrompt } = useStickyUserPrompt()
 const { status: updateStatus, newVersion: updateVersion, releaseNotes, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
 const { hasEngineNotice } = useEngineNotices()
@@ -599,6 +611,94 @@ async function loadCodexAgentModels() {
   }
 }
 
+interface ToolDisplayTargetOption {
+  key: string
+  engineId: SessionEngineId
+  model: string
+  label: string
+}
+
+const selectedToolDisplayTargetKey = ref('')
+
+const toolDisplayTargetGroups = computed(() => {
+  const groups: Array<{
+    engineId: SessionEngineId
+    label: string
+    options: ToolDisplayTargetOption[]
+  }> = [
+    { engineId: 'claude-code', label: t('settings.claudeCodeLabel'), options: [] },
+    { engineId: 'codex', label: t('settings.codexLabel'), options: [] },
+  ]
+  const seen = new Set<string>()
+
+  function add(engineId: SessionEngineId, model: string | null | undefined, label?: string) {
+    const value = model?.trim()
+    const key = toolDisplayModelKey(engineId, value)
+    if (!value || !key || seen.has(key)) return
+    seen.add(key)
+    groups.find(group => group.engineId === engineId)?.options.push({
+      key,
+      engineId,
+      model: value,
+      label: label && label !== value ? `${label} · ${value}` : value,
+    })
+  }
+
+  for (const model of MODELS) add('claude-code', model.id, model.label)
+  add('claude-code', defaultSessionModels.value['claude-code'])
+  add('codex', defaultSessionModels.value.codex)
+  add(defaultAgentEngine.value, defaultAgentModel.value)
+
+  for (const channel of channels.value) {
+    if (channelSupportsEngine(channel, 'claude-code')) {
+      channel.availableModels.forEach(model => add('claude-code', model))
+      add('claude-code', channel.defaultModel)
+      add('claude-code', channel.agentModel)
+    }
+    if (channelSupportsEngine(channel, 'codex')) {
+      channel.availableModels.forEach(model => add('codex', model))
+      channel.codex?.availableModels.forEach(model => add('codex', model))
+      add('codex', channel.codex?.defaultModel)
+    }
+  }
+  codexAgentModels.value.forEach(model => add('codex', model.id, model.label))
+
+  // 已保存但当前模型目录未返回的规则仍需可见、可修改或恢复默认。
+  for (const key of Object.keys(toolDisplayModeOverrides.value)) {
+    if (key.startsWith('claude-code:')) add('claude-code', key.slice('claude-code:'.length))
+    else if (key.startsWith('codex:')) add('codex', key.slice('codex:'.length))
+  }
+
+  for (const group of groups) group.options.sort((a, b) => a.label.localeCompare(b.label))
+  return groups.filter(group => group.options.length > 0)
+})
+
+const selectedToolDisplayTarget = computed<ToolDisplayTargetOption | null>(() => {
+  if (!selectedToolDisplayTargetKey.value) return null
+  return toolDisplayTargetGroups.value
+    .flatMap(group => group.options)
+    .find(option => option.key === selectedToolDisplayTargetKey.value) ?? null
+})
+const selectedToolDisplayMode = computed(() => {
+  const target = selectedToolDisplayTarget.value
+  return target ? toolDisplayModeFor(target.engineId, target.model) : toolDisplayMode.value
+})
+const selectedToolDisplayOverride = computed(() => {
+  const target = selectedToolDisplayTarget.value
+  return target ? toolDisplayModeOverrideFor(target.engineId, target.model) : null
+})
+
+function setSelectedToolDisplayMode(mode: ToolDisplayMode) {
+  const target = selectedToolDisplayTarget.value
+  if (target) setToolDisplayModeFor(target.engineId, target.model, mode)
+  else setToolDisplayMode(mode)
+}
+
+function resetSelectedToolDisplayMode() {
+  const target = selectedToolDisplayTarget.value
+  if (target) setToolDisplayModeFor(target.engineId, target.model, null)
+}
+
 const agentChannelId = ref(defaultAgentChannel.value ?? OFFICIAL_CHANNEL_ID)
 watch(defaultAgentChannel, (v) => { agentChannelId.value = v ?? OFFICIAL_CHANNEL_ID })
 const agentEffort = ref<EffortSetting>((defaultAgentEffort.value as EffortSetting) ?? null)
@@ -881,16 +981,48 @@ function onSaved() {
                     <span class="setting-label">{{ $t('settings.toolDisplayMode') }}</span>
                     <span class="appearance-field-note">{{ $t('settings.toolDisplayModeHint') }}</span>
                   </div>
+                  <div class="appearance-reading-scope">
+                    <label class="appearance-reading-scope-field" for="tool-display-target">
+                      <span>{{ $t('settings.toolDisplayScope') }}</span>
+                      <select
+                        id="tool-display-target"
+                        v-model="selectedToolDisplayTargetKey"
+                        class="form-select"
+                      >
+                        <option value="">{{ $t('settings.toolDisplayScopeDefault') }}</option>
+                        <optgroup
+                          v-for="group in toolDisplayTargetGroups"
+                          :key="group.engineId"
+                          :label="group.label"
+                        >
+                          <option v-for="option in group.options" :key="option.key" :value="option.key">
+                            {{ option.label }}
+                          </option>
+                        </optgroup>
+                      </select>
+                    </label>
+                    <div class="appearance-reading-scope-state" aria-live="polite">
+                      <span v-if="!selectedToolDisplayTarget">{{ $t('settings.toolDisplayScopeDefaultHint') }}</span>
+                      <span v-else-if="selectedToolDisplayOverride">{{ $t('settings.toolDisplayScopeOverrideHint') }}</span>
+                      <span v-else>{{ $t('settings.toolDisplayScopeInheritedHint', { mode: $t(`settings.toolDisplayMode_${toolDisplayMode}`) }) }}</span>
+                      <button
+                        v-if="selectedToolDisplayOverride"
+                        type="button"
+                        class="appearance-reading-reset"
+                        @click="resetSelectedToolDisplayMode"
+                      >{{ $t('settings.toolDisplayScopeReset') }}</button>
+                    </div>
+                  </div>
                   <div class="tool-display-options" role="radiogroup" :aria-label="$t('settings.toolDisplayMode')">
                     <button
                       v-for="mode in TOOL_DISPLAY_MODES"
                       :key="mode"
                       type="button"
                       class="tool-display-option"
-                      :class="{ active: toolDisplayMode === mode }"
+                      :class="{ active: selectedToolDisplayMode === mode }"
                       role="radio"
-                      :aria-checked="toolDisplayMode === mode"
-                      @click="setToolDisplayMode(mode as ToolDisplayMode)"
+                      :aria-checked="selectedToolDisplayMode === mode"
+                      @click="setSelectedToolDisplayMode(mode as ToolDisplayMode)"
                     >
                       <span class="tool-display-option-title">{{ $t(`settings.toolDisplayMode_${mode}`) }}</span>
                       <span class="tool-display-option-hint">{{ $t(`settings.toolDisplayMode_${mode}Hint`) }}</span>
@@ -2413,6 +2545,51 @@ function onSaved() {
 .appearance-reading-block {
   min-width: 0;
 }
+.appearance-reading-scope {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--muted) 52%, transparent);
+}
+.appearance-reading-scope-field {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 600;
+}
+.appearance-reading-scope-field .form-select {
+  width: 100%;
+  min-width: 0;
+}
+.appearance-reading-scope-state {
+  display: flex;
+  max-width: 210px;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: right;
+}
+.appearance-reading-reset {
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+}
+.appearance-reading-reset:hover,
+.appearance-reading-reset:focus-visible {
+  text-decoration: underline;
+}
 .appearance-reading-block .tool-display-options {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
@@ -2521,13 +2698,15 @@ function onSaved() {
 @media (max-width: 900px) {
   .appearance-layout { grid-template-columns: 1fr; }
   .appearance-card-wide { grid-column: auto; }
+  .appearance-reading-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
   .appearance-hero { align-items: flex-start; flex-direction: column; }
   .appearance-theme-grid,
-  .appearance-reading-grid,
   .appearance-layout-grid { grid-template-columns: 1fr; }
   .appearance-reading-block .tool-display-options { grid-template-columns: 1fr; }
+  .appearance-reading-scope { align-items: stretch; flex-direction: column; }
+  .appearance-reading-scope-state { max-width: none; align-items: flex-start; text-align: left; }
   .appearance-field-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
   .appearance-field-note { text-align: left; }
 }

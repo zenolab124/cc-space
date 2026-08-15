@@ -46,7 +46,7 @@ import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
 import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
-import { TOOL_FOLD_INTERACTION, provideToolFoldState } from '@/composables/useToolDisplay'
+import { TOOL_FOLD_INTERACTION, provideToolFoldState, useToolDisplayMode } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { rebindDraftChannel, sameRuntimeChannel, type DraftChannelReplacement } from '@/engines/draftChannel'
 import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels, type SessionEngineId } from '@/composables/useChannels'
@@ -144,6 +144,7 @@ const { selectSession } = useSessions()
 const { confirm, confirmMulti } = useConfirm()
 const { channels, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts } = useChannels()
 const toolFoldState = provideToolFoldState()
+const { toolDisplayModeRevision } = useToolDisplayMode()
 provide(TOOL_FOLD_INTERACTION, stopTimelineFollow)
 let unlistenSnapshot: UnlistenFn | null = null
 let unlistenEvent: UnlistenFn | null = null
@@ -428,6 +429,7 @@ conversationVirtualizer.value.shouldAdjustScrollPositionOnItemSizeChange = (item
   })
 
 watch(shouldVirtualize, () => void nextTick(() => conversationVirtualizer.value.measure()))
+watch(toolDisplayModeRevision, () => void nextTick(() => conversationVirtualizer.value.measure()))
 watch(lastGroupElement, (element) => {
   lastGroupResizeObserver?.disconnect()
   lastGroupResizeObserver = null
@@ -1977,6 +1979,7 @@ onUnmounted(() => {
           >
             <EngineConversationGroup
               :records="historicalGroups[virtualItem.index].records"
+              :engine-id="sessionEngineId"
               :engine-name="enginePresentation.displayName"
               :model="timelineModel"
               :accent="engineAccent"
@@ -1996,6 +1999,7 @@ onUnmounted(() => {
           >
             <EngineConversationGroup
               :records="group.records"
+              :engine-id="sessionEngineId"
               :engine-name="enginePresentation.displayName"
               :model="timelineModel"
               :accent="engineAccent"
@@ -2019,6 +2023,7 @@ onUnmounted(() => {
         >
           <EngineConversationGroup
             :records="lastConversationGroup.records"
+            :engine-id="sessionEngineId"
             :engine-name="enginePresentation.displayName"
             :model="timelineModel"
             :accent="engineAccent"

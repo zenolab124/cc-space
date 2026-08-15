@@ -1,13 +1,16 @@
 import { inject, provide, reactive, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { ToolResultData } from '@/utils/toolPair'
 import { bridgeSetting, writeSetting } from '@/utils/settingBridge'
+import { inferModel } from '@/utils/modelContext'
 import { foldDefaultExpanded, foldDefaultRevision, setFoldDefault } from './useFoldDefaults'
 
 export const TOOL_DISPLAY_MODES = ['cards', 'individual', 'grouped'] as const
 export type ToolDisplayMode = typeof TOOL_DISPLAY_MODES[number]
 
 const STORAGE_KEY = 'monet:tool-display-mode'
+const OVERRIDES_STORAGE_KEY = 'monet:tool-display-mode-overrides'
 const SETTING_KEY = 'toolDisplayMode'
+const OVERRIDES_SETTING_KEY = 'toolDisplayModeOverrides'
 
 function parseMode(value: unknown): ToolDisplayMode | null {
   return typeof value === 'string' && TOOL_DISPLAY_MODES.includes(value as ToolDisplayMode)
@@ -25,6 +28,40 @@ function loadMode(): ToolDisplayMode {
 
 const toolDisplayMode = ref<ToolDisplayMode>(loadMode())
 
+function parseOverrides(value: unknown): Record<string, ToolDisplayMode> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const parsed: Record<string, ToolDisplayMode> = {}
+  for (const [key, mode] of Object.entries(value)) {
+    const validMode = parseMode(mode)
+    if (key && validMode) parsed[key] = validMode
+  }
+  return parsed
+}
+
+function loadOverrides(): Record<string, ToolDisplayMode> {
+  try {
+    const raw = localStorage.getItem(OVERRIDES_STORAGE_KEY)
+    return raw ? parseOverrides(JSON.parse(raw)) ?? {} : {}
+  } catch {
+    return {}
+  }
+}
+
+const toolDisplayModeOverrides = ref<Record<string, ToolDisplayMode>>(loadOverrides())
+/** 展示方式变化会影响虚拟列表高度；统一 revision 供各会话表面触发重测。 */
+const toolDisplayModeRevision = ref(0)
+
+export function normalizeToolDisplayModel(model: string | null | undefined): string | null {
+  const value = model?.trim()
+  if (!value || value === '<synthetic>') return null
+  return inferModel(value)?.id ?? value.toLowerCase()
+}
+
+export function toolDisplayModelKey(engineId: string, model: string | null | undefined): string | null {
+  const normalizedModel = normalizeToolDisplayModel(model)
+  return normalizedModel ? `${engineId.trim().toLowerCase()}:${normalizedModel}` : null
+}
+
 bridgeSetting({
   key: SETTING_KEY,
   uplift: () => localStorage.getItem(STORAGE_KEY) === null ? undefined : toolDisplayMode.value,
@@ -34,19 +71,70 @@ bridgeSetting({
   },
 })
 
+bridgeSetting({
+  key: OVERRIDES_SETTING_KEY,
+  uplift: () => localStorage.getItem(OVERRIDES_STORAGE_KEY) === null
+    ? undefined
+    : toolDisplayModeOverrides.value,
+  apply: value => {
+    const parsed = parseOverrides(value)
+    if (parsed) toolDisplayModeOverrides.value = parsed
+  },
+})
+
 watch(toolDisplayMode, value => {
   try {
     localStorage.setItem(STORAGE_KEY, value)
   } catch {}
   writeSetting(SETTING_KEY, value)
+  toolDisplayModeRevision.value += 1
 })
+
+watch(toolDisplayModeOverrides, value => {
+  try {
+    localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(value))
+  } catch {}
+  writeSetting(OVERRIDES_SETTING_KEY, value)
+  toolDisplayModeRevision.value += 1
+}, { deep: true })
 
 export function useToolDisplayMode() {
   function setToolDisplayMode(mode: ToolDisplayMode) {
     toolDisplayMode.value = mode
   }
 
-  return { toolDisplayMode, setToolDisplayMode }
+  function toolDisplayModeFor(engineId: string, model: string | null | undefined): ToolDisplayMode {
+    const key = toolDisplayModelKey(engineId, model)
+    return (key ? toolDisplayModeOverrides.value[key] : null) ?? toolDisplayMode.value
+  }
+
+  function toolDisplayModeOverrideFor(engineId: string, model: string | null | undefined): ToolDisplayMode | null {
+    const key = toolDisplayModelKey(engineId, model)
+    return key ? toolDisplayModeOverrides.value[key] ?? null : null
+  }
+
+  function setToolDisplayModeFor(
+    engineId: string,
+    model: string,
+    mode: ToolDisplayMode | null,
+  ) {
+    const key = toolDisplayModelKey(engineId, model)
+    if (!key) return
+    const next = { ...toolDisplayModeOverrides.value }
+    if (mode) next[key] = mode
+    else delete next[key]
+    toolDisplayModeOverrides.value = next
+  }
+
+  return {
+    toolDisplayMode,
+    toolDisplayModeOverrides,
+    toolDisplayModeRevision,
+    setToolDisplayMode,
+    toolDisplayModeFor,
+    toolDisplayModeOverrideFor,
+    setToolDisplayModeFor,
+  }
 }
 
 export interface ToolFoldState {

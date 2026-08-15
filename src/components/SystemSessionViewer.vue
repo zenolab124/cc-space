@@ -12,7 +12,7 @@ import ContentBlockList from './ContentBlockList.vue'
 import { shortId } from '@/types'
 import type { ToolResultData } from '@/utils/toolPair'
 import { buildAsyncLedger } from '@/composables/useAsyncTasks'
-import { TOOL_EXECUTION_CONTEXT } from '@/composables/useToolDisplay'
+import { TOOL_EXECUTION_CONTEXT, useToolDisplayMode } from '@/composables/useToolDisplay'
 import type { SessionRecord, ContentBlock } from '@/types'
 import { loadTimeline } from '@/engines/client'
 import { groupConversationRecords } from '@/engines/conversationGroups'
@@ -27,6 +27,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const { t } = useI18n()
+const { toolDisplayModeFor } = useToolDisplayMode()
 
 interface AgentSessionDir {
   dirName: string
@@ -172,6 +173,7 @@ function openDir() {
             v-for="group in engineGroups"
             :key="group.key"
             :records="group.records"
+            engine-id="codex"
             engine-name="Codex"
             :model="null"
             accent="codex"
@@ -191,6 +193,7 @@ function openDir() {
                 v-if="r.type === 'assistant'"
                 :blocks="contentBlocks(r)"
                 :record-uuid="r.uuid"
+                :display-mode="toolDisplayModeFor('claude-code', r.message?.model)"
               />
               <template v-else v-for="(block, bi) in contentBlocks(r)" :key="bi">
                 <div
