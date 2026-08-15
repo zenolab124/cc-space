@@ -1196,7 +1196,10 @@ function completeFinish(sessionId: string) {
   // 注意:不清 streamingTurns / pendingUserMessage——SessionDetail 在 reload 拿到
   // jsonl 落账后同 batch 清,避免窗口期空白闪烁;无详情挂载的会话等下次发送时重置。
   if (state.lastSent) {
-    triggerMetaGeneration(sessionId, state.lastSent.cwd)
+    triggerMetaGeneration({
+      engine: { engineId: 'claude-code', instanceId: 'default' },
+      nativeId: sessionId,
+    })
     // 成功落账后剥离图片 base64:重试(retrySession)只服务失败场景,成功后这批
     // base64 会钉死在 streams 单例直到下次发送——多图会话可达数十 MB(审计 P1 尾项)
     if (state.lastSent.opts.images?.length) {

@@ -857,12 +857,13 @@ pub fn search_status() -> search::SearchStatus {
     search::status()
 }
 
-/// 语义搜索结果（在 SearchResult 基础上附带 Agent 关键词组 + 归纳摘要）
+/// 语义搜索结果：命中项保留结构化会话身份，前端可跨引擎定位。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SmartSearchResult {
-    #[serde(flatten)]
-    pub search: search::SearchResult,
+    pub hits: Vec<crate::engines::commands::EngineSearchHit>,
+    pub total_hits: usize,
+    pub elapsed_ms: u128,
     pub term_groups: Vec<String>,
     pub summary: Option<String>,
 }
@@ -871,76 +872,79 @@ pub struct SmartSearchResult {
 #[tauri::command]
 pub async fn smart_search(
     question: String,
-    filter: search::SearchFilter,
     model: Option<String>,
     effort: Option<String>,
 ) -> Result<SmartSearchResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let m = model.as_deref().unwrap_or("sonnet");
-        let e = effort.as_deref().unwrap_or("low");
-        let term_groups = crate::agent::extract_search_terms(&question, m, e)?;
-        eprintln!("[smart-search] 关键词组: {:?}", term_groups);
-        let t0 = std::time::Instant::now();
-        let mut seen = std::collections::HashSet::new();
-        let mut merged = Vec::new();
-        for terms in &term_groups {
-            let r = search::query(terms, &filter);
-            for hit in r.hits {
-                if seen.insert(hit.session_id.clone()) {
-                    merged.push(hit);
-                }
-            }
-        }
-        merged.sort_unstable_by(|a, b| {
-            b.last_modified.partial_cmp(&a.last_modified).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let total = merged.len();
-        merged.truncate(50);
-
-        // 把前几条命中的完整上下文（±3 消息窗口，与 recall 等价）喂给 Agent 归纳
-        let all_terms = search::compile_terms(&term_groups.join(" "));
-        let summary = if merged.is_empty() {
-            None
-        } else {
-            let mut ctx = String::new();
-            for (i, hit) in merged.iter().take(6).enumerate() {
-                ctx.push_str(&format!("━━ 会话 {} ━━\n标题: {}\n\n",
-                    i + 1,
-                    hit.title.as_deref().unwrap_or("(无标题)")
-                ));
-                let messages = search::get_hit_context(
-                    &hit.session_id, &all_terms, 3, 3000,
-                );
-                for (label, text) in &messages {
-                    if label == "---" {
-                        ctx.push_str("  ┄\n");
-                    } else {
-                        ctx.push_str(&format!("{} {}\n", label, text));
-                    }
-                }
-                ctx.push('\n');
-            }
-            match crate::agent::summarize_search_hits(&question, &ctx, m, e) {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    eprintln!("[smart-search] 归纳失败: {}", e);
-                    None
-                }
-            }
-        };
-
-        Ok(SmartSearchResult {
-            search: search::SearchResult {
-                hits: merged,
-                total_hits: total,
-                elapsed_ms: t0.elapsed().as_millis() as u64,
-            },
-            term_groups,
-            summary,
-        })
+    let question_for_terms = question.clone();
+    let m = model.unwrap_or_else(|| "sonnet".to_string());
+    let e = effort.unwrap_or_else(|| "low".to_string());
+    let term_model = m.clone();
+    let term_effort = e.clone();
+    let term_groups = tauri::async_runtime::spawn_blocking(move || {
+        crate::agent::extract_search_terms(&question_for_terms, &term_model, &term_effort)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|error| error.to_string())??;
+    eprintln!("[smart-search] 关键词组: {:?}", term_groups);
+
+    let t0 = std::time::Instant::now();
+    let mut seen = std::collections::HashSet::new();
+    let mut merged = Vec::new();
+    for terms in &term_groups {
+        let hits =
+            crate::engines::commands::engine_search(crate::engines::commands::EngineSearchQuery {
+                text: terms.clone(),
+                instance: None,
+                limit: Some(100),
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        for hit in hits {
+            if seen.insert(hit.session.storage_key()) {
+                merged.push(hit);
+            }
+        }
+    }
+    let total_hits = merged.len();
+    merged.truncate(50);
+
+    let summary = if merged.is_empty() {
+        None
+    } else {
+        let mut context = String::new();
+        for (index, hit) in merged.iter().take(6).enumerate() {
+            context.push_str(&format!(
+                "━━ 会话 {} ━━\n标题: {}\n{}\n\n",
+                index + 1,
+                hit.title.as_deref().unwrap_or("(无标题)"),
+                hit.snippet,
+            ));
+        }
+        let summary_question = question;
+        match tauri::async_runtime::spawn_blocking(move || {
+            crate::agent::summarize_search_hits(&summary_question, &context, &m, &e)
+        })
+        .await
+        {
+            Ok(Ok(summary)) => Some(summary),
+            Ok(Err(error)) => {
+                eprintln!("[smart-search] 归纳失败: {error}");
+                None
+            }
+            Err(error) => {
+                eprintln!("[smart-search] 归纳任务失败: {error}");
+                None
+            }
+        }
+    };
+
+    Ok(SmartSearchResult {
+        hits: merged,
+        total_hits,
+        elapsed_ms: t0.elapsed().as_millis(),
+        term_groups,
+        summary,
+    })
 }
 
 /// schema-probe 全量扫描（v2.2.0 FR-004）：首页兼容性诊断卡数据源。

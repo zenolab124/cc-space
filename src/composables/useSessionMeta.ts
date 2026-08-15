@@ -1,6 +1,5 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { cwdToProjectId } from '@/utils/path'
 import type { SessionRef } from '@/engines/types'
 import { sessionUiId } from '@/engines/integration'
 import { resolveSessionRef } from '@/engines/directory'
@@ -36,12 +35,13 @@ function shouldRefresh(sessionId: string, manualKey?: keyof SessionMeta): boolea
   return turn % 5 === 0
 }
 
-async function refreshTitle(projectId: string, sessionId: string) {
+async function refreshTitle(session: SessionRef) {
+  const sessionId = sessionUiId(session)
   if (!shouldRefresh(sessionId, 'titleManual')) return
   if (titleGenerating.value.has(sessionId)) return
   titleGenerating.value = new Set([...titleGenerating.value, sessionId])
   try {
-    const { title, turnCount } = await invoke<{ title: string, turnCount: number }>('generate_title', { projectId, sessionId })
+    const { title, turnCount } = await invoke<{ title: string, turnCount: number }>('generate_title', { session })
     if (!turnCounts.has(sessionId)) {
       turnCounts.set(sessionId, turnCount)
     }
@@ -55,34 +55,39 @@ async function refreshTitle(projectId: string, sessionId: string) {
   }
 }
 
-async function refreshTags(projectId: string, sessionId: string) {
+async function refreshTags(session: SessionRef) {
+  const sessionId = sessionUiId(session)
   if (!shouldRefresh(sessionId)) return
   try {
-    const tags = await invoke<string[]>('generate_tags', { projectId, sessionId })
+    const tags = await invoke<string[]>('generate_tags', { session })
     metaMap.value = { ...metaMap.value, [sessionId]: { ...metaMap.value[sessionId], tags } }
   } catch (e) {
     console.warn('[meta] 标签生成失败:', sessionId, e)
   }
 }
 
-async function refreshSummary(projectId: string, sessionId: string) {
-  if (!shouldRefresh(sessionId)) return
+async function refreshSummary(session: SessionRef, force = false): Promise<string | undefined> {
+  const sessionId = sessionUiId(session)
+  if (!force && !shouldRefresh(sessionId)) return undefined
   try {
-    const summary = await invoke<string>('generate_summary', { projectId, sessionId })
+    const summary = await invoke<string>('generate_summary', { session })
     metaMap.value = { ...metaMap.value, [sessionId]: { ...metaMap.value[sessionId], summary } }
+    return summary
   } catch (e) {
     console.warn('[meta] 摘要生成失败:', sessionId, e)
+    if (force) throw e
+    return undefined
   }
 }
 
 /** 用户发送消息后调用——异步生成/修订标题、标签、摘要，不阻塞发送流程 */
-export function triggerMetaGeneration(sessionId: string, cwd: string) {
+export function triggerMetaGeneration(session: SessionRef) {
+  const sessionId = sessionUiId(session)
   const turn = (turnCounts.get(sessionId) ?? 0) + 1
   turnCounts.set(sessionId, turn)
-  const projectId = cwdToProjectId(cwd)
-  refreshTitle(projectId, sessionId)
-  refreshTags(projectId, sessionId)
-  refreshSummary(projectId, sessionId)
+  refreshTitle(session)
+  refreshTags(session)
+  refreshSummary(session)
 }
 
 export function useSessionMeta() {
@@ -104,5 +109,5 @@ export function useSessionMeta() {
     return updated
   }
 
-  return { metaMap, getMeta, updateMeta, reloadMeta: loadAll, refreshTitle, titleGenerating }
+  return { metaMap, getMeta, updateMeta, reloadMeta: loadAll, refreshTitle, refreshSummary, titleGenerating }
 }

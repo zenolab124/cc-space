@@ -1060,7 +1060,7 @@ function onOpenInWorkbench() {
   if (sid) goToSession(sid)
 }
 
-const { getMeta, updateMeta } = useSessionMeta()
+const { getMeta, updateMeta, refreshSummary } = useSessionMeta()
 const summaryGenerating = ref(false)
 
 const currentSummary = computed(() => {
@@ -1077,8 +1077,10 @@ async function onGenerateSummary() {
   if (!cs || summaryGenerating.value) return
   summaryGenerating.value = true
   try {
-    const summary = await invoke<string>('generate_summary', { projectId: cs.projectId, sessionId: cs.summary.id })
-    await updateMeta(cs.summary.id, { summary } as any)
+    await refreshSummary({
+      engine: claudeEngineInstance.value,
+      nativeId: cs.summary.id,
+    }, true)
   } catch (e) {
     console.warn('[meta] 摘要生成失败:', e)
   } finally {

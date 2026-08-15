@@ -35,7 +35,8 @@ import SessionBannerOverlay from '@/components/session/SessionBannerOverlay.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
 import SessionTokenBreakdown from '@/components/topbar/SessionTokenBreakdown.vue'
 import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
-import { useSessionMeta } from '@/composables/useSessionMeta'
+import { triggerMetaGeneration, useSessionMeta } from '@/composables/useSessionMeta'
+import { clearHint, getHint, requestHint } from '@/composables/usePermissionHints'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
@@ -126,7 +127,8 @@ let timelineDownwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineUpwardIntentAt = Number.NEGATIVE_INFINITY
 let timelineUpwardSettleTimer: number | null = null
 let timelineResizeObserver: ResizeObserver | null = null
-const { getMeta, updateMeta } = useSessionMeta()
+const { getMeta, updateMeta, refreshSummary } = useSessionMeta()
+const summaryGenerating = ref(false)
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const {
   openSession,
@@ -155,6 +157,7 @@ let timelineRequestId = 0
 let lastAppliedTimelineRequestId = 0
 let foregroundRequestId = 0
 const completedTurnIds = new Set<string>()
+const metadataGeneratedTurnIds = new Set<string>()
 const settlementTimers = new Map<string, number>()
 const TURN_SETTLEMENT_DELAYS = [0, 100, 250, 600, 1_200, 2_000] as const
 let queuedInputSequence = 0
@@ -635,6 +638,7 @@ const composerQueueItems = computed<ComposerQueueItem[]>(() => queuedInputs.valu
 })))
 const pendingInteractions = computed(() => snapshot.value?.pendingInteractions ?? [])
 const starred = computed(() => !!getMeta(props.session.id)?.starred)
+const currentSummary = computed(() => getMeta(props.session.id)?.summary)
 const resolvedTitle = computed(() => getMeta(props.session.id)?.title
   || props.session.title
   || props.session.first_user_message
@@ -926,6 +930,13 @@ function cancelTurnSettlements() {
   for (const timer of settlementTimers.values()) window.clearTimeout(timer)
   settlementTimers.clear()
   completedTurnIds.clear()
+  metadataGeneratedTurnIds.clear()
+}
+
+function generateMetadataForSettledTurn(turnId: string) {
+  if (!interactive.value || !reference.value || metadataGeneratedTurnIds.has(turnId)) return
+  metadataGeneratedTurnIds.add(turnId)
+  triggerMetaGeneration(reference.value)
 }
 
 function reconcileLoadedRecords(timelineRecords: ConversationRecord[]) {
@@ -936,6 +947,7 @@ function reconcileLoadedRecords(timelineRecords: ConversationRecord[]) {
   )
   for (const turnId of [...completedTurnIds]) {
     if (!hasLiveTurn(liveRecords.value, turnId)) {
+      generateMetadataForSettledTurn(turnId)
       completedTurnIds.delete(turnId)
       const timer = settlementTimers.get(turnId)
       if (timer !== undefined) window.clearTimeout(timer)
@@ -1557,6 +1569,27 @@ function interactionToolName(request: InteractionRequest): string {
   return `Approval:${request.kind}`
 }
 
+function interactionPayload(request: InteractionRequest): Record<string, unknown> {
+  return request.payload && typeof request.payload === 'object' && !Array.isArray(request.payload)
+    ? request.payload as Record<string, unknown>
+    : { value: request.payload }
+}
+
+watch(pendingInteractions, (requests, previous = []) => {
+  if (!interactive.value) return
+  const nextIds = new Set(requests.map(request => request.reference.requestId))
+  for (const request of previous) {
+    if (!nextIds.has(request.reference.requestId)) clearHint(request.reference.requestId)
+  }
+  for (const request of requests) {
+    requestHint(
+      request.reference.requestId,
+      interactionToolName(request),
+      interactionPayload(request),
+    )
+  }
+}, { immediate: true })
+
 function interactionOptions(request: InteractionRequest): SessionApprovalOption[] {
   let safeOptionIndex = 0
   return request.options.map(option => {
@@ -1594,6 +1627,19 @@ async function refreshSessionActions() {
   }
 }
 
+async function onGenerateSummary() {
+  const target = reference.value
+  if (!target || summaryGenerating.value) return
+  summaryGenerating.value = true
+  try {
+    await refreshSummary(target, true)
+  } catch (cause) {
+    error.value = causeMessage(cause)
+  } finally {
+    summaryGenerating.value = false
+  }
+}
+
 function scheduleTurnSettlement(turnId: string, attempt = 0) {
   const existing = settlementTimers.get(turnId)
   if (existing !== undefined) window.clearTimeout(existing)
@@ -1605,6 +1651,7 @@ function scheduleTurnSettlement(turnId: string, attempt = 0) {
     await reload({ quiet: true })
     if (generation !== sessionGeneration || !hasLiveTurn(liveRecords.value, turnId)) {
       completedTurnIds.delete(turnId)
+      if (generation === sessionGeneration) generateMetadataForSettledTurn(turnId)
       return
     }
     if (attempt + 1 < TURN_SETTLEMENT_DELAYS.length) {
@@ -1805,6 +1852,9 @@ onUnmounted(() => {
   unlistenSnapshot?.()
   unlistenEvent?.()
   unlistenSourceChange?.()
+  if (interactive.value) {
+    for (const request of pendingInteractions.value) clearHint(request.reference.requestId)
+  }
 })
 </script>
 
@@ -2055,6 +2105,16 @@ onUnmounted(() => {
           :keyboard="pendingInteractions.length === 1"
           @decide="decide(request, $event)"
         >
+          <template #hint>
+            <div
+              v-if="getHint(request.reference.requestId)?.text || getHint(request.reference.requestId)?.loading"
+              class="mx-3 mt-1.5 flex items-start gap-1.5 rounded border border-border/60 bg-muted/40 px-2 py-1.5"
+            >
+              <span class="i-carbon-sparkle mt-px h-3.5 w-3.5 shrink-0 text-primary/60" aria-hidden="true" />
+              <span v-if="getHint(request.reference.requestId)?.loading" class="text-[10px] italic text-muted-foreground">{{ t('permission.analyzing') }}</span>
+              <span v-else class="text-[10px] leading-relaxed text-foreground/80">{{ getHint(request.reference.requestId)?.text }}</span>
+            </div>
+          </template>
           <component
             :is="resolveTool(interactionToolName(request))"
             :input="request.payload"
@@ -2130,6 +2190,16 @@ onUnmounted(() => {
 
     <template #footer>
       <SessionReadonlyBar v-if="mode === 'archive'" :label="t('session.readonlyPreview')">
+        <button
+          type="button"
+          class="shrink-0 rounded border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+          :disabled="summaryGenerating"
+          @click="onGenerateSummary"
+        >
+          <span v-if="summaryGenerating" class="i-carbon-renew mr-1 h-3 w-3 animate-spin" />
+          <span v-else class="i-carbon-text-short-paragraph mr-1 h-3 w-3" />
+          {{ currentSummary ? t('archive.refreshSummary') : t('archive.generateSummary') }}
+        </button>
         <button
           type="button"
           class="shrink-0 rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-shadow hover:shadow-paper disabled:cursor-not-allowed disabled:opacity-45"
