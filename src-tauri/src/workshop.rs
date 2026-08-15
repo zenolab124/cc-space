@@ -285,7 +285,7 @@ fn collect_workshop_assets() -> Result<WorkshopAssets, String> {
 /// 会话输入框使用的 Claude 资产：只扫描用户级与当前项目级，避免把其它项目的
 /// skill/command 混进当前 cwd。两层都保留，由前端按 project > user 统一消歧。
 pub fn collect_composer_assets(cwd: &str) -> WorkshopAssets {
-    collect_composer_assets_from(&crate::config::claude_root(), Path::new(cwd))
+    collect_composer_assets_from(crate::config::claude_root(), Path::new(cwd))
 }
 
 fn collect_composer_assets_from(claude_dir: &Path, cwd: &Path) -> WorkshopAssets {

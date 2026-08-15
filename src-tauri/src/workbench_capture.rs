@@ -101,7 +101,7 @@ pub async fn capture_native_workbench_tile(window: tauri::WebviewWindow) -> Resu
         if !bytes.starts_with(PNG_SIGNATURE) {
             return Err("WebKit snapshot is not a PNG image".to_string());
         }
-        return Ok(STANDARD.encode(bytes));
+        Ok(STANDARD.encode(bytes))
     }
 
     #[cfg(not(target_os = "macos"))]
