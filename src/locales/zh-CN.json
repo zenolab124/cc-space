@@ -300,6 +300,8 @@
       "codexDescription": "使用 Codex 开始一个空白会话",
       "unavailable": "当前不可用",
       "starting": "正在创建会话…",
+      "codexSlowStart": "Codex 启动仍在等待模型目录检查；若触发刷新，通常需要约 5 秒。",
+      "codexVersionRefresh": "检测到 Codex 共享模型缓存需要同步刷新；Monet 正在等待同一项就绪检查，通常会额外等待约 5 秒。",
       "current": "当前引擎",
       "expired": "这个新任务已不在当前工作台中"
     },
@@ -331,6 +333,7 @@
       "rcFailed": "Remote Control 操作失败",
       "fork": "分叉会话",
       "newSession": "在当前项目新建会话",
+      "codexSlowTitle": "Codex 会话正在准备",
       "forkCreated": "会话已分叉"
     },
     "race": {
@@ -989,6 +992,14 @@
       "title": "本地环境",
       "notFound": "未检测到",
       "detected": "已检测到",
+      "upToDate": "已是最新版",
+      "updateAvailable": "有可用更新",
+      "latestUnknown": "暂时无法获取 Codex CLI 最新稳定版本",
+      "versionMismatchBadge": "运行时不同",
+      "versionMismatchTitle": "检测到两个独立发布的 Codex 运行时",
+      "cacheMismatchTitle": "Codex 共享模型缓存需要刷新",
+      "versionMismatchHint": "Monet 使用独立 CLI {standalone}，ChatGPT 内置运行时为 {desktop}。两者独立发布，无需保持同一版本；这项差异本身不影响使用。",
+      "cacheMismatchHint": "当前共享模型缓存由 {cache} 生成，与 Monet 使用的 Codex CLI 不一致。Monet 会在创建会话前同步刷新；触发时通常额外等待约 5 秒。",
       "versionUnknown": "版本未知",
       "refresh": "刷新"
     },
@@ -1491,6 +1502,7 @@
     "runtime": "交互运行时",
     "available": "可用",
     "unavailable": "不可用",
+    "noticeAvailable": "该引擎有新的版本或兼容性提醒",
     "status": {
       "available": "可用",
       "degraded": "部分可用",

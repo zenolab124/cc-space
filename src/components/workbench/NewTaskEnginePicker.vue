@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useChannels, channelSupportsEngine, refreshChannels } from '@/composables/useChannels'
 import { useNotifications } from '@/composables/useNotifications'
+import { useEngineNotices } from '@/composables/useEngineNotices'
 import { useProjects } from '@/composables/useProjects'
 import { useWorkbench } from '@/composables/useWorkbench'
 import { createSession } from '@/engines/client'
@@ -31,8 +32,11 @@ const {
   discardStagedSession,
 } = useWorkbench()
 const { notifyTransient } = useNotifications()
+const { codexCreateDelayRisk } = useEngineNotices()
 const selectingEngine = ref<TargetEngineId | null>(null)
+const selectingHint = ref<string | null>(null)
 const error = ref<string | null>(null)
+let slowHintTimer: ReturnType<typeof setTimeout> | null = null
 
 const targets: Array<{ id: TargetEngineId; icon: string; accent: 'claude' | 'codex' }> = [
   { id: 'claude-code', icon: 'i-simple-anthropic', accent: 'claude' },
@@ -97,6 +101,13 @@ async function selectEngine(engineId: string) {
       await refreshChannels()
       const attachedChannel = defaultChannelForEngine(choice.descriptor)
       const project = projectReference(choice.descriptor)
+      if (choice.id === 'codex') {
+        slowHintTimer = setTimeout(() => {
+          selectingHint.value = t(codexCreateDelayRisk.value
+            ? 'workbench.enginePicker.codexVersionRefresh'
+            : 'workbench.enginePicker.codexSlowStart')
+        }, 800)
+      }
       const created = await createSession(project, props.cwd, attachedChannel ? { channelId: attachedChannel } : {})
       const replacementSessionId = sessionUiId(created.session)
       stageEngineDraft(replacementSessionId, {
@@ -118,6 +129,9 @@ async function selectEngine(engineId: string) {
     error.value = message
     notifyTransient(t('common.newSessionFailed'), message)
   } finally {
+    if (slowHintTimer) clearTimeout(slowHintTimer)
+    slowHintTimer = null
+    selectingHint.value = null
     selectingEngine.value = null
   }
 }
@@ -125,6 +139,10 @@ async function selectEngine(engineId: string) {
 onMounted(() => {
   void refreshChannels()
   if (engines.value.length === 0) void refreshEngines()
+})
+
+onUnmounted(() => {
+  if (slowHintTimer) clearTimeout(slowHintTimer)
 })
 </script>
 
@@ -134,6 +152,7 @@ onMounted(() => {
     :description="t('workbench.enginePicker.description')"
     :choices="choices"
     :selecting-engine="selectingEngine"
+    :selecting-hint="selectingHint"
     :error="error"
     @select="selectEngine"
   />

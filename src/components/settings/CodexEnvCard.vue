@@ -5,13 +5,9 @@ import { listen } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { isWindows } from '@/composables/usePlatform'
 import { openExternalUrl } from '@/composables/useFileOpener'
+import { useEngineNotices } from '@/composables/useEngineNotices'
 
 const { t } = useI18n()
-
-interface CodexEnvInfo {
-  installedVersion: string | null
-  binaryPath: string | null
-}
 
 interface InstallResult {
   success: boolean
@@ -28,8 +24,7 @@ interface InstallProgress {
   phase: InstallPhase | 'completed' | 'failed'
 }
 
-const info = ref<CodexEnvInfo | null>(null)
-const checking = ref(false)
+const { codexInfo: info, checking, refreshEngineNotices: check } = useEngineNotices()
 const installing = ref(false)
 const installPhase = ref<InstallPhase | null>(null)
 const installMsg = ref<{ kind: 'ok' | 'err'; text: string } | null>(null)
@@ -47,14 +42,6 @@ const installOptions = computed(() => {
   ]
 })
 
-async function check() {
-  checking.value = true
-  try {
-    info.value = await invoke<CodexEnvInfo>('codex_env_check')
-  } catch { /* ignore */ }
-  finally { checking.value = false }
-}
-
 async function runInstall() {
   if (installing.value) return
   installing.value = true
@@ -67,8 +54,14 @@ async function runInstall() {
       installPhase.value = 'verifying'
       if (result.newVersion && result.binaryPath) {
         info.value = {
+          latestVersion: info.value?.latestVersion ?? null,
+          updateAvailable: false,
           installedVersion: result.newVersion,
           binaryPath: result.binaryPath,
+          desktopVersion: info.value?.desktopVersion ?? null,
+          versionMismatch: info.value?.desktopVersion != null && info.value.desktopVersion !== result.newVersion,
+          cacheVersion: info.value?.cacheVersion ?? null,
+          cacheVersionMismatch: info.value?.cacheVersion != null && info.value.cacheVersion !== result.newVersion,
         }
       }
       installMsg.value = { kind: 'ok', text: t('settings.codexInstall.installOk', { version: result.newVersion ?? '?' }) }
@@ -121,8 +114,11 @@ onUnmounted(() => {
       <span v-if="checking" class="text-[10px] text-muted-foreground">{{ t('common.loading') }}</span>
       <template v-else-if="info">
         <span v-if="!info.binaryPath" class="env-badge bad">{{ t('settings.codexEnv.notFound') }}</span>
+        <span v-else-if="info.updateAvailable" class="env-badge warn">{{ t('settings.codexEnv.updateAvailable') }}</span>
+        <span v-else-if="info.installedVersion && info.latestVersion" class="env-badge ok">{{ t('settings.codexEnv.upToDate') }}</span>
         <span v-else-if="info.installedVersion" class="env-badge ok">{{ t('settings.codexEnv.detected') }}</span>
         <span v-else class="env-badge warn">{{ t('settings.codexEnv.versionUnknown') }}</span>
+        <span v-if="info.versionMismatch" class="env-badge info">{{ t('settings.codexEnv.versionMismatchBadge') }}</span>
       </template>
 
       <span class="flex-1" />
@@ -131,10 +127,48 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="info?.installedVersion" class="mt-1.5 font-mono text-[13px]">
+    <div v-if="info?.installedVersion" class="mt-1.5 flex items-baseline gap-1.5 font-mono text-[13px]">
       <span class="text-foreground">{{ info.installedVersion }}</span>
+      <template v-if="info.updateAvailable && info.latestVersion">
+        <span class="text-muted-foreground">&rarr;</span>
+        <span class="font-semibold text-accent">{{ info.latestVersion }}</span>
+      </template>
     </div>
     <p v-if="info?.binaryPath" class="env-path" :title="info.binaryPath">{{ info.binaryPath }}</p>
+    <p v-if="info?.binaryPath && !info.latestVersion" class="mt-0.5 text-[10px] text-muted-foreground">
+      {{ t('settings.codexEnv.latestUnknown') }}
+    </p>
+
+    <div
+      v-if="info?.cacheVersionMismatch"
+      role="status"
+      class="mt-2 rounded border border-accent/30 bg-accent/5 px-2.5 py-2 text-[10.5px] leading-relaxed"
+    >
+      <p class="flex items-start gap-1.5 font-medium text-accent">
+        <span class="i-carbon-warning-alt mt-0.5 h-3 w-3 shrink-0" />
+        <span>{{ t('settings.codexEnv.cacheMismatchTitle') }}</span>
+      </p>
+      <p class="mt-1 text-muted-foreground">
+        {{ t('settings.codexEnv.cacheMismatchHint', { cache: info.cacheVersion ?? '?' }) }}
+      </p>
+    </div>
+
+    <div
+      v-if="info?.versionMismatch"
+      role="status"
+      class="mt-2 rounded border border-border bg-muted/35 px-2.5 py-2 text-[10.5px] leading-relaxed"
+    >
+      <p class="flex items-start gap-1.5 font-medium text-foreground">
+        <span class="i-carbon-information mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+        <span>{{ t('settings.codexEnv.versionMismatchTitle') }}</span>
+      </p>
+      <p class="mt-1 text-muted-foreground">
+        {{ t('settings.codexEnv.versionMismatchHint', {
+          standalone: info.installedVersion ?? '?',
+          desktop: info.desktopVersion ?? '?',
+        }) }}
+      </p>
+    </div>
 
     <div v-if="info && !info.binaryPath" class="mt-2 px-2.5 py-2 rounded border border-border bg-muted/40">
       <p class="text-[11px] font-medium flex items-center gap-1">
@@ -197,6 +231,10 @@ onUnmounted(() => {
 .env-badge.warn {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
+}
+.env-badge.info {
+  background: var(--muted);
+  color: var(--muted-foreground);
 }
 .env-badge.bad {
   background: color-mix(in srgb, var(--destructive) 12%, transparent);

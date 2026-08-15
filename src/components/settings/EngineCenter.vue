@@ -8,6 +8,7 @@ import { useEngines } from '@/engines/useEngines'
 import { instanceKey } from '@/engines/identity'
 import { setEngineEnabled } from '@/engines/client'
 import { useConfirm } from '@/composables/useConfirm'
+import { useEngineNotices } from '@/composables/useEngineNotices'
 import { openExternalUrl, showSystemOpenMenu } from '@/composables/useFileOpener'
 import type { EngineDescriptor } from '@/engines/types'
 import ClaudeEnvCard from './ClaudeEnvCard.vue'
@@ -17,6 +18,7 @@ import CodexEnvCard from './CodexEnvCard.vue'
 const { t } = useI18n()
 const { confirm } = useConfirm()
 const { engines, health, loading, errors, refreshEngines } = useEngines()
+const { hasEngineNotice, refreshEngineNotices } = useEngineNotices()
 const expanded = ref<Set<string>>(new Set())
 const exporting = ref(false)
 const exportStatus = ref<string | null>(null)
@@ -35,6 +37,10 @@ async function exportDiagnostics() {
   } finally {
     exporting.value = false
   }
+}
+
+async function refreshAll() {
+  await Promise.all([refreshEngines(), refreshEngineNotices()])
 }
 
 function toggle(key: string) {
@@ -113,7 +119,7 @@ function showConfigurationMenu(event: MouseEvent, engine: EngineDescriptor) {
         <button type="button" class="settings-page-button" :disabled="exporting" @click="exportDiagnostics">
           <span class="i-carbon-download mr-1 inline-block h-3 w-3 align-text-bottom" />{{ t('engineSettings.exportDiagnostics') }}
         </button>
-        <button type="button" class="settings-page-button" :disabled="loading" @click="refreshEngines">
+        <button type="button" class="settings-page-button" :disabled="loading" @click="refreshAll">
           <span class="mr-1 inline-block h-3 w-3 align-text-bottom" :class="loading ? 'i-carbon-renew animate-spin' : 'i-carbon-renew'" />
           {{ t('common.refresh') }}
         </button>
@@ -130,6 +136,11 @@ function showConfigurationMenu(event: MouseEvent, engine: EngineDescriptor) {
             <span class="block truncate text-[10px] text-muted-foreground">{{ engine.instance.engineId }} / {{ engine.instance.instanceId }}</span>
           </span>
           <span class="text-[10px] text-muted-foreground">{{ t(`engineSettings.status.${health[instanceKey(engine.instance)]?.status ?? 'unavailable'}`) }}</span>
+          <span
+            v-if="engine.instance.engineId === 'codex' && hasEngineNotice"
+            class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+            :title="t('engineSettings.noticeAvailable')"
+          />
           <span class="h-3.5 w-3.5 text-muted-foreground" :class="expanded.has(instanceKey(engine.instance)) ? 'i-carbon-chevron-up' : 'i-carbon-chevron-down'" />
         </button>
 

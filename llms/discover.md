@@ -27,7 +27,8 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 - Claude Code and Codex projects, sessions, timelines, search results, Workbench columns, and notifications coexist with engine badges and filters
 - Codex uses the local official `codex app-server` for history, create/resume, native fork, streaming text and tool progress, sending while a turn is running, interruption, three approval classes, and model/effort discovery
-- Engine Center reports installation, authentication, version, capabilities, and diagnostics per engine; one failure does not block another
+- Engine Center reports installation, authentication, version, capabilities, and diagnostics per engine; Codex checks for stable updates and shared model-cache compatibility, showing green notification dots only when an update is available or the cache truly needs a refresh. Different standalone and ChatGPT-bundled runtime versions are informational; one engine failure does not block another
+- After launch, Monet prewarms the Codex model catalog through the same persistent App Server. Concurrent create, resume, and fork operations share one readiness check, and a cache rewritten by another runtime is refreshed synchronously before creation. If that wait runs longer than normal, the creation entry explains the roughly five-second delay in place
 - The Engine Adapter contract unifies identity, source, runtime, capabilities, and facets, so a third engine needs no new top-level IPC or shared-storage branch
 - Both engines reuse the same session shell, composer, and channel/model/effort capsule; one channel entry is translated by each engine adapter into its native protocol
 

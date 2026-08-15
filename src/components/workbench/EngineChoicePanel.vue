@@ -13,6 +13,7 @@ defineProps<{
     current?: boolean
   }>
   selectingEngine: string | null
+  selectingHint?: string | null
   error?: string | null
 }>()
 
@@ -58,7 +59,7 @@ const emit = defineEmits<{
               {{ $t('workbench.enginePicker.unavailable') }}
             </span>
             <span v-else-if="selectingEngine === choice.id" class="mt-2 block text-[10px] text-primary">
-              {{ $t('workbench.enginePicker.starting') }}
+              <span role="status">{{ selectingHint || $t('workbench.enginePicker.starting') }}</span>
             </span>
             <span v-else-if="choice.current" class="mt-2 block text-[10px] text-primary">
               {{ $t('workbench.enginePicker.current') }}

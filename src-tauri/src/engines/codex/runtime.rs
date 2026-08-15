@@ -539,6 +539,7 @@ impl AgentRuntime for CodexRuntime {
                     "Codex runtime does not own this project",
                 ));
             }
+            self.supervisor.ensure_ready()?;
             let mut params = Map::new();
             if let Some(cwd) = request.cwd {
                 params.insert("cwd".into(), Value::String(cwd));
@@ -578,6 +579,7 @@ impl AgentRuntime for CodexRuntime {
 
     fn fork_session(&self, request: ForkSessionRequest) -> EngineFuture<'_, RuntimeSession> {
         Box::pin(async move {
+            self.supervisor.ensure_ready()?;
             let params = fork_params(&request)?;
             let response = self
                 .supervisor
@@ -604,6 +606,7 @@ impl AgentRuntime for CodexRuntime {
     ) -> EngineFuture<'_, RuntimeSession> {
         Box::pin(async move {
             self.owns_session(&session)?;
+            self.supervisor.ensure_ready()?;
             let mut params = Map::from_iter([(
                 "threadId".into(),
                 Value::String(session.native_id().to_string()),

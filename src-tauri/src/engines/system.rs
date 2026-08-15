@@ -57,7 +57,7 @@ impl EngineSystem {
             &mut initialization_errors,
             "codex",
             CodexEngine::descriptor(),
-            || CodexEngine::new().map(|adapter| adapter as Arc<dyn EngineAdapter>),
+            || CodexEngine::new(app.clone()).map(|adapter| adapter as Arc<dyn EngineAdapter>),
         );
 
         let registry = Arc::new(registry);

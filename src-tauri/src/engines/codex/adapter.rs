@@ -2,8 +2,9 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter};
 
-use super::{default_instance, CodexRuntime, CodexSource, CodexSupervisor};
+use super::{default_instance, CodexRuntime, CodexSource, CodexSupervisor, CODEX_READINESS_EVENT};
 use crate::engines::core::*;
 use crate::proc_ext::HideConsole;
 
@@ -64,14 +65,20 @@ impl CodexEngine {
         })
     }
 
-    pub fn new() -> EngineResult<Arc<Self>> {
+    pub fn new(app: AppHandle) -> EngineResult<Arc<Self>> {
         let supervisor = CodexSupervisor::new();
-        Ok(Arc::new(Self {
+        let readiness_app = app.clone();
+        supervisor.subscribe_readiness(Arc::new(move |snapshot| {
+            let _ = readiness_app.emit(CODEX_READINESS_EVENT, snapshot);
+        }));
+        let adapter = Arc::new(Self {
             descriptor: Self::descriptor()?,
             source: CodexSource::new(Arc::clone(&supervisor))?,
             runtime: CodexRuntime::new(Arc::clone(&supervisor))?,
-            supervisor,
-        }))
+            supervisor: Arc::clone(&supervisor),
+        });
+        supervisor.prewarm();
+        Ok(adapter)
     }
 }
 

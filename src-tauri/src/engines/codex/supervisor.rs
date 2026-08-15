@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::app_server::{
@@ -13,13 +14,47 @@ use crate::engines::core::{EngineError, EngineErrorKind, EngineResult};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const READINESS_RETRY_COOLDOWN: Duration = Duration::from_secs(5);
+
+pub const CODEX_READINESS_EVENT: &str = "codex-readiness-changed";
 
 pub type CodexProtocolSink = Arc<dyn Fn(IncomingMessage) + Send + Sync>;
+pub type CodexReadinessSink = Arc<dyn Fn(CodexReadinessSnapshot) + Send + Sync>;
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexReadinessPhase {
+    Warming,
+    Ready,
+    Degraded,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexReadinessSnapshot {
+    pub phase: CodexReadinessPhase,
+    pub error: Option<String>,
+}
 
 pub struct CodexSupervisor {
     connection: Mutex<Option<Connection>>,
     sinks: Arc<Mutex<Vec<CodexProtocolSink>>>,
+    readiness: Mutex<ReadinessState>,
+    readiness_changed: Condvar,
+    readiness_sinks: Mutex<Vec<CodexReadinessSink>>,
     next_request_id: AtomicU64,
+}
+
+enum ReadinessState {
+    Idle,
+    Warming,
+    Ready {
+        runtime_version: Option<String>,
+    },
+    Degraded {
+        error: EngineError,
+        attempted_at: Instant,
+    },
 }
 
 struct Connection {
@@ -46,6 +81,9 @@ impl CodexSupervisor {
         Arc::new(Self {
             connection: Mutex::new(None),
             sinks: Arc::new(Mutex::new(Vec::new())),
+            readiness: Mutex::new(ReadinessState::Idle),
+            readiness_changed: Condvar::new(),
+            readiness_sinks: Mutex::new(Vec::new()),
             next_request_id: AtomicU64::new(10),
         })
     }
@@ -55,6 +93,113 @@ impl CodexSupervisor {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(sink);
+    }
+
+    pub fn subscribe_readiness(&self, sink: CodexReadinessSink) {
+        self.readiness_sinks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(sink);
+    }
+
+    pub fn prewarm(self: &Arc<Self>) {
+        let supervisor = Arc::clone(self);
+        std::thread::spawn(move || {
+            if let Err(error) = supervisor.ensure_ready() {
+                log::warn!("Codex App Server readiness prewarm failed: {error}");
+            }
+        });
+    }
+
+    pub fn ensure_ready(&self) -> EngineResult<()> {
+        loop {
+            let mut readiness = self
+                .readiness
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match &*readiness {
+                ReadinessState::Idle => {
+                    *readiness = ReadinessState::Warming;
+                    break;
+                }
+                ReadinessState::Warming => {
+                    readiness = self
+                        .readiness_changed
+                        .wait(readiness)
+                        .unwrap_or_else(|error| error.into_inner());
+                    drop(readiness);
+                }
+                ReadinessState::Ready { runtime_version }
+                    if crate::codex_env::cache_matches_version(runtime_version.as_deref()) =>
+                {
+                    return Ok(());
+                }
+                ReadinessState::Ready { .. } => {
+                    *readiness = ReadinessState::Warming;
+                    break;
+                }
+                ReadinessState::Degraded {
+                    error,
+                    attempted_at,
+                } if attempted_at.elapsed() < READINESS_RETRY_COOLDOWN => {
+                    return Err(error.clone());
+                }
+                ReadinessState::Degraded { .. } => {
+                    *readiness = ReadinessState::Warming;
+                    break;
+                }
+            }
+        }
+
+        self.emit_readiness(CodexReadinessSnapshot {
+            phase: CodexReadinessPhase::Warming,
+            error: None,
+        });
+        let runtime_version = crate::codex_env::current_installed_version();
+        let result = self
+            .request("model/list", json!({ "cursor": null, "limit": 1 }))
+            .and_then(|response| {
+                response
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .map(|_| ())
+                    .ok_or_else(|| {
+                        EngineError::new(
+                            EngineErrorKind::Protocol,
+                            "Codex returned an invalid model list during readiness check",
+                        )
+                    })
+            });
+
+        let snapshot = match &result {
+            Ok(()) => {
+                *self
+                    .readiness
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) =
+                    ReadinessState::Ready { runtime_version };
+                CodexReadinessSnapshot {
+                    phase: CodexReadinessPhase::Ready,
+                    error: None,
+                }
+            }
+            Err(error) => {
+                *self
+                    .readiness
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = ReadinessState::Degraded {
+                    error: error.clone(),
+                    attempted_at: Instant::now(),
+                };
+                CodexReadinessSnapshot {
+                    phase: CodexReadinessPhase::Degraded,
+                    error: Some(error.message.clone()),
+                }
+            }
+        };
+        self.readiness_changed.notify_all();
+        self.emit_readiness(snapshot);
+        result
     }
 
     pub fn request(&self, method: &str, params: Value) -> EngineResult<Value> {
@@ -110,6 +255,17 @@ impl CodexSupervisor {
         response_rx
             .recv_timeout(REQUEST_TIMEOUT)
             .map_err(|_| unavailable("Codex app-server request timed out"))?
+    }
+
+    fn emit_readiness(&self, snapshot: CodexReadinessSnapshot) {
+        let sinks = self
+            .readiness_sinks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        for sink in sinks {
+            sink(snapshot.clone());
+        }
     }
 
     fn connection(&self) -> EngineResult<SyncSender<ActorCommand>> {

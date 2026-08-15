@@ -12,6 +12,7 @@ import { refreshChannels } from '@/composables/useChannels'
 import { refreshCliDefaults } from '@/composables/useCliDefaults'
 import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
+import { useEngineNotices } from '@/composables/useEngineNotices'
 import { displayTitle } from '@/types'
 import { fileName } from '@/utils/path'
 import { collectSessionCapabilities } from '@/features'
@@ -56,6 +57,7 @@ provide('columnIndex', computed(() => props.index))
 provide('tabId', computed(() => props.tabId))
 const { confirm } = useConfirm()
 const { notifyTransient } = useNotifications()
+const { codexCreateDelayRisk } = useEngineNotices()
 
 const tab = computed(() => state.value.tabs.find(t => t.id === props.tabId))
 const lane = computed(() => tab.value ? findLane(tab.value, props.column.sessionId) : null)
@@ -247,6 +249,7 @@ async function onNewSession() {
   const cwd = session?.cwd || draftCwd(props.column.sessionId)
   if (!cwd) return
   engineActionLoading.value = true
+  let slowNoticeTimer: ReturnType<typeof setTimeout> | null = null
   try {
     if (!useNativeDetail.value) {
       if (!session?.project_reference) {
@@ -254,6 +257,16 @@ async function onNewSession() {
         return
       }
       const attachedChannel = engineRuntimeChannel(props.column.sessionId)
+      if (engineId.value === 'codex') {
+        slowNoticeTimer = setTimeout(() => {
+          notifyTransient(
+            t('workbench.column.codexSlowTitle'),
+            t(codexCreateDelayRisk.value
+              ? 'workbench.enginePicker.codexVersionRefresh'
+              : 'workbench.enginePicker.codexSlowStart'),
+          )
+        }, 800)
+      }
       const created = await createSession(session.project_reference, cwd, engineRuntimeOptions(props.column.sessionId))
       const sessionId = sessionUiId(created.session)
       registerEngineDraft(sessionId, {
@@ -274,6 +287,7 @@ async function onNewSession() {
   } catch (cause) {
     notifyTransient(t('common.newSessionFailed'), String(cause))
   } finally {
+    if (slowNoticeTimer) clearTimeout(slowNoticeTimer)
     engineActionLoading.value = false
   }
 }
