@@ -11,7 +11,7 @@ import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
-import { bindOptimisticUserTurn, composeRuntimeTimeline, hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline } from '@/engines/runtimeTimeline'
+import { bindOptimisticUserTurn, composeRuntimeTimeline, hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
@@ -98,6 +98,7 @@ const editingMeta = ref(false)
 const titleDraft = ref('')
 const tagsDraft = ref('')
 const snapshot = ref<RuntimeSnapshot | null>(null)
+const visualActiveTurnId = ref<string | null>(null)
 const runtimeId = ref<unknown>(null)
 const models = ref<ModelDescriptor[]>([])
 const actions = ref<SessionActions | null>(null)
@@ -1151,7 +1152,13 @@ async function recoverRuntimeSnapshot() {
     const recovered = (await runtimeSnapshots()).find(item => ownsSession(item.session))
     if (recovered) {
       snapshot.value = recovered
+      visualActiveTurnId.value = syncRuntimeVisualActivity(
+        visualActiveTurnId.value,
+        recovered,
+        true,
+      )
       runtimeId.value = recovered.runtimeId
+      if (recovered.phase === 'idle') void consumeQueuedInput()
     }
   } catch (_) {
     // 快照恢复失败不覆盖时间线与现有错误；下一次运行事件仍可继续收敛。
@@ -1606,6 +1613,10 @@ function scheduleTurnSettlement(turnId: string, attempt = 0) {
 
 function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
   if (!ownsSession(envelope.session)) return
+  visualActiveTurnId.value = reduceRuntimeVisualActivity(
+    visualActiveTurnId.value,
+    envelope.event,
+  )
   const effect = reduceRuntimeTimeline(liveRecords.value, envelope, {
     ...(selectedModel.value ? { model: selectedModel.value } : {}),
     ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
@@ -1616,16 +1627,15 @@ function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
   if (effect.completedTurnId) {
     completedTurnIds.add(effect.completedTurnId)
     scheduleTurnSettlement(effect.completedTurnId)
+    void consumeQueuedInput()
   }
 }
 
 const runtimeDeltaShaper = useRuntimeDeltaShaper(applyRuntimeEvent)
-const typingActive = computed(() => isBusy.value || runtimeDeltaShaper.pending.value)
+const typingActive = computed(() => sending.value || visualActiveTurnId.value !== null)
 
 function isTurnStreaming(turnId: string | null): boolean {
-  if (!turnId) return false
-  return (isBusy.value && turnId === activeTurnId.value)
-    || runtimeDeltaShaper.pendingTurnIds.value.has(turnId)
+  return !!turnId && turnId === visualActiveTurnId.value
 }
 
 function onInputKeydown(event: KeyboardEvent) {
@@ -1663,6 +1673,7 @@ watch(() => props.session.id, async () => {
     queuedInputs.value = []
     imageInput.clearImages()
     snapshot.value = null
+    visualActiveTurnId.value = null
     runtimeId.value = replacement?.runtimeId ?? null
     if (replacement) {
       attachedChannel.value = replacement.attachedChannel
@@ -1750,9 +1761,14 @@ onMounted(async () => {
     if (ownsSession(event.payload.session)) {
       snapshot.value = event.payload
       runtimeId.value = event.payload.runtimeId
-      if (event.payload.lastError) error.value = event.payload.lastError
+      visualActiveTurnId.value = syncRuntimeVisualActivity(
+        visualActiveTurnId.value,
+        event.payload,
+      )
       if (!event.payload.sequenceConsistent) void recoverRuntimeSnapshot()
-      if (event.payload.phase === 'idle') void consumeQueuedInput()
+      if (event.payload.phase === 'idle' && visualActiveTurnId.value === null) {
+        void consumeQueuedInput()
+      }
     }
   })
   unlistenEvent = await listen<RuntimeEventEnvelope[]>('engine-runtime-events', event => {

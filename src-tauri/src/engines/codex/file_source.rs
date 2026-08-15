@@ -341,6 +341,10 @@ impl ThreadBuilder {
                         .get("completed_at")
                         .and_then(timestamp_value)
                         .or(self.turns[index].completed_at);
+                    self.turns[index].error = payload
+                        .get("error")
+                        .filter(|error| !error.is_null())
+                        .cloned();
                 }
             }
             Some("user_message") => {
@@ -403,6 +407,7 @@ impl ThreadBuilder {
             items: Vec::new(),
             started_at,
             completed_at: None,
+            error: None,
         });
     }
 
@@ -810,6 +815,34 @@ fn bounded_preview(value: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserves_task_completion_error_on_its_turn() {
+        let mut builder = ThreadBuilder::new(Path::new("fixture.jsonl"));
+        builder.consume(
+            &json!({
+                "type": "event_msg",
+                "payload": { "type": "task_started", "turn_id": "turn-1" }
+            }),
+            1,
+        );
+        builder.consume(
+            &json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "turn-1",
+                    "error": { "message": "request failed" }
+                }
+            }),
+            2,
+        );
+
+        assert_eq!(
+            builder.turns[0].error,
+            Some(json!({ "message": "request failed" }))
+        );
+    }
 
     #[test]
     fn normalized_content_preserves_user_image_data() {

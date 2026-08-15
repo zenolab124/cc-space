@@ -67,6 +67,8 @@ pub(super) struct CodexTurn {
     pub(super) started_at: Option<i64>,
     #[serde(default)]
     pub(super) completed_at: Option<i64>,
+    #[serde(default)]
+    pub(super) error: Option<Value>,
 }
 
 type ThreadCache = Arc<Mutex<Option<(Instant, Vec<CodexThread>)>>>;
@@ -389,6 +391,9 @@ impl CodexSource {
                     record.usage = snapshot.usage.clone();
                 }
             }
+            if let Some(record) = map_turn_error(session, &turn)? {
+                turn_records.push(record);
+            }
             records.extend(turn_records);
         }
         Ok(records)
@@ -414,6 +419,43 @@ impl CodexSource {
             Err(_) => ActionAvailability::unavailable("engine.codex.accountProbeFailed"),
         }
     }
+}
+
+fn error_message(value: &Value) -> Option<String> {
+    match value {
+        Value::String(message) => (!message.trim().is_empty()).then(|| message.clone()),
+        Value::Object(object) => object
+            .get("message")
+            .and_then(error_message)
+            .or_else(|| object.get("error").and_then(error_message)),
+        _ => None,
+    }
+}
+
+fn map_turn_error(
+    session: &SessionRef,
+    turn: &CodexTurn,
+) -> EngineResult<Option<ConversationRecord>> {
+    let Some(message) = turn.error.as_ref().and_then(error_message) else {
+        return Ok(None);
+    };
+    Ok(Some(ConversationRecord {
+        id: format!("turn-error-{}", turn.id),
+        session: session.clone(),
+        turn_id: Some(turn.id.clone()),
+        parent_id: None,
+        role: ConversationRole::System,
+        timestamp: turn.completed_at.or(turn.started_at).map(epoch_seconds),
+        segments: vec![Segment::Text {
+            text: bounded_segment_text(message),
+            phase: Some(TextPhase::Final),
+        }],
+        usage: None,
+        source_meta: SourceMetadata::new(BTreeMap::from([(
+            "turnError".to_string(),
+            Value::Bool(true),
+        )]))?,
+    }))
 }
 
 impl SessionSource for CodexSource {
@@ -1635,6 +1677,34 @@ mod tests {
         let asset = decode_data_url_asset("data:image/png;base64,aW1hZ2U=").unwrap();
         assert_eq!(asset.media_type, "image/png");
         assert_eq!(asset.bytes, b"image");
+    }
+
+    #[test]
+    fn maps_turn_error_to_a_turn_scoped_system_record() {
+        let session = SessionRef::new(default_instance().unwrap(), "session").unwrap();
+        let turn = CodexTurn {
+            id: "turn-1".into(),
+            items: Vec::new(),
+            started_at: Some(1),
+            completed_at: Some(2),
+            error: Some(json!({ "message": "request failed" })),
+        };
+
+        let record = map_turn_error(&session, &turn).unwrap().unwrap();
+        assert_eq!(record.id, "turn-error-turn-1");
+        assert_eq!(record.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(record.role, ConversationRole::System);
+        assert_eq!(
+            record.segments,
+            vec![Segment::Text {
+                text: "request failed".into(),
+                phase: Some(TextPhase::Final),
+            }]
+        );
+        assert_eq!(
+            record.source_meta.values().get("turnError"),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]

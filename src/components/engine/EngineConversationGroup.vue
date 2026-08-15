@@ -20,6 +20,7 @@ import {
 } from '@/composables/useToolDisplay'
 import ConversationTurn from '@/components/session/ConversationTurn.vue'
 import ContentBlockList from '@/components/ContentBlockList.vue'
+import SessionContentState from '@/components/session/SessionContentState.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import ArtifactPreviewList from '@/components/artifacts/ArtifactPreviewList.vue'
 import { detectEngineSegmentArtifacts } from '@/features/artifact-preview/detectArtifacts'
@@ -60,14 +61,22 @@ const optimisticImages = computed(() => props.records
   }))
 
 const responseRecords = computed(() => props.records
-  .filter(record => record.role !== 'user')
+  .filter(record => record.role !== 'user' && record.sourceMeta.turnError !== true)
   .map(record => ({
     ...record,
     segments: record.segments.filter(isRenderable),
   }))
   .filter(record => record.segments.length > 0))
 
-const responseTimeline = computed(() => props.records.filter(record => record.role !== 'user'))
+const responseTimeline = computed(() => props.records
+  .filter(record => record.role !== 'user' && record.sourceMeta.turnError !== true))
+const turnError = computed(() => props.records
+  .filter(record => record.sourceMeta.turnError === true)
+  .flatMap(record => record.segments)
+  .filter((segment): segment is Extract<EngineSegment, { kind: 'text' }> => segment.kind === 'text')
+  .map(segment => segment.text.trim())
+  .filter(Boolean)
+  .join('\n'))
 const artifactCandidates = computed(() => props.streaming
   ? []
   : detectEngineSegmentArtifacts(responseTimeline.value.flatMap(record => record.segments)))
@@ -193,4 +202,5 @@ const turnView = computed<ConversationTurnView>(() => ({
       />
     </template>
   </ConversationTurn>
+  <SessionContentState v-if="turnError" tone="danger">{{ turnError }}</SessionContentState>
 </template>

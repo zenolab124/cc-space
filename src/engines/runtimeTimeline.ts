@@ -4,6 +4,7 @@ import type {
   EngineItemStatus,
   NormalizedRuntimeEvent,
   RuntimeEventEnvelope,
+  RuntimeSnapshot,
 } from './types'
 
 const OPTIMISTIC_RECORD = 'optimistic'
@@ -109,6 +110,73 @@ function ensureDeltaRecord(
   return record
 }
 
+function setTurnErrorRecord(
+  records: ConversationRecord[],
+  envelope: RuntimeEventEnvelope,
+  turnId: string,
+  message: string | null,
+): boolean {
+  const recordId = `turn-error-${turnId}`
+  const index = records.findIndex(record =>
+    record.id === recordId
+    || (record.turnId === turnId && record.sourceMeta.turnError === true),
+  )
+  const normalized = message?.trim() ?? ''
+  if (!normalized) {
+    if (index < 0) return false
+    records.splice(index, 1)
+    return true
+  }
+
+  const record: ConversationRecord = {
+    id: recordId,
+    session: envelope.session,
+    turnId,
+    parentId: null,
+    role: 'system',
+    timestamp: envelope.timestamp,
+    segments: [{ kind: 'text', text: normalized, phase: 'final' }],
+    usage: null,
+    sourceMeta: { turnError: true },
+  }
+  if (index < 0) records.push(record)
+  else records[index] = record
+  return true
+}
+
+/**
+ * 视觉运行状态只按事件通道的有序生命周期收口。普通快照可补上活动 turn，
+ * 但不能用提前到达的 idle 快照越过仍在排空的增量事件。
+ */
+export function reduceRuntimeVisualActivity(
+  activeTurnId: string | null,
+  event: NormalizedRuntimeEvent,
+): string | null {
+  switch (event.kind) {
+    case 'turnStarted':
+      return event.turnId
+    case 'turnCompleted':
+      return activeTurnId === event.turnId ? null : activeTurnId
+    case 'runtimeError':
+    case 'runtimeExited':
+    case 'sessionDetached':
+      return null
+    default:
+      return activeTurnId
+  }
+}
+
+export function syncRuntimeVisualActivity(
+  activeTurnId: string | null,
+  snapshot: RuntimeSnapshot,
+  authoritative = false,
+): string | null {
+  const snapshotTurnId = (
+    snapshot.phase === 'running' || snapshot.phase === 'awaitingInteraction'
+  ) ? snapshot.activeTurnId : null
+  return authoritative ? snapshotTurnId : snapshotTurnId ?? activeTurnId
+}
+
 /**
  * 标准运行时事件的唯一时间线 reducer。所有事件分支都在这里穷举，避免新增协议事件
  * 被某个会话界面静默忽略。
@@ -140,8 +208,8 @@ export function reduceRuntimeTimeline(
       break
     case 'turnCompleted':
       changed = bindLatestOptimisticUser(records, event.turnId)
+      changed = setTurnErrorRecord(records, envelope, event.turnId, event.error) || changed
       completedTurnId = event.turnId
-      error = event.error
       break
     case 'runtimeError':
       error = event.message

@@ -6,11 +6,14 @@ import {
   optimisticUserSourceMeta,
   reconcileLiveRecords,
   reduceRuntimeTimeline,
+  reduceRuntimeVisualActivity,
+  syncRuntimeVisualActivity,
 } from '../../src/engines/runtimeTimeline'
 import type {
   ConversationRecord,
   NormalizedRuntimeEvent,
   RuntimeEventEnvelope,
+  RuntimeSnapshot,
   SessionRef,
 } from '../../src/engines/types'
 
@@ -118,6 +121,33 @@ describe('standard runtime timeline reducer', () => {
     expect(changed.refreshActions).toBe(true)
   })
 
+  it('anchors a failed completion to its turn without leaking it into the next turn', () => {
+    const failed = reduceRuntimeTimeline([], envelope({
+      kind: 'turnCompleted',
+      turnId: 'turn-1',
+      status: 'failed',
+      error: 'request failed',
+    }))
+    expect(failed.error).toBeNull()
+    expect(failed.records).toEqual([expect.objectContaining({
+      id: 'turn-error-turn-1',
+      role: 'system',
+      turnId: 'turn-1',
+      sourceMeta: { turnError: true },
+      segments: [{ kind: 'text', text: 'request failed', phase: 'final' }],
+    })])
+
+    const succeeded = reduceRuntimeTimeline(failed.records, envelope({
+      kind: 'turnCompleted',
+      turnId: 'turn-2',
+      status: 'completed',
+      error: null,
+    }))
+    expect(succeeded.error).toBeNull()
+    expect(succeeded.records).toHaveLength(1)
+    expect(succeeded.records[0].turnId).toBe('turn-1')
+  })
+
   it('scopes repeated item ids to their own turn', () => {
     const previous = record({
       id: 'shared-item',
@@ -149,6 +179,48 @@ describe('standard runtime timeline reducer', () => {
     }))
     expect(completed.changed).toBe(false)
     expect(completed.records[0].segments[0]).toMatchObject({ status: 'running' })
+  })
+})
+
+describe('runtime visual activity', () => {
+  function runtimeSnapshot(overrides: Partial<RuntimeSnapshot>): RuntimeSnapshot {
+    return {
+      session,
+      runtimeId: 'runtime-1',
+      generation: 1,
+      lastSequence: 1,
+      sequenceConsistent: true,
+      phase: 'idle',
+      activeTurnId: null,
+      pendingInteractions: [],
+      lastError: null,
+      ...overrides,
+    }
+  }
+
+  it('waits for the ordered completion event when an idle snapshot arrives first', () => {
+    let activeTurnId = reduceRuntimeVisualActivity(null, {
+      kind: 'turnStarted',
+      turnId: 'turn-1',
+    })
+    activeTurnId = syncRuntimeVisualActivity(activeTurnId, runtimeSnapshot({ phase: 'idle' }))
+    expect(activeTurnId).toBe('turn-1')
+
+    activeTurnId = reduceRuntimeVisualActivity(activeTurnId, {
+      kind: 'turnCompleted',
+      turnId: 'turn-1',
+      status: 'completed',
+      error: null,
+    })
+    expect(activeTurnId).toBeNull()
+  })
+
+  it('uses an authoritative recovery snapshot to reset stale activity', () => {
+    expect(syncRuntimeVisualActivity(
+      'turn-1',
+      runtimeSnapshot({ phase: 'idle' }),
+      true,
+    )).toBeNull()
   })
 })
 

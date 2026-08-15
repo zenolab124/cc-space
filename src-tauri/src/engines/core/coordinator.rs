@@ -561,6 +561,7 @@ fn apply_event(snapshot: &mut RuntimeSnapshot, event: NormalizedRuntimeEvent) {
         NormalizedRuntimeEvent::TurnStarted { turn_id } => {
             snapshot.phase = RuntimePhase::Running;
             snapshot.active_turn_id = Some(turn_id);
+            snapshot.last_error = None;
         }
         NormalizedRuntimeEvent::InteractionRequested { request } => {
             snapshot.phase = RuntimePhase::AwaitingInteraction;
@@ -726,6 +727,33 @@ mod tests {
         let snapshot = coordinator.snapshot(&session).unwrap();
         assert_eq!(snapshot.phase, RuntimePhase::Idle);
         assert!(snapshot.active_turn_id.is_none());
+    }
+
+    #[test]
+    fn starting_a_new_turn_clears_the_previous_turn_error() {
+        let coordinator = RuntimeCoordinator::new(Arc::new(EngineRegistry::new()));
+        let session = envelope(1, 1, NormalizedRuntimeEvent::CapabilitiesChanged).session;
+        coordinator.ingest(envelope(
+            1,
+            1,
+            NormalizedRuntimeEvent::TurnCompleted {
+                turn_id: "failed".into(),
+                status: super::super::TurnStatus::Failed,
+                error: Some("request failed".into()),
+            },
+        ));
+        coordinator.ingest(envelope(
+            1,
+            2,
+            NormalizedRuntimeEvent::TurnStarted {
+                turn_id: "next".into(),
+            },
+        ));
+
+        let snapshot = coordinator.snapshot(&session).unwrap();
+        assert_eq!(snapshot.phase, RuntimePhase::Running);
+        assert_eq!(snapshot.active_turn_id.as_deref(), Some("next"));
+        assert!(snapshot.last_error.is_none());
     }
 
     #[test]
