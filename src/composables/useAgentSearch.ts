@@ -7,10 +7,6 @@ interface SmartSearchResult extends SearchResult {
   summary: string | null
 }
 
-const MODELS = ['sonnet', 'haiku', 'opus'] as const
-type AgentModel = typeof MODELS[number]
-
-const agentModel = ref<AgentModel>('sonnet')
 const agentResult = ref<SearchResult | null>(null)
 const agentSearching = ref(false)
 const agentError = ref<string | null>(null)
@@ -37,7 +33,6 @@ async function startAgentSearch(question: string) {
     const r = await invoke<SmartSearchResult>('smart_search', {
       question,
       filter: { projectId: null, days: null, titleOnly: false },
-      model: agentModel.value,
     })
     agentTermGroups.value = r.termGroups ?? []
     agentSummary.value = r.summary ?? null
@@ -54,8 +49,6 @@ export function useAgentSearch() {
     agentResult,
     agentSearching,
     agentError,
-    agentModel,
-    MODELS,
     agentTermGroups,
     agentAllTerms,
     agentSummary,

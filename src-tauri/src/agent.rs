@@ -180,6 +180,7 @@ fn write_line(stdin: &mut ChildStdin, msg: &Value) -> Result<(), String> {
 
 struct AgentCallResult {
     text: String,
+    engine_id: String,
     channel_id: String,
     model: String,
     usage: Option<ApiUsage>,
@@ -203,9 +204,38 @@ impl From<String> for CliCallError {
 
 /// Agent 服务的公开入口——经 fallback 链调度
 pub(crate) fn request_blocking_pub(prompt: &str) -> Result<String, String> {
+    if crate::channels::default_agent_engine() == "codex" {
+        return request_codex(prompt, "language_intent")
+            .map(|result| result.text)
+            .map_err(|error| error.message);
+    }
     request_with_fallback(prompt, HTTP_FALLBACK_AGENT_MODEL, 2048)
         .map(|r| r.text)
         .map_err(|e| e.message)
+}
+
+fn request_codex(prompt: &str, agent_key: &str) -> Result<AgentCallResult, CliCallError> {
+    let selection = crate::channels::resolve_agent_runtime_selection(agent_key)
+        .map_err(|error| CliCallError {
+            message: error.message,
+            session_id: None,
+        })?;
+    let result = crate::engines::codex::request_agent(
+        prompt,
+        &selection.channel_id,
+        selection.model.as_deref(),
+        selection.effort.as_deref(),
+        crate::channels::agent_session_persist(),
+    )
+    .map_err(CliCallError::from)?;
+    Ok(AgentCallResult {
+        text: result.text,
+        engine_id: "codex".to_string(),
+        channel_id: selection.channel_id,
+        model: result.model,
+        usage: result.usage,
+        session_id: result.session_id,
+    })
 }
 
 fn call_channel(
@@ -225,6 +255,7 @@ fn call_channel(
         )?;
         Ok(AgentCallResult {
             text: r.text,
+            engine_id: "claude-code".to_string(),
             channel_id,
             model: model.to_string(),
             usage: r.usage,
@@ -242,6 +273,7 @@ fn call_channel(
         )?;
         Ok(AgentCallResult {
             text,
+            engine_id: "claude-code".to_string(),
             channel_id,
             model: model.to_string(),
             usage,
@@ -264,12 +296,14 @@ fn request_with_fallback(prompt: &str, model: &str, max_tokens: u32) -> Result<A
     }
     let settings = crate::channels::load_app_settings();
     let effort = settings
-        .default_agent_effort
-        .as_deref()
+        .default_agent_efforts
+        .get("claude-code")
+        .and_then(|value| value.as_deref())
         .unwrap_or("low");
     let r = request_blocking_with(prompt, OFFICIAL_AGENT_MODEL, effort, false)?;
     Ok(AgentCallResult {
         text: r.text,
+        engine_id: "claude-code".to_string(),
         channel_id: "official".to_string(),
         model: OFFICIAL_AGENT_MODEL.to_string(),
         usage: r.usage,
@@ -277,7 +311,7 @@ fn request_with_fallback(prompt: &str, model: &str, max_tokens: u32) -> Result<A
     })
 }
 
-fn request_for_agent(prompt: &str, agent_key: &str) -> Result<String, String> {
+pub(crate) fn request_for_agent(prompt: &str, agent_key: &str) -> Result<String, String> {
     request_for_agent_result(prompt, agent_key, 2048).map(|result| result.text)
 }
 
@@ -286,11 +320,46 @@ fn request_for_agent_result(
     agent_key: &str,
     max_tokens: u32,
 ) -> Result<AgentCallResult, String> {
+    if crate::channels::default_agent_engine() == "codex" {
+        let start = std::time::Instant::now();
+        return match request_codex(prompt, agent_key) {
+            Ok(result) => {
+                record_log(
+                    agent_key,
+                    &result.engine_id,
+                    &result.channel_id,
+                    &result.model,
+                    start.elapsed().as_millis() as u64,
+                    result.usage.as_ref(),
+                    true,
+                    None,
+                    result.session_id.as_deref(),
+                );
+                Ok(result)
+            }
+            Err(error) => {
+                let selection = crate::channels::resolve_agent_runtime_selection(agent_key).ok();
+                record_log(
+                    agent_key,
+                    "codex",
+                    selection.as_ref().map(|value| value.channel_id.as_str()).unwrap_or(""),
+                    selection.as_ref().and_then(|value| value.model.as_deref()).unwrap_or(""),
+                    start.elapsed().as_millis() as u64,
+                    None,
+                    false,
+                    Some(&error.message),
+                    error.session_id.as_deref(),
+                );
+                Err(error.message)
+            }
+        };
+    }
     let fell_back = match crate::channels::resolve_agent_for_feature_logged(agent_key) {
         Ok(None) => false,
         Err(e) => {
             record_log(
                 agent_key,
+                "claude-code",
                 &e.channel_id,
                 "",
                 0,
@@ -331,6 +400,7 @@ fn request_for_agent_result(
                     let duration_ms = start.elapsed().as_millis() as u64;
                     record_log(
                         agent_key,
+                        "claude-code",
                         &result.channel_id,
                         &result.model,
                         duration_ms,
@@ -349,6 +419,7 @@ fn request_for_agent_result(
                     );
                     record_log(
                         agent_key,
+                        "claude-code",
                         &channel_id,
                         &effective_model,
                         duration_ms,
@@ -368,14 +439,17 @@ fn request_for_agent_result(
     } else {
         "official"
     };
+    let settings = crate::channels::load_app_settings();
+    let effort = settings
+        .default_agent_efforts
+        .get("claude-code")
+        .and_then(|value| value.as_deref())
+        .unwrap_or("low");
     request_logged_cli(
         agent_key,
         prompt,
         OFFICIAL_AGENT_MODEL,
-        crate::channels::load_app_settings()
-            .default_agent_effort
-            .as_deref()
-            .unwrap_or("low"),
+        effort,
         channel_id,
         false,
     )
@@ -673,90 +747,9 @@ pub fn extract_search_terms(question: &str, model: &str, effort: &str) -> Result
     Ok(terms)
 }
 
-/// 智能搜索专用：跟随会话默认渠道；非跟随 CLI 渠道失败后回落 CLI，并分别记账。
-fn request_logged(feature: &str, prompt: &str, model: &str, effort: &str) -> Result<AgentCallResult, String> {
-    let fell_back = match crate::channels::resolve_session_credentials(model) {
-        Ok(None) => false,
-        Err(e) => {
-            record_log(
-                feature,
-                &e.channel_id,
-                "",
-                0,
-                None,
-                false,
-                Some(&e.message),
-                None,
-            );
-            true
-        }
-        Ok(Some(cred)) if cred.id == crate::channels::OFFICIAL_ID => {
-            return request_logged_cli(feature, prompt, model, effort, "official", false);
-        }
-        Ok(Some(cred)) if cred.id == crate::channels::OFFICIAL_DIRECT_ID => {
-            match request_logged_cli(
-                feature,
-                prompt,
-                model,
-                effort,
-                crate::channels::OFFICIAL_DIRECT_ID,
-                true,
-            ) {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    eprintln!(
-                        "[agent] session channel {} failed for {}, fallback: {}",
-                        crate::channels::OFFICIAL_DIRECT_ID,
-                        feature,
-                        e
-                    );
-                    true
-                }
-            }
-        }
-        Ok(Some(cred)) => {
-            let channel_id = cred.id.clone();
-            let effective_model = cred.agent_model.as_deref().unwrap_or(model).to_string();
-            let start = std::time::Instant::now();
-            match call_channel(&cred, prompt, &effective_model, effort, 2048) {
-                Ok(result) => {
-                    let duration_ms = start.elapsed().as_millis() as u64;
-                    record_log(
-                        feature,
-                        &result.channel_id,
-                        &result.model,
-                        duration_ms,
-                        result.usage.as_ref(),
-                        true,
-                        None,
-                        result.session_id.as_deref(),
-                    );
-                    return Ok(result);
-                }
-                Err(e) => {
-                    let duration_ms = start.elapsed().as_millis() as u64;
-                    eprintln!(
-                        "[agent] session channel {} failed for {}, fallback: {}",
-                        channel_id, feature, e.message
-                    );
-                    record_log(
-                        feature,
-                        &channel_id,
-                        &effective_model,
-                        duration_ms,
-                        None,
-                        false,
-                        Some(&e.message),
-                        e.session_id.as_deref(),
-                    );
-                    true
-                }
-            }
-        }
-    };
-
-    let channel_id = if fell_back { "official(fallback)" } else { "official" };
-    request_logged_cli(feature, prompt, model, effort, channel_id, false)
+/// 智能搜索与其他增强能力一致，跟随当前增强引擎及其独立默认值。
+fn request_logged(feature: &str, prompt: &str, _model: &str, _effort: &str) -> Result<AgentCallResult, String> {
+    request_for_agent_result(prompt, feature, 2048)
 }
 
 fn request_logged_cli(
@@ -774,6 +767,7 @@ fn request_logged_cli(
         Ok(r) => {
             record_log(
                 feature,
+                "claude-code",
                 channel_id,
                 model,
                 duration_ms,
@@ -784,6 +778,7 @@ fn request_logged_cli(
             );
             Ok(AgentCallResult {
                 text: r.text,
+                engine_id: "claude-code".to_string(),
                 channel_id: channel_id.to_string(),
                 model: model.to_string(),
                 usage: r.usage,
@@ -793,6 +788,7 @@ fn request_logged_cli(
         Err(e) => {
             record_log(
                 feature,
+                "claude-code",
                 channel_id,
                 model,
                 duration_ms,
@@ -854,6 +850,8 @@ fn logs_path() -> std::path::PathBuf {
 pub struct AgentLog {
     pub timestamp: String,
     pub feature: String,
+    #[serde(default = "default_agent_log_engine")]
+    pub engine_id: String,
     pub channel_id: String,
     pub model: String,
     pub duration_ms: u64,
@@ -865,6 +863,10 @@ pub struct AgentLog {
     /// 官方 CLI 路径的落盘会话 ID，「查看会话」据此定位 JSONL
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+}
+
+fn default_agent_log_engine() -> String {
+    "claude-code".to_string()
 }
 
 static LOGS: Mutex<Option<Vec<AgentLog>>> = Mutex::new(None);
@@ -890,6 +892,7 @@ fn save_logs(logs: &[AgentLog]) {
 #[allow(clippy::too_many_arguments)]
 fn record_log(
     feature: &str,
+    engine_id: &str,
     channel_id: &str,
     model: &str,
     duration_ms: u64,
@@ -901,6 +904,7 @@ fn record_log(
     let log = AgentLog {
         timestamp: chrono::Utc::now().to_rfc3339(),
         feature: feature.to_string(),
+        engine_id: engine_id.to_string(),
         channel_id: channel_id.to_string(),
         model: model.to_string(),
         duration_ms,
@@ -924,6 +928,7 @@ fn record_log(
 #[serde(rename_all = "camelCase")]
 pub struct AgentTestResult {
     pub success: bool,
+    pub engine_id: String,
     pub channel_id: String,
     pub model: String,
     pub duration_ms: u64,
@@ -946,6 +951,7 @@ pub async fn test_agent_channel() -> AgentTestResult {
     match result {
         Ok(r) => AgentTestResult {
             success: true,
+            engine_id: r.engine_id,
             channel_id: r.channel_id,
             model: r.model,
             duration_ms,
@@ -956,6 +962,7 @@ pub async fn test_agent_channel() -> AgentTestResult {
         },
         Err(message) => AgentTestResult {
             success: false,
+            engine_id: crate::channels::default_agent_engine(),
             channel_id: String::new(),
             model: String::new(),
             duration_ms,
@@ -978,4 +985,26 @@ pub fn clear_agent_logs() {
         logs.clear();
         save_logs(logs);
     });
+}
+
+#[cfg(test)]
+mod agent_log_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_agent_log_defaults_to_claude_engine() {
+        let log: AgentLog = serde_json::from_value(serde_json::json!({
+            "timestamp": "2026-01-01T00:00:00Z",
+            "feature": "title",
+            "channelId": "official",
+            "model": "haiku",
+            "durationMs": 1,
+            "inputTokens": 2,
+            "outputTokens": 3,
+            "success": true
+        }))
+        .unwrap();
+
+        assert_eq!(log.engine_id, "claude-code");
+    }
 }

@@ -155,6 +155,8 @@
 
 > Monet 不内置任何模型、不收 AI 费用——所有 AI 能力走你自己配置的渠道和额度（BYOAI），每项可单独开关，调用有完整账本（渠道/模型/耗时/token/成败）可审计。
 
+- 智能增强引擎可选 Claude Code 或 Codex：标题、标签、摘要、权限批注、搜索归纳、cron 解析与界面翻译统一跟随所选引擎；两套默认渠道/模型/思考强度和逐功能偏好彼此独立，切换不覆盖
+- Codex 智能增强复用本机官方 `codex app-server`、现有登录态与模型目录；官方及启用了 Codex adapter 的第三方渠道都可选
 - 自动会话标题：告别满屏「New session」；手动改过的不再覆盖
 - 自动标签、自动摘要（摘要在监控卡和列表里随处可用）
 - 权限风险批注：审批弹窗上 AI 用人话告诉你这条命令要干什么
@@ -178,7 +180,7 @@
 - 统一渠道 CRUD：每个渠道只保存一份 Base URL、API Key 和完整模型目录，再声明是否启用 Claude Code、Codex 或两者；不启用会话引擎时仍可用于智能增强
 - Claude Code adapter 固定走 Messages API：模型 ID 默认直接透传，Opus / Sonnet / Haiku 等角色映射只增加快捷语义，不会隐藏渠道里的其余模型
 - Codex adapter 固定注入 Responses Provider，不改写 Codex 的 `config.toml`；渠道模型目录全部进入 Codex 模型选择器，无需 Claude 式角色映射
-- 会话默认连接、模型与思考强度按引擎独立保存；智能增强的默认值和逐功能偏好另行配置，不寄生在 Claude Code 绑定中
+- 会话默认连接、模型与思考强度按引擎独立保存；智能增强也按 Claude Code / Codex 独立保存默认值和逐功能偏好，不寄生在任一会话引擎绑定中
 - 凭据安全红线：token 只在渠道连接中保存一份、不进命令行参数；Claude 运行时临时文件即用即删，Codex Provider 通过命令式认证按需取用
 - 渠道支持在线探测与完整模型列表拉取
 - Apple 本地模型：检测到 Apple Foundation Models 可用时自动注册为免费本地渠道

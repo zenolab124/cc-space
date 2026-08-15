@@ -19,7 +19,7 @@ fn build_translate_prompt(source_json: &str, target_lang: &str, target_native: &
         Rules:\n\
         - Translate ONLY the string values, keep all keys exactly the same\n\
         - Keep {{variable}} placeholders like {{count}}, {{name}}, {{n}} unchanged\n\
-        - Keep technical terms (Claude, API, JSON, MCP, Tauri, JSONL, CLI, Token, Remote Control, etc.) unchanged\n\
+        - Keep technical terms (Claude, Codex, API, JSON, MCP, Tauri, JSONL, CLI, Token, Remote Control, etc.) unchanged\n\
         - Keep symbols like ✓, ✗, ⚠, ▲, ▼, → unchanged\n\
         - Output ONLY valid JSON — no markdown fences, no explanation\n\
         - The translation should feel natural in {target_lang}\n\n\
@@ -310,7 +310,10 @@ pub async fn translate_locale(
     tauri::async_runtime::spawn_blocking(move || {
         eprintln!("[translate] target={} ({}) code={}", target_lang, target_native, lang_code);
 
-        let raw = if let Some(cred) = resolve_agent_for_feature("translate") {
+        let raw = if crate::channels::default_agent_engine() == "codex" {
+            let prompt = build_translate_prompt(&source_json, &target_lang, &target_native);
+            crate::agent::request_for_agent(&prompt, "translate")?
+        } else if let Some(cred) = resolve_agent_for_feature("translate") {
             do_translate(&cred, &source_json, &target_lang, &target_native)?
         } else {
             translate_via_cli(&source_json, &target_lang, &target_native)?

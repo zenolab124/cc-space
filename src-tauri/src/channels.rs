@@ -256,12 +256,25 @@ pub struct AppSettings {
     /// 按引擎保存会话默认模型/思考强度；键存在且值为 null 表示显式跟随引擎默认。
     pub default_session_models: BTreeMap<String, Option<String>>,
     pub default_session_efforts: BTreeMap<String, Option<String>>,
+    /// 旧版智能增强单引擎默认值。只读用于迁移，不再写回 settings.json。
+    #[serde(skip_serializing)]
     pub default_agent_channel: Option<String>,
+    #[serde(skip_serializing)]
     pub default_agent_model: Option<String>,
+    #[serde(skip_serializing)]
     pub default_agent_effort: Option<String>,
+    /// 智能增强当前使用的引擎；旧设置缺省时迁移为 Claude Code。
+    pub default_agent_engine: Option<String>,
+    /// 智能增强默认连接、模型和思考强度按引擎分槽，切换引擎不覆盖另一套配置。
+    pub default_agent_channels: BTreeMap<String, Option<String>>,
+    pub default_agent_models: BTreeMap<String, Option<String>>,
+    pub default_agent_efforts: BTreeMap<String, Option<String>>,
     pub channels: BTreeMap<String, ChannelMeta>,
     pub agent_toggles: BTreeMap<String, bool>,
+    /// 旧版单层功能偏好。只读迁移到 Claude Code 分槽。
+    #[serde(skip_serializing)]
     pub agent_preferences: BTreeMap<String, AgentFeaturePrefs>,
+    pub agent_preferences_by_engine: BTreeMap<String, BTreeMap<String, AgentFeaturePrefs>>,
     /// 内置 Agent 走官方 CLI 时是否保留会话落盘（可追溯）。None = 默认落盘
     pub agent_session_persist: Option<bool>,
     #[serde(flatten)]
@@ -292,16 +305,23 @@ fn clear_channel_references(settings: &mut AppSettings, id: &str) -> bool {
         settings.default_session_efforts.insert(engine, None);
         changed = true;
     }
-    if settings.default_agent_channel.as_deref() == Some(id) {
-        settings.default_agent_channel = None;
-        settings.default_agent_model = None;
+    let affected_agent_engines: Vec<String> = settings.default_agent_channels.iter()
+        .filter(|(_, channel)| channel.as_deref() == Some(id))
+        .map(|(engine, _)| engine.clone())
+        .collect();
+    for engine in affected_agent_engines {
+        settings.default_agent_channels.insert(engine.clone(), None);
+        settings.default_agent_models.insert(engine.clone(), None);
+        settings.default_agent_efforts.insert(engine, None);
         changed = true;
     }
-    for prefs in settings.agent_preferences.values_mut() {
-        if prefs.preferred_channel.as_deref() == Some(id) {
-            prefs.preferred_channel = None;
-            prefs.preferred_model = None;
-            changed = true;
+    for preferences in settings.agent_preferences_by_engine.values_mut() {
+        for prefs in preferences.values_mut() {
+            if prefs.preferred_channel.as_deref() == Some(id) {
+                prefs.preferred_channel = None;
+                prefs.preferred_model = None;
+                changed = true;
+            }
         }
     }
     changed
@@ -350,6 +370,45 @@ pub(crate) fn load_app_settings() -> AppSettings {
         }
     }
 
+    // 迁移智能增强：旧版只有 Claude Code 一套默认值和功能偏好。
+    let agent_engine = settings
+        .default_agent_engine
+        .as_deref()
+        .filter(|engine| matches!(*engine, "claude-code" | "codex"))
+        .unwrap_or("claude-code")
+        .to_string();
+    if settings.default_agent_engine.as_deref() != Some(agent_engine.as_str()) {
+        settings.default_agent_engine = Some(agent_engine);
+        migrated = true;
+    }
+    if !settings.default_agent_channels.contains_key("claude-code") {
+        if let Some(channel) = settings.default_agent_channel.clone() {
+            settings.default_agent_channels.insert("claude-code".into(), Some(channel));
+            migrated = true;
+        }
+    }
+    if !settings.default_agent_models.contains_key("claude-code")
+        && settings.default_agent_model.is_some()
+    {
+        settings.default_agent_models.insert("claude-code".into(), settings.default_agent_model.clone());
+        migrated = true;
+    }
+    if !settings.default_agent_efforts.contains_key("claude-code")
+        && settings.default_agent_effort.is_some()
+    {
+        settings.default_agent_efforts.insert("claude-code".into(), settings.default_agent_effort.clone());
+        migrated = true;
+    }
+    if !settings.agent_preferences.is_empty()
+        && !settings.agent_preferences_by_engine.contains_key("claude-code")
+    {
+        settings.agent_preferences_by_engine.insert(
+            "claude-code".into(),
+            settings.agent_preferences.clone(),
+        );
+        migrated = true;
+    }
+
     // 内置渠道由运行能力决定，不参与普通渠道的启停生命周期。
     for id in [OFFICIAL_ID, OFFICIAL_DIRECT_ID, APPLE_FM_ID] {
         if settings
@@ -372,12 +431,11 @@ pub(crate) fn load_app_settings() -> AppSettings {
         migrated |= clear_channel_references(&mut settings, &id);
     }
 
-    if settings.default_agent_channel.is_none() && settings.default_agent_model.take().is_some() {
-        migrated = true;
-    }
-    for prefs in settings.agent_preferences.values_mut() {
-        if prefs.preferred_channel.is_none() && prefs.preferred_model.take().is_some() {
-            migrated = true;
+    for preferences in settings.agent_preferences_by_engine.values_mut() {
+        for prefs in preferences.values_mut() {
+            if prefs.preferred_channel.is_none() && prefs.preferred_model.take().is_some() {
+                migrated = true;
+            }
         }
     }
 
@@ -452,50 +510,70 @@ pub struct AgentChannelResolveError {
     pub message: String,
 }
 
-/// 解析会话默认渠道凭据，供智能搜索等跟随会话默认值的功能使用。
-pub fn resolve_session_credentials(
-    requested_model: &str,
-) -> Result<Option<AgentChannelCredentials>, AgentChannelResolveError> {
+#[derive(Clone, Debug)]
+pub struct AgentRuntimeSelection {
+    pub engine_id: String,
+    pub channel_id: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+fn configured_agent_engine(settings: &AppSettings) -> &str {
+    settings
+        .default_agent_engine
+        .as_deref()
+        .filter(|engine| matches!(*engine, "claude-code" | "codex"))
+        .unwrap_or("claude-code")
+}
+
+pub fn default_agent_engine() -> String {
+    configured_agent_engine(&load_app_settings()).to_string()
+}
+
+pub fn resolve_agent_runtime_selection(
+    key: &str,
+) -> Result<AgentRuntimeSelection, AgentChannelResolveError> {
     let settings = load_app_settings();
-    let channel_id = settings
-        .default_session_channels
-        .get("claude-code")
-        .and_then(Option::as_deref)
-        .or(settings.default_session_channel.as_deref());
-    let Some(channel_id) = channel_id else {
-        return Ok(None);
-    };
-    let model = resolve_session_model(channel_id, requested_model);
-    resolve_channel_credentials_checked(channel_id, &settings, model).map(Some)
+    let engine_id = configured_agent_engine(&settings).to_string();
+    let preferences = settings
+        .agent_preferences_by_engine
+        .get(&engine_id)
+        .and_then(|features| features.get(key));
+    let channel_id = preferences
+        .and_then(|prefs| prefs.preferred_channel.clone())
+        .or_else(|| settings.default_agent_channels.get(&engine_id).cloned().flatten())
+        .unwrap_or_else(|| OFFICIAL_ID.to_string());
+    let model = preferences
+        .and_then(|prefs| prefs.preferred_model.clone())
+        .or_else(|| settings.default_agent_models.get(&engine_id).cloned().flatten());
+    let effort = settings.default_agent_efforts.get(&engine_id).cloned().flatten();
+
+    if !is_channel_enabled(&settings, &channel_id) {
+        return Err(AgentChannelResolveError {
+            channel_id,
+            message: "渠道已禁用".to_string(),
+        });
+    }
+    if engine_id == "codex" && !channel_supports_engine(&channel_id, "codex") {
+        return Err(AgentChannelResolveError {
+            channel_id,
+            message: "该渠道未启用 Codex".to_string(),
+        });
+    }
+    Ok(AgentRuntimeSelection { engine_id, channel_id, model, effort })
 }
 
 pub fn resolve_agent_for_feature_logged(
     key: &str,
 ) -> Result<Option<AgentChannelCredentials>, AgentChannelResolveError> {
-    let settings = load_app_settings();
-    let (channel_id, model) = settings
-        .agent_preferences
-        .get(key)
-        .and_then(|prefs| {
-            prefs
-                .preferred_channel
-                .as_deref()
-                .map(|channel| (channel, prefs.preferred_model.clone()))
-        })
-        .or_else(|| {
-            settings
-                .default_agent_channel
-                .as_deref()
-                .map(|channel| (channel, settings.default_agent_model.clone()))
-        })
-        .map_or((None, None), |(channel, model)| (Some(channel), model));
-
-    let Some(channel_id) = channel_id else {
+    let selection = resolve_agent_runtime_selection(key)?;
+    if selection.engine_id != "claude-code" {
         return Ok(None);
-    };
-    resolve_channel_credentials_checked(channel_id, &settings, model)
+    }
+    let settings = load_app_settings();
+    resolve_channel_credentials_checked(&selection.channel_id, &settings, selection.model)
         .map(|mut credentials| {
-            credentials.agent_effort = settings.default_agent_effort.clone();
+            credentials.agent_effort = selection.effort;
             credentials
         })
         .map(Some)
@@ -521,87 +599,30 @@ fn resolve_channel_credentials_checked(
     })
 }
 
-fn resolve_session_model(channel_id: &str, requested_model: &str) -> Option<String> {
-    let requested_model = requested_model.trim();
-    if requested_model.is_empty() {
-        return fallback_agent_model(channel_id);
-    }
-    if channel_id == APPLE_FM_ID {
-        return Some("system".to_string());
-    }
-    if channel_id == OFFICIAL_ID || channel_id == OFFICIAL_DIRECT_ID {
-        return Some(requested_model.to_string());
-    }
-
-    let parsed: Value = serde_json::from_str(
-        &fs::read_to_string(channel_file_path(channel_id)).ok()?,
-    )
-    .ok()?;
-    let env = parsed.get("env").and_then(Value::as_object);
-    let requested_lower = requested_model.to_ascii_lowercase();
-    let role = ["fable", "opus", "sonnet", "haiku"]
-        .into_iter()
-        .find(|role| requested_lower.contains(role));
-
-    if let Some(role) = role {
-        let key = format!("ANTHROPIC_DEFAULT_{}_MODEL", role.to_ascii_uppercase());
-        if let Some(model) = env
-            .and_then(|values| values.get(&key))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-        {
-            return Some(model.to_string());
-        }
-    }
-
-    let models = read_channel_ext(channel_id)
-        .map(|ext| ext.available_models)
-        .unwrap_or_default();
-    if let Some(model) = models.iter().find(|model| {
-        model.eq_ignore_ascii_case(requested_model)
-            || role.is_some_and(|role| model.to_ascii_lowercase().contains(role))
-    }) {
-        return Some(model.clone());
-    }
-
-    env.and_then(|values| values.get("ANTHROPIC_MODEL"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(String::from)
-        .or_else(|| models.first().cloned())
-        .or_else(|| Some(requested_model.to_string()))
-}
-
 /// Resolve single agent credentials from default settings
 pub fn resolve_agent_credentials() -> Option<AgentChannelCredentials> {
     let settings = load_app_settings();
-    let channel_id = settings.default_agent_channel.as_deref()?;
-    let model = settings.default_agent_model.clone();
+    if configured_agent_engine(&settings) != "claude-code" {
+        return None;
+    }
+    let channel_id = settings.default_agent_channels
+        .get("claude-code").and_then(Option::as_deref).unwrap_or(OFFICIAL_ID);
+    let model = settings.default_agent_models.get("claude-code").cloned().flatten();
     resolve_channel_credentials(channel_id, &settings, model).map(|mut credentials| {
-        credentials.agent_effort = settings.default_agent_effort.clone();
+        credentials.agent_effort = settings.default_agent_efforts.get("claude-code").cloned().flatten();
         credentials
     })
 }
 
 /// Resolve agent credentials for a specific feature, with fallback to default
 pub fn resolve_agent_for_feature(key: &str) -> Option<AgentChannelCredentials> {
-    let settings = load_app_settings();
-    // Per-feature override
-    if let Some(prefs) = settings.agent_preferences.get(key) {
-        if let Some(ch) = prefs.preferred_channel.as_deref() {
-            return resolve_channel_credentials(ch, &settings, prefs.preferred_model.clone()).map(|mut credentials| {
-                credentials.agent_effort = settings.default_agent_effort.clone();
-                credentials
-            });
-        }
+    let selection = resolve_agent_runtime_selection(key).ok()?;
+    if selection.engine_id != "claude-code" {
+        return None;
     }
-    // Fall back to default agent
-    let channel_id = settings.default_agent_channel.as_deref()?;
-    let model = settings.default_agent_model.clone();
-    resolve_channel_credentials(channel_id, &settings, model).map(|mut credentials| {
-        credentials.agent_effort = settings.default_agent_effort.clone();
+    let settings = load_app_settings();
+    resolve_channel_credentials(&selection.channel_id, &settings, selection.model).map(|mut credentials| {
+        credentials.agent_effort = selection.effort;
         credentials
     })
 }
@@ -784,6 +805,11 @@ pub struct ChannelListResult {
     pub default_session_efforts: BTreeMap<String, Option<String>>,
     /// 兼容旧前端；新前端使用 defaultSessionChannels。
     pub default_session_channel: Option<String>,
+    pub default_agent_engine: String,
+    pub default_agent_channels: BTreeMap<String, Option<String>>,
+    pub default_agent_models: BTreeMap<String, Option<String>>,
+    pub default_agent_efforts: BTreeMap<String, Option<String>>,
+    /// 兼容旧前端；值取当前智能增强引擎的分槽。
     pub default_agent_channel: Option<String>,
     pub default_agent_model: Option<String>,
     pub default_agent_effort: Option<String>,
@@ -975,6 +1001,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
 #[tauri::command]
 pub fn list_channels() -> ChannelListResult {
     let settings = load_app_settings();
+    let agent_engine = configured_agent_engine(&settings).to_string();
     let file_ids = scan_channel_ids();
     let mut channels = Vec::new();
 
@@ -1036,9 +1063,13 @@ pub fn list_channels() -> ChannelListResult {
             .cloned()
             .flatten()
             .or(settings.default_session_channel),
-        default_agent_channel: settings.default_agent_channel,
-        default_agent_model: settings.default_agent_model,
-        default_agent_effort: settings.default_agent_effort,
+        default_agent_engine: agent_engine.clone(),
+        default_agent_channels: settings.default_agent_channels.clone(),
+        default_agent_models: settings.default_agent_models.clone(),
+        default_agent_efforts: settings.default_agent_efforts.clone(),
+        default_agent_channel: settings.default_agent_channels.get(&agent_engine).cloned().flatten(),
+        default_agent_model: settings.default_agent_models.get(&agent_engine).cloned().flatten(),
+        default_agent_effort: settings.default_agent_efforts.get(&agent_engine).cloned().flatten(),
     }
 }
 
@@ -1467,7 +1498,24 @@ pub fn get_cli_env_target() -> Value {
 }
 
 #[tauri::command]
-pub fn set_default_agent_model(channel: Option<String>, model: Option<String>) -> Result<(), String> {
+pub fn set_default_agent_engine(engine: String) -> Result<(), String> {
+    if !matches!(engine.as_str(), "claude-code" | "codex") {
+        return Err("不支持的智能增强引擎".to_string());
+    }
+    let mut settings = load_app_settings();
+    settings.default_agent_engine = Some(engine);
+    save_app_settings(&settings)
+}
+
+#[tauri::command]
+pub fn set_default_agent_model(
+    engine: String,
+    channel: Option<String>,
+    model: Option<String>,
+) -> Result<(), String> {
+    if !matches!(engine.as_str(), "claude-code" | "codex") {
+        return Err("不支持的智能增强引擎".to_string());
+    }
     let mut settings = load_app_settings();
     let channel = channel.filter(|s| !s.is_empty());
     if channel
@@ -1476,13 +1524,24 @@ pub fn set_default_agent_model(channel: Option<String>, model: Option<String>) -
     {
         return Err("已禁用的渠道不能设为 Agent 默认渠道".to_string());
     }
-    settings.default_agent_model = model.filter(|s| !s.is_empty());
-    settings.default_agent_channel = channel;
+    if engine == "codex"
+        && channel.as_deref().is_some_and(|id| !channel_supports_engine(id, "codex"))
+    {
+        return Err("该渠道未启用 Codex，不能设为智能增强默认渠道".to_string());
+    }
+    settings.default_agent_models.insert(
+        engine.clone(),
+        model.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+    );
+    settings.default_agent_channels.insert(engine, channel);
     save_app_settings(&settings)
 }
 
 #[tauri::command]
-pub fn set_default_agent_effort(effort: Option<String>) -> Result<(), String> {
+pub fn set_default_agent_effort(engine: String, effort: Option<String>) -> Result<(), String> {
+    if !matches!(engine.as_str(), "claude-code" | "codex") {
+        return Err("不支持的智能增强引擎".to_string());
+    }
     let mut settings = load_app_settings();
     let effort = effort
         .map(|value| value.trim().to_ascii_lowercase())
@@ -1490,7 +1549,7 @@ pub fn set_default_agent_effort(effort: Option<String>) -> Result<(), String> {
     if let Some(value) = effort.as_deref() {
         validate_effort_value(value)?;
     }
-    settings.default_agent_effort = effort;
+    settings.default_agent_efforts.insert(engine, effort);
     save_app_settings(&settings)
 }
 
@@ -1529,11 +1588,23 @@ pub fn set_agent_session_persist(enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_agent_preferences() -> BTreeMap<String, AgentFeaturePrefs> {
-    load_app_settings().agent_preferences
+    let settings = load_app_settings();
+    settings.agent_preferences_by_engine
+        .get(configured_agent_engine(&settings))
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-pub fn set_agent_feature_model(key: String, channel: Option<String>, model: Option<String>) -> Result<(), String> {
+pub fn set_agent_feature_model(
+    engine: String,
+    key: String,
+    channel: Option<String>,
+    model: Option<String>,
+) -> Result<(), String> {
+    if !matches!(engine.as_str(), "claude-code" | "codex") {
+        return Err("不支持的智能增强引擎".to_string());
+    }
     let mut settings = load_app_settings();
     let channel = channel.filter(|s| !s.is_empty());
     if channel
@@ -1542,7 +1613,13 @@ pub fn set_agent_feature_model(key: String, channel: Option<String>, model: Opti
     {
         return Err("已禁用的渠道不能设为功能偏好".to_string());
     }
-    let prefs = settings.agent_preferences.entry(key).or_default();
+    if engine == "codex"
+        && channel.as_deref().is_some_and(|id| !channel_supports_engine(id, "codex"))
+    {
+        return Err("该渠道未启用 Codex，不能设为功能偏好".to_string());
+    }
+    let prefs = settings.agent_preferences_by_engine
+        .entry(engine).or_default().entry(key).or_default();
     prefs.preferred_model = if channel.is_some() {
         model.filter(|s| !s.is_empty())
     } else {
@@ -2233,5 +2310,28 @@ mod tests {
         );
         assert_eq!(work_proxy.source, "config");
         assert!(providers.iter().any(|provider| provider.id == "openai"));
+    }
+
+    #[test]
+    fn agent_engine_settings_serialize_only_multi_engine_slots() {
+        let mut settings = AppSettings {
+            default_agent_channel: Some("legacy-channel".into()),
+            default_agent_model: Some("legacy-model".into()),
+            default_agent_effort: Some("low".into()),
+            default_agent_engine: Some("codex".into()),
+            ..AppSettings::default()
+        };
+        settings.default_agent_channels.insert("codex".into(), Some("official".into()));
+        settings.default_agent_models.insert("codex".into(), Some("gpt-5.4".into()));
+        settings.default_agent_efforts.insert("codex".into(), Some("high".into()));
+
+        let value = serde_json::to_value(settings).unwrap();
+        assert!(value.get("defaultAgentChannel").is_none());
+        assert!(value.get("defaultAgentModel").is_none());
+        assert!(value.get("defaultAgentEffort").is_none());
+        assert_eq!(value["defaultAgentEngine"], "codex");
+        assert_eq!(value["defaultAgentChannels"]["codex"], "official");
+        assert_eq!(value["defaultAgentModels"]["codex"], "gpt-5.4");
+        assert_eq!(value["defaultAgentEfforts"]["codex"], "high");
     }
 }

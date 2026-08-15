@@ -37,9 +37,12 @@ const props = defineProps<{
   fastModeNotice?: string | null
   /** 设置页的默认智能增强配置；仍复用会话三段式交互，但不显示高级参数。 */
   defaultConfig?: {
+    engineId: 'claude-code' | 'codex'
+    engineName: string
     channelId: string | null
     modelId: string | null
     effort: EffortSetting
+    models?: EngineCapsuleConfig['models']
   }
   /** 窄列:胶囊收起渠道段,点任意段开全景 */
   narrow?: boolean
@@ -58,6 +61,7 @@ const { t } = useI18n()
 const { channels, defaultSessionChannel, defaultSessionChannels } = useChannels()
 const engineMode = computed(() => !!props.engineConfig)
 const standaloneMode = computed(() => !!props.defaultConfig)
+const standaloneEngineId = computed(() => props.defaultConfig?.engineId ?? 'claude-code')
 const capsuleCwd = computed(() => props.cwd ?? null)
 const { refreshCliDefaults } = useCliDefaults(capsuleCwd)
 
@@ -144,6 +148,31 @@ const channelOptions = computed(() => {
     }
     return result
   }
+  if (props.defaultConfig) {
+    const engineId = props.defaultConfig.engineId
+    const result = [{
+      id: OFFICIAL_CHANNEL_ID,
+      name: t('topbar.channelFollowEngine', { engine: props.defaultConfig.engineName }),
+    }]
+    if (engineId === 'claude-code') {
+      result.push({ id: OFFICIAL_DIRECT_CHANNEL_ID, name: t('topbar.channelOfficialDirect') })
+    }
+    for (const channel of channels.value) {
+      if (
+        channel.id !== OFFICIAL_CHANNEL_ID
+        && channel.id !== OFFICIAL_DIRECT_CHANNEL_ID
+        && channel.id !== APPLE_FM_CHANNEL_ID
+        && channel.enabled
+        && channelSupportsEngine(channel, engineId)
+      ) {
+        result.push({ id: channel.id, name: channel.name })
+      }
+    }
+    if (engineId === 'claude-code' && channels.value.some(channel => channel.id === APPLE_FM_CHANNEL_ID)) {
+      result.push({ id: APPLE_FM_CHANNEL_ID, name: 'Apple FM' })
+    }
+    return result
+  }
   const result: { id: string; name: string }[] = [
     { id: OFFICIAL_CHANNEL_ID, name: t('topbar.channelOfficial') },
     { id: OFFICIAL_DIRECT_CHANNEL_ID, name: t('topbar.channelOfficialDirect') },
@@ -195,11 +224,21 @@ const channelRef = computed<string | null>(() => props.defaultConfig?.channelId 
 const { items: claudeModelItems } = useModelOptions(channelRef)
 const standaloneModelItems = computed<ModelInfo[]>(() => {
   const id = props.defaultConfig?.channelId
-  if (!id || id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID) return claudeModelItems.value
+  if (!id || id === OFFICIAL_CHANNEL_ID || id === OFFICIAL_DIRECT_CHANNEL_ID) {
+    if (standaloneEngineId.value === 'codex') {
+      return (props.defaultConfig?.models ?? [])
+        .filter(model => !model.hidden)
+        .map(model => ({ id: model.id, label: model.label, contextWindow: 0 }))
+    }
+    return claudeModelItems.value
+  }
   const channel = channels.value.find(item => item.id === id)
+  const preferredModel = standaloneEngineId.value === 'codex'
+    ? channel?.codex?.defaultModel
+    : channel?.agentModel
   const values = [...new Set([
     ...(channel?.availableModels ?? []),
-    ...(channel?.agentModel ? [channel.agentModel] : []),
+    ...(preferredModel ? [preferredModel] : []),
   ].map(value => value.trim()).filter(Boolean))]
   return values.length
     ? values.map(value => ({ id: value, label: value, contextWindow: 0 }))
@@ -239,7 +278,11 @@ const defaultModelKey = computed(() =>
       ? channels.value.find(channel => channel.id === (props.defaultConfig?.channelId ?? OFFICIAL_CHANNEL_ID))?.defaultModel
     : props.runConfig?.channelDefaultModel ?? props.runConfig?.cliDefaultModel),
 )
-const modelOverridden = computed(() => props.engineConfig ? props.engineConfig.modelOverridden : standaloneMode.value ? false : props.runConfig?.display.modelSource === 'session')
+const modelOverridden = computed(() => props.engineConfig
+  ? props.engineConfig.modelOverridden
+  : standaloneMode.value
+    ? !!props.defaultConfig?.modelId
+    : props.runConfig?.display.modelSource === 'session')
 const advisorLocked = computed(() => !props.engineConfig && props.runConfig?.display.modelSource === 'advisor')
 
 /** 会话在用清单外模型时附加为候选(原名展示,与旧 ModelDropdown 行为一致) */
@@ -267,7 +310,15 @@ const EFFORT_OPTIONS: { value: NonNullable<EffortSetting>; label: string }[] = [
   { value: 'ultracode' as const, label: 'Ultracode' },
 ]
 const effortOptionItems = computed(() => {
-  if (standaloneMode.value) return EFFORT_OPTIONS
+  if (standaloneMode.value) {
+    if (standaloneEngineId.value !== 'codex') return EFFORT_OPTIONS
+    const descriptor = props.defaultConfig?.models?.find(model => model.id === props.defaultConfig?.modelId)
+    const ids = descriptor?.efforts.map(effort => effort.id) ?? ['low', 'medium', 'high', 'xhigh']
+    return ids.map(value => ({
+      value: value as NonNullable<EffortSetting>,
+      label: value === 'xhigh' ? 'xHigh' : `${value.charAt(0).toUpperCase()}${value.slice(1)}`,
+    }))
+  }
   if (!props.engineConfig) return EFFORT_OPTIONS
   const descriptor = props.engineConfig.models.find(model => model.id === props.engineConfig?.model)
   const ids = descriptor?.efforts.map(effort => effort.id) ?? ['low', 'medium', 'high', 'xhigh']
@@ -284,7 +335,11 @@ const defaultEffort = computed<NonNullable<EffortSetting> | null>(
       ? channels.value.find(channel => channel.id === (props.defaultConfig?.channelId ?? OFFICIAL_CHANNEL_ID))?.defaultEffort ?? null
     : props.runConfig?.channelDefaultEffort ?? props.runConfig?.cliDefaultEffort) as NonNullable<EffortSetting> | null,
 )
-const effortOverridden = computed(() => props.engineConfig ? props.engineConfig.effortOverridden : standaloneMode.value ? false : props.runConfig?.display.effortSource === 'session')
+const effortOverridden = computed(() => props.engineConfig
+  ? props.engineConfig.effortOverridden
+  : standaloneMode.value
+    ? !!props.defaultConfig?.effort
+    : props.runConfig?.display.effortSource === 'session')
 
 /** 强度能力标注:基于当前解析模型 + 渠道声明(软提示,不拦截) */
 const effortCaps = computed(() =>
@@ -325,8 +380,8 @@ const fastModeTitle = computed(() => props.engineConfig
 const channelSegLabel = computed(() => {
   const id = props.engineConfig?.channelId ?? props.defaultConfig?.channelId ?? props.runConfig?.channelId
   if (!id) {
-    return t(props.engineConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
-      engine: props.engineConfig?.engineName,
+    return t(props.engineConfig || props.defaultConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
+      engine: props.engineConfig?.engineName ?? props.defaultConfig?.engineName,
     })
   }
   return channels.value.find(c => c.id === id)?.name ?? id

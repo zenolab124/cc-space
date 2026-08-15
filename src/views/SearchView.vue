@@ -7,6 +7,7 @@ import { useProjects } from '@/composables/useProjects'
 import { useUiState } from '@/composables/useUiState'
 import { fileName } from '@/utils/path'
 import { instanceKey } from '@/engines/identity'
+import { useChannels } from '@/composables/useChannels'
 
 const { t } = useI18n()
 const {
@@ -17,9 +18,9 @@ const {
 const {
   agentResult, agentSearching, agentError,
   agentTermGroups, agentAllTerms, agentSummary,
-  agentModel, MODELS,
   startAgentSearch,
 } = useAgentSearch()
+const { defaultAgentEngine, defaultAgentModel } = useChannels()
 const { projects } = useProjects()
 const { activeSection } = useUiState()
 
@@ -209,15 +210,14 @@ function onSubmit() {
           >{{ t('search.titleOnly') }}</button>
         </template>
 
-        <!-- Agent 模式模型选择 -->
+        <!-- 智能搜索跟随全局智能增强引擎。 -->
         <template v-if="mode === 'agent'">
-          <button
-            v-for="m in MODELS"
-            :key="m"
-            class="px-2 py-0.5 text-xs rounded transition-colors capitalize"
-            :class="agentModel === m ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'"
-            @click="agentModel = m"
-          >{{ m }}</button>
+          <span class="inline-flex items-center rounded border border-current px-1.5 py-0.5 text-[10px] font-semibold" :class="defaultAgentEngine === 'codex' ? 'text-codex' : 'text-claude'">
+            {{ defaultAgentEngine === 'codex' ? 'Codex' : 'Claude Code' }}
+          </span>
+          <span v-if="defaultAgentModel" class="max-w-44 truncate font-mono text-[10px] text-muted-foreground" :title="defaultAgentModel">
+            {{ defaultAgentModel }}
+          </span>
         </template>
 
         <span v-if="activeResult && !activeSearching" class="ml-auto text-xs text-muted-foreground">

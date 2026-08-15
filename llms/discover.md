@@ -155,6 +155,8 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 > Monet ships no model and charges nothing for AI — every AI capability runs on the channels and quota you configure (BYOAI), each individually toggleable, with a full audit ledger (channel/model/duration/tokens/outcome).
 
+- Choose Claude Code or Codex as the augmentation engine: titles, tags, summaries, permission notes, search synthesis, cron parsing, and UI translation all follow that choice; each engine keeps separate channel/model/effort defaults and per-feature preferences, so switching never overwrites the other setup
+- Codex augmentation reuses the local official `codex app-server`, existing sign-in state, and discovered model catalog; both the official connection and third-party channels with the Codex adapter enabled are available
 - Automatic session titles: goodbye to a screen full of "New session"; hand-edited titles are never overwritten
 - Automatic tags and summaries (summaries surface on monitor cards and in lists)
 - Permission risk annotation: the approval card tells you in plain language what the command is about to do
@@ -178,7 +180,7 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 - Unified channel CRUD: each channel stores one Base URL, API key, and complete model catalog, then enables Claude Code, Codex, both, or neither; connections with no session-engine adapter can still power augmentation features
 - The Claude Code adapter always uses the Messages API: model IDs pass through by default, while Opus, Sonnet, Haiku, and other role mappings add shortcuts without hiding remaining channel models
 - The Codex adapter injects a Responses Provider without modifying Codex `config.toml`; every catalog model appears in the Codex model picker with no Claude-style role mapping
-- Default connection, model, and effort are stored independently per session engine; augmentation defaults and per-feature preferences are configured separately instead of living under Claude Code
+- Default connection, model, and effort are stored independently per session engine; augmentation likewise stores defaults and per-feature preferences separately for Claude Code and Codex instead of living under either session-engine binding
 - Credential safety: the token is stored once on the shared connection and never enters command-line arguments; Claude runtime files are temporary, while the Codex Provider fetches credentials on demand through command-based auth
 - Channels support online probing and complete model-list discovery
 - Apple local models: when Apple Foundation Models are available on the machine, they auto-register as a free local channel

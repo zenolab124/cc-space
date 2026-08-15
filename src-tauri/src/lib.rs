@@ -310,6 +310,7 @@ pub fn run() {
             channels::set_default_session_runtime,
             channels::set_default_agent_model,
             channels::set_default_agent_effort,
+            channels::set_default_agent_engine,
             channels::get_channel_token,
             channels::get_agent_toggles,
             channels::set_agent_toggle,

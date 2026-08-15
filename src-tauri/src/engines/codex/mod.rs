@@ -1,4 +1,5 @@
 mod adapter;
+mod agent;
 pub mod app_server;
 mod file_source;
 mod runtime;
@@ -21,3 +22,4 @@ pub fn default_instance() -> EngineResult<EngineInstanceId> {
     EngineInstanceId::new(ENGINE_ID, DEFAULT_INSTANCE_ID)
 }
 pub use adapter::*;
+pub(crate) use agent::*;

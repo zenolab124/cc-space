@@ -42,15 +42,18 @@ import { MODELS } from '@/utils/modelContext'
 import EngineCenter from '@/components/settings/EngineCenter.vue'
 import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
 import type { EffortSetting } from '@/composables/useSessionSettings'
+import { listModels } from '@/engines/client'
+import type { EngineCapsuleModel } from '@/engines/runConfig'
 
 const { t } = useI18n()
 const {
   channels, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts,
+  defaultAgentEngine,
   defaultAgentChannel, defaultAgentModel, defaultAgentEffort,
   probeResults, probing,
   revealedTokens, revealToken, hideToken, agentPreferences,
     deleteChannel, setChannelEnabled, setDefaultSessionChannel, setDefaultSessionRuntime,
-    setDefaultAgentModel, setDefaultAgentEffort,
+    setDefaultAgentEngine, setDefaultAgentModel, setDefaultAgentEffort,
   setAgentFeatureModel, revealChannelsDir,
   probeChannel, probeAllChannels, loadAgentPreferences,
   scanCcSwitch, importCcSwitch,
@@ -142,7 +145,7 @@ async function revealAgentSessionDir() {
 }
 
 // 完整会话浮层（Agent 日志带 sessionId 时可打开）
-const viewingSession = ref<string | null>(null)
+const viewingSession = ref<{ id: string; engineId: SessionEngineId } | null>(null)
 
 function isAgentEnabled(key: string) {
   return agentToggles.value[key] ?? false
@@ -179,6 +182,7 @@ async function onCustomTranslate() {
 // --- Agent 渠道测试 ---
 interface AgentTestResult {
   success: boolean
+  engineId: SessionEngineId
   channelId: string
   model: string
   durationMs: number
@@ -196,7 +200,7 @@ async function onTestAgent() {
   try {
     agentTestResult.value = await invoke<AgentTestResult>('test_agent_channel')
   } catch (e) {
-    agentTestResult.value = { success: false, channelId: '', model: '', durationMs: 0, inputTokens: 0, outputTokens: 0, reply: '', error: String(e) }
+    agentTestResult.value = { success: false, engineId: defaultAgentEngine.value, channelId: '', model: '', durationMs: 0, inputTokens: 0, outputTokens: 0, reply: '', error: String(e) }
   } finally {
     agentTesting.value = false
   }
@@ -206,6 +210,7 @@ async function onTestAgent() {
 interface AgentLogEntry {
   timestamp: string
   feature: string
+  engineId?: SessionEngineId
   channelId: string
   model: string
   durationMs: number
@@ -238,10 +243,11 @@ async function clearAgentLogs() {
 
 const agentLogsSorted = computed(() => [...agentLogs.value].reverse())
 
-function agentLogChannelLabel(channelId: string): string {
+function agentLogChannelLabel(channelId: string, engineId: SessionEngineId = 'claude-code'): string {
   if (channelId === 'official(fallback)') {
     return t('settings.agentChannelFallback', { channel: channelDisplayName(OFFICIAL_CHANNEL_ID) })
   }
+  if (engineId === 'codex' && (!channelId || channelId === OFFICIAL_CHANNEL_ID)) return 'Codex'
   if (!channelId) return t('common.unknown')
   return channelDisplayName(channelId)
 }
@@ -498,6 +504,7 @@ onMounted(() => {
   loadAgentToggles()
   loadAgentSessionPersist()
   loadAgentPreferences()
+  loadCodexAgentModels()
   loadWakePolicy()
   loadWidgetConfig()
   loadTrayTitleConfig()
@@ -573,16 +580,48 @@ const OFFICIAL_MODELS = [
   ...new Set(MODELS.map(m => m.id.replace(/\[1m\]$/i, ''))),
 ]
 
+const codexAgentModels = ref<EngineCapsuleModel[]>([])
+
+async function loadCodexAgentModels() {
+  try {
+    const models = await listModels({ engineId: 'codex', instanceId: 'default' })
+    codexAgentModels.value = models.map(model => ({
+      id: model.model,
+      label: model.displayName,
+      hidden: model.hidden,
+      defaultEffort: model.defaultEffort,
+      efforts: model.efforts,
+      defaultServiceTier: model.defaultServiceTier,
+      serviceTiers: model.serviceTiers,
+    }))
+  } catch {
+    codexAgentModels.value = []
+  }
+}
+
 const agentChannelId = ref(defaultAgentChannel.value ?? OFFICIAL_CHANNEL_ID)
 watch(defaultAgentChannel, (v) => { agentChannelId.value = v ?? OFFICIAL_CHANNEL_ID })
-const agentEffort = ref<EffortSetting>((defaultAgentEffort.value as EffortSetting) ?? 'low')
-watch(defaultAgentEffort, (v) => { agentEffort.value = (v as EffortSetting) ?? 'low' })
+const agentEffort = ref<EffortSetting>((defaultAgentEffort.value as EffortSetting) ?? null)
+watch(defaultAgentEffort, (v) => { agentEffort.value = v as EffortSetting })
 
 const agentDefaultConfig = computed(() => ({
+  engineId: defaultAgentEngine.value,
+  engineName: defaultAgentEngine.value === 'codex' ? 'Codex' : 'Claude Code',
   channelId: agentChannelId.value === OFFICIAL_CHANNEL_ID ? null : agentChannelId.value,
   modelId: defaultAgentModel.value,
   effort: agentEffort.value,
+  models: defaultAgentEngine.value === 'codex' ? codexAgentModels.value : undefined,
 }))
+
+async function onAgentEngineChange(engine: SessionEngineId) {
+  if (engine === defaultAgentEngine.value) return
+  try {
+    await setDefaultAgentEngine(engine)
+    if (engine === 'codex' && !codexAgentModels.value.length) await loadCodexAgentModels()
+  } catch (e) {
+    notifyTransient(t('settings.setDefaultFailed'), String(e))
+  }
+}
 
 /** 内置渠道由运行能力决定，不提供启停或删除。 */
 const isBuiltinChannel = (id: string) =>
@@ -595,13 +634,16 @@ const builtinChannelName = (ch: ChannelInfo) =>
 async function onAgentChannelChange(selectedId: string | null) {
   const id = selectedId ?? OFFICIAL_CHANNEL_ID
   agentChannelId.value = id
+  const selectedChannel = channels.value.find(ch => ch.id === id)
   const model = id === OFFICIAL_DIRECT_CHANNEL_ID
     ? 'haiku'
     : id === OFFICIAL_CHANNEL_ID
       ? null
-      : channels.value.find(ch => ch.id === id)?.agentModel ?? null
+      : defaultAgentEngine.value === 'codex'
+        ? selectedChannel?.codex?.defaultModel ?? null
+        : selectedChannel?.agentModel ?? null
   try {
-    await setDefaultAgentModel(id, model)
+    await setDefaultAgentModel(defaultAgentEngine.value, id, model)
   } catch (e) {
     notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
@@ -609,17 +651,16 @@ async function onAgentChannelChange(selectedId: string | null) {
 
 async function onAgentModelChange(model: string | null) {
   try {
-    await setDefaultAgentModel(agentChannelId.value, model)
+    await setDefaultAgentModel(defaultAgentEngine.value, agentChannelId.value, model)
   } catch (e) {
     notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
 }
 
 async function onAgentEffortChange(effort: EffortSetting) {
-  const value = effort ?? 'low'
-  agentEffort.value = value
+  agentEffort.value = effort
   try {
-    await setDefaultAgentEffort(value)
+    await setDefaultAgentEffort(defaultAgentEngine.value, effort)
   } catch (e) {
     notifyTransient(t('settings.setDefaultFailed'), String(e))
   }
@@ -627,12 +668,17 @@ async function onAgentEffortChange(effort: EffortSetting) {
 
 const agentModelOptions = () => {
   const opts: { channel: string; channelName: string; model: string }[] = []
-  for (const m of OFFICIAL_MODELS) {
-    opts.push({ channel: OFFICIAL_CHANNEL_ID, channelName: 'Official', model: m })
+  const officialModels = defaultAgentEngine.value === 'codex'
+    ? codexAgentModels.value.filter(model => !model.hidden).map(model => model.id)
+    : OFFICIAL_MODELS
+  for (const model of officialModels) {
+    opts.push({ channel: OFFICIAL_CHANNEL_ID, channelName: defaultAgentEngine.value === 'codex' ? 'Codex' : 'Claude Code', model })
   }
   for (const ch of channels.value) {
     if (!ch.enabled || ch.id === OFFICIAL_CHANNEL_ID || ch.id === OFFICIAL_DIRECT_CHANNEL_ID) continue
-    const models = new Set([...ch.availableModels, ...(ch.agentModel ? [ch.agentModel] : [])])
+    if (!channelSupportsEngine(ch, defaultAgentEngine.value)) continue
+    const preferredModel = defaultAgentEngine.value === 'codex' ? ch.codex?.defaultModel : ch.agentModel
+    const models = new Set([...ch.availableModels, ...(preferredModel ? [preferredModel] : [])])
     for (const m of models) {
       opts.push({ channel: ch.id, channelName: ch.name, model: m })
     }
@@ -1001,21 +1047,38 @@ function onSaved() {
             </div>
           </section>
 
-          <!-- 智能增强仍由 Claude Code 提供；默认配置复用会话三段式胶囊。 -->
+          <!-- 智能增强按引擎独立保存默认配置；胶囊复用会话三段式交互。 -->
           <section class="channel-panel channel-agent-panel">
             <header class="channel-panel-header">
               <div>
                 <h3>{{ $t('settings.defaultAgentChannel') }}</h3>
                 <p>{{ $t('settings.defaultAgentChannelHint') }}</p>
               </div>
-              <span class="channel-engine-badge text-claude"><span class="channel-engine-dot bg-claude" />{{ $t('settings.claudeCodeLabel') }}</span>
+              <span class="channel-engine-badge" :class="defaultAgentEngine === 'codex' ? 'text-codex' : 'text-claude'">
+                <span class="channel-engine-dot" :class="defaultAgentEngine === 'codex' ? 'bg-codex' : 'bg-claude'" />
+                {{ defaultAgentEngine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel') }}
+              </span>
             </header>
             <div class="channel-agent-config">
               <div class="channel-agent-engine">
-                <span class="i-carbon-ai-status channel-agent-icon text-claude" />
+                <span class="i-carbon-ai-status channel-agent-icon" :class="defaultAgentEngine === 'codex' ? 'text-codex' : 'text-claude'" />
                 <div>
                   <strong>{{ $t('settings.agentEngineLabel') }}</strong>
-                  <span>{{ $t('settings.agentEngineFixed') }}</span>
+                  <span>{{ $t('settings.agentEngineSelected') }}</span>
+                </div>
+                <div class="channel-agent-engine-options" role="group" :aria-label="$t('settings.agentEngineLabel')">
+                  <button
+                    type="button"
+                    :class="['channel-agent-engine-option', 'claude', { active: defaultAgentEngine === 'claude-code' }]"
+                    :aria-pressed="defaultAgentEngine === 'claude-code'"
+                    @click="onAgentEngineChange('claude-code')"
+                  >Claude Code</button>
+                  <button
+                    type="button"
+                    :class="['channel-agent-engine-option', 'codex', { active: defaultAgentEngine === 'codex' }]"
+                    :aria-pressed="defaultAgentEngine === 'codex'"
+                    @click="onAgentEngineChange('codex')"
+                  >Codex</button>
                 </div>
               </div>
               <RunConfigCapsule
@@ -1168,7 +1231,7 @@ function onSaved() {
                   v-if="isAgentEnabled(a.key)"
                   class="form-input text-[11px] font-mono mt-1.5 w-auto max-w-56 h-6 py-0"
                   :value="agentPreferences[a.key]?.preferredChannel && agentPreferences[a.key]?.preferredModel ? `${agentPreferences[a.key].preferredChannel}:${agentPreferences[a.key].preferredModel}` : ''"
-                  @change="{ const v = ($event.target as HTMLSelectElement).value; if (!v) { setAgentFeatureModel(a.key, null, null) } else { const [ch, ...rest] = v.split(':'); setAgentFeatureModel(a.key, ch, rest.join(':')) } }"
+                  @change="{ const v = ($event.target as HTMLSelectElement).value; if (!v) { setAgentFeatureModel(defaultAgentEngine, a.key, null, null) } else { const [ch, ...rest] = v.split(':'); setAgentFeatureModel(defaultAgentEngine, a.key, ch, rest.join(':')) } }"
                 >
                   <option value="">{{ $t('settings.agentAutoChannel') }}</option>
                   <option v-for="opt in agentModelOptions()" :key="`${opt.channel}:${opt.model}`" :value="`${opt.channel}:${opt.model}`">
@@ -1191,6 +1254,7 @@ function onSaved() {
               <div class="text-xs font-medium">{{ $t('settings.agentSessionPersist') }}</div>
               <div class="text-[11px] text-muted-foreground mt-0.5">{{ $t('settings.agentSessionPersistDesc') }}</div>
               <button
+                v-if="defaultAgentEngine === 'claude-code'"
                 class="text-[11px] text-primary hover:underline mt-1"
                 @click="revealAgentSessionDir"
               >{{ $t('common.revealDir') }}</button>
@@ -1224,7 +1288,8 @@ function onSaved() {
           >
             <div v-if="agentTestResult.success" class="flex items-center gap-3 text-foreground">
               <span class="text-emerald-600 dark:text-emerald-400 font-medium">OK</span>
-              <span class="text-muted-foreground">{{ agentLogChannelLabel(agentTestResult.channelId) }}</span>
+              <span class="engine-support-badge" :class="agentTestResult.engineId === 'codex' ? 'text-codex' : 'text-claude'">{{ agentTestResult.engineId === 'codex' ? 'Codex' : 'Claude Code' }}</span>
+              <span class="text-muted-foreground">{{ agentLogChannelLabel(agentTestResult.channelId, agentTestResult.engineId) }}</span>
               <span class="font-mono text-muted-foreground">{{ agentTestResult.model }}</span>
               <span class="font-mono text-muted-foreground">{{ agentTestResult.durationMs >= 1000 ? `${(agentTestResult.durationMs / 1000).toFixed(1)}s` : `${agentTestResult.durationMs}ms` }}</span>
               <span v-if="agentTestResult.inputTokens" class="font-mono text-muted-foreground">↑{{ agentTestResult.inputTokens }} ↓{{ agentTestResult.outputTokens }}</span>
@@ -1647,7 +1712,10 @@ function onSaved() {
               <tr v-for="(log, i) in agentLogsSorted" :key="i" :class="{ 'opacity-60': !log.success }">
                 <td class="font-mono whitespace-nowrap">{{ new Date(log.timestamp).toLocaleString() }}</td>
                 <td>{{ $t(`settings.agentFeature_${log.feature}`, log.feature) }}</td>
-                <td>{{ agentLogChannelLabel(log.channelId) }}</td>
+                <td>
+                  <span class="engine-support-badge mr-1" :class="log.engineId === 'codex' ? 'text-codex' : 'text-claude'">{{ log.engineId === 'codex' ? 'Codex' : 'Claude' }}</span>
+                  {{ agentLogChannelLabel(log.channelId, log.engineId) }}
+                </td>
                 <td class="font-mono truncate max-w-32" :title="log.model">{{ log.model }}</td>
                 <td class="text-right font-mono">{{ log.durationMs >= 1000 ? `${(log.durationMs / 1000).toFixed(1)}s` : `${log.durationMs}ms` }}</td>
                 <td class="text-right font-mono">
@@ -1664,7 +1732,7 @@ function onSaved() {
                   <button
                     v-if="log.sessionId"
                     class="text-primary hover:underline whitespace-nowrap"
-                    @click="viewingSession = log.sessionId!"
+                    @click="viewingSession = { id: log.sessionId!, engineId: log.engineId ?? 'claude-code' }"
                   >{{ $t('common.viewSession') }}</button>
                 </td>
               </tr>
@@ -1681,7 +1749,8 @@ function onSaved() {
   <!-- 完整会话浮层 -->
   <SystemSessionViewer
     v-if="viewingSession"
-    :session-id="viewingSession"
+    :session-id="viewingSession.id"
+    :engine-id="viewingSession.engineId"
     @close="viewingSession = null"
   />
   </div>
@@ -2665,7 +2734,7 @@ function onSaved() {
   flex: none;
   font-size: 22px;
 }
-.channel-agent-engine div {
+.channel-agent-engine > div:not(.channel-agent-engine-options) {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2674,9 +2743,40 @@ function onSaved() {
   font-size: 11px;
   font-weight: 600;
 }
-.channel-agent-engine span {
+.channel-agent-engine > div:not(.channel-agent-engine-options) > span {
   color: var(--muted-foreground);
   font-size: 10px;
+}
+.channel-agent-engine-options {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 62%, transparent);
+}
+.channel-agent-engine-option {
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.channel-agent-engine-option:hover {
+  color: var(--foreground);
+}
+.channel-agent-engine-option.claude.active {
+  border-color: color-mix(in srgb, var(--claude) 35%, var(--border));
+  color: var(--claude);
+  background: color-mix(in srgb, var(--claude) 10%, var(--card));
+}
+.channel-agent-engine-option.codex.active {
+  border-color: color-mix(in srgb, var(--codex) 35%, var(--border));
+  color: var(--codex);
+  background: color-mix(in srgb, var(--codex) 10%, var(--card));
 }
 .channel-agent-capsule {
   justify-self: end;

@@ -14,10 +14,15 @@ import type { ToolResultData } from '@/utils/toolPair'
 import { buildAsyncLedger } from '@/composables/useAsyncTasks'
 import { TOOL_EXECUTION_CONTEXT } from '@/composables/useToolDisplay'
 import type { SessionRecord, ContentBlock } from '@/types'
+import { loadTimeline } from '@/engines/client'
+import { groupConversationRecords } from '@/engines/conversationGroups'
+import type { ConversationRecord } from '@/engines/types'
+import EngineConversationGroupView from '@/components/engine/EngineConversationGroup.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sessionId: string
-}>()
+  engineId?: 'claude-code' | 'codex'
+}>(), { engineId: 'claude-code' })
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -30,12 +35,21 @@ interface AgentSessionDir {
 }
 
 const records = ref<SessionRecord[]>([])
+const engineRecords = ref<ConversationRecord[]>([])
 const loading = ref(true)
 const error = ref('')
 const dirPath = ref('')
 
 onMounted(async () => {
   try {
+    if (props.engineId === 'codex') {
+      const timeline = await loadTimeline({
+        engine: { engineId: 'codex', instanceId: 'default' },
+        nativeId: props.sessionId,
+      })
+      engineRecords.value = timeline.records
+      return
+    }
     const dir = await invoke<AgentSessionDir>('get_agent_session_dir')
     dirPath.value = dir.path
     records.value = await invoke<SessionRecord[]>('get_session_records', {
@@ -102,6 +116,7 @@ const messages = computed<MessageRecord[]>(() =>
       (r.type === 'user' || r.type === 'assistant') && !isToolResultOnly(r as MessageRecord),
   ),
 )
+const engineGroups = computed(() => groupConversationRecords(engineRecords.value))
 
 /** user 的 text 内容按纯文本渲染：prompt 里的 <system-reminder> 等标签
  *  走 markdown（html:true）会被当 HTML 吞掉，pre-wrap 保证原文可见 */
@@ -128,6 +143,7 @@ function openDir() {
         </h3>
         <div class="flex items-center gap-3">
           <button
+            v-if="engineId === 'claude-code'"
             class="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
             @click="openDir"
           >{{ $t('common.revealDir') }}</button>
@@ -145,9 +161,23 @@ function openDir() {
         <div v-else-if="error" class="text-xs text-destructive py-8 text-center">
           {{ error }}
         </div>
-        <div v-else-if="!messages.length" class="text-xs text-muted-foreground py-8 text-center">
+        <div v-else-if="engineId === 'codex' && !engineGroups.length" class="text-xs text-muted-foreground py-8 text-center">
           {{ $t('common.systemSessionEmpty') }}
         </div>
+        <div v-else-if="engineId === 'claude-code' && !messages.length" class="text-xs text-muted-foreground py-8 text-center">
+          {{ $t('common.systemSessionEmpty') }}
+        </div>
+        <template v-else-if="engineId === 'codex'">
+          <EngineConversationGroupView
+            v-for="group in engineGroups"
+            :key="group.key"
+            :records="group.records"
+            engine-name="Codex"
+            :model="null"
+            accent="codex"
+            :show-thought-process="false"
+          />
+        </template>
         <template v-else>
           <div v-for="(r, i) in messages" :key="r.uuid || i" class="mb-4">
             <div

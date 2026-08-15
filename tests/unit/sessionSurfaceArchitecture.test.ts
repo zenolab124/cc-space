@@ -99,7 +99,7 @@ describe('unified session surface architecture', () => {
     expect(nativeController).not.toContain(':hide-user=')
     expect(standardController).not.toContain(':hide-user=')
     expect(sharedRunConfig).not.toContain('engineConfig?.inheritedChannelLabel')
-    expect(sharedRunConfig).toContain("t(props.engineConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial'")
+    expect(sharedRunConfig).toContain("t(props.engineConfig || props.defaultConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial'")
     const nativeActiveTail = nativeController.slice(
       nativeController.indexOf('v-if="lastGroup"'),
       nativeController.indexOf('<!-- 锚点失效的切换横线兜底'),

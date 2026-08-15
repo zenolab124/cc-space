@@ -57,9 +57,14 @@ interface ChannelListResult {
   defaultSessionEfforts?: Partial<Record<SessionEngineId, string | null>>
   /** 兼容旧后端版本。 */
   defaultSessionChannel?: string | null
-  defaultAgentChannel: string | null
-  defaultAgentModel: string | null
-  defaultAgentEffort: string | null
+  defaultAgentEngine?: SessionEngineId
+  defaultAgentChannels?: Partial<Record<SessionEngineId, string | null>>
+  defaultAgentModels?: Partial<Record<SessionEngineId, string | null>>
+  defaultAgentEfforts?: Partial<Record<SessionEngineId, string | null>>
+  /** 兼容旧后端版本。 */
+  defaultAgentChannel?: string | null
+  defaultAgentModel?: string | null
+  defaultAgentEffort?: string | null
 }
 
 export const OFFICIAL_CHANNEL_ID = 'official'
@@ -105,9 +110,13 @@ const defaultSessionModels = ref<Record<SessionEngineId, string | null>>({ 'clau
 const defaultSessionEfforts = ref<Record<SessionEngineId, string | null>>({ 'claude-code': null, codex: null })
 /** Claude Code 的兼容别名，供现有会话配置解析继续使用。 */
 const defaultSessionChannel = computed(() => defaultSessionChannels.value['claude-code'])
-const defaultAgentChannel = ref<string | null>(null)
-const defaultAgentModel = ref<string | null>(null)
-const defaultAgentEffort = ref<string | null>(null)
+const defaultAgentEngine = ref<SessionEngineId>('claude-code')
+const defaultAgentChannels = ref<Record<SessionEngineId, string | null>>({ 'claude-code': null, codex: null })
+const defaultAgentModels = ref<Record<SessionEngineId, string | null>>({ 'claude-code': null, codex: null })
+const defaultAgentEfforts = ref<Record<SessionEngineId, string | null>>({ 'claude-code': null, codex: null })
+const defaultAgentChannel = computed(() => defaultAgentChannels.value[defaultAgentEngine.value])
+const defaultAgentModel = computed(() => defaultAgentModels.value[defaultAgentEngine.value])
+const defaultAgentEffort = computed(() => defaultAgentEfforts.value[defaultAgentEngine.value])
 
 export async function refreshChannels(): Promise<void> {
   try {
@@ -127,9 +136,31 @@ export async function refreshChannels(): Promise<void> {
       'claude-code': r.defaultSessionEfforts?.['claude-code'] ?? null,
       codex: r.defaultSessionEfforts?.codex ?? null,
     }
-    defaultAgentChannel.value = r.defaultAgentChannel
-    defaultAgentModel.value = r.defaultAgentModel
-    defaultAgentEffort.value = r.defaultAgentEffort
+    defaultAgentEngine.value = r.defaultAgentEngine === 'codex' ? 'codex' : 'claude-code'
+    defaultAgentChannels.value = {
+      'claude-code': r.defaultAgentChannels?.['claude-code']
+        ?? (defaultAgentEngine.value === 'claude-code' ? r.defaultAgentChannel : null)
+        ?? null,
+      codex: r.defaultAgentChannels?.codex
+        ?? (defaultAgentEngine.value === 'codex' ? r.defaultAgentChannel : null)
+        ?? null,
+    }
+    defaultAgentModels.value = {
+      'claude-code': r.defaultAgentModels?.['claude-code']
+        ?? (defaultAgentEngine.value === 'claude-code' ? r.defaultAgentModel : null)
+        ?? null,
+      codex: r.defaultAgentModels?.codex
+        ?? (defaultAgentEngine.value === 'codex' ? r.defaultAgentModel : null)
+        ?? null,
+    }
+    defaultAgentEfforts.value = {
+      'claude-code': r.defaultAgentEfforts?.['claude-code']
+        ?? (defaultAgentEngine.value === 'claude-code' ? r.defaultAgentEffort : null)
+        ?? null,
+      codex: r.defaultAgentEfforts?.codex
+        ?? (defaultAgentEngine.value === 'codex' ? r.defaultAgentEffort : null)
+        ?? null,
+    }
   } catch {
     // 读取失败保留旧值
   }
@@ -267,19 +298,34 @@ async function setDefaultSessionRuntime(
   defaultSessionEfforts.value = { ...defaultSessionEfforts.value, [engine]: effort }
 }
 
-async function setDefaultAgentModel(channel: string | null, model: string | null): Promise<void> {
-  await invoke('set_default_agent_model', { channel, model })
-  defaultAgentChannel.value = channel
-  defaultAgentModel.value = model
+async function setDefaultAgentEngine(engine: SessionEngineId): Promise<void> {
+  await invoke('set_default_agent_engine', { engine })
+  defaultAgentEngine.value = engine
+  await loadAgentPreferences()
 }
 
-async function setDefaultAgentEffort(effort: string | null): Promise<void> {
-  await invoke('set_default_agent_effort', { effort })
-  defaultAgentEffort.value = effort
+async function setDefaultAgentModel(
+  engine: SessionEngineId,
+  channel: string | null,
+  model: string | null,
+): Promise<void> {
+  await invoke('set_default_agent_model', { engine, channel, model })
+  defaultAgentChannels.value = { ...defaultAgentChannels.value, [engine]: channel }
+  defaultAgentModels.value = { ...defaultAgentModels.value, [engine]: model }
 }
 
-async function setAgentFeatureModel(key: string, channel: string | null, model: string | null): Promise<void> {
-  await invoke('set_agent_feature_model', { key, channel, model })
+async function setDefaultAgentEffort(engine: SessionEngineId, effort: string | null): Promise<void> {
+  await invoke('set_default_agent_effort', { engine, effort })
+  defaultAgentEfforts.value = { ...defaultAgentEfforts.value, [engine]: effort }
+}
+
+async function setAgentFeatureModel(
+  engine: SessionEngineId,
+  key: string,
+  channel: string | null,
+  model: string | null,
+): Promise<void> {
+  await invoke('set_agent_feature_model', { engine, key, channel, model })
   agentPreferences.value = {
     ...agentPreferences.value,
     [key]: { preferredChannel: channel, preferredModel: model },
@@ -390,6 +436,10 @@ export function useChannels() {
     defaultSessionModels,
     defaultSessionEfforts,
     defaultSessionChannel,
+    defaultAgentEngine,
+    defaultAgentChannels,
+    defaultAgentModels,
+    defaultAgentEfforts,
     defaultAgentChannel,
     defaultAgentModel,
     defaultAgentEffort,
@@ -403,6 +453,7 @@ export function useChannels() {
     setChannelEnabled,
     setDefaultSessionChannel,
     setDefaultSessionRuntime,
+    setDefaultAgentEngine,
     setDefaultAgentModel,
     setDefaultAgentEffort,
     setAgentFeatureModel,
