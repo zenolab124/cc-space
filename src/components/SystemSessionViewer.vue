@@ -193,7 +193,7 @@ function openDir() {
                 v-if="r.type === 'assistant'"
                 :blocks="contentBlocks(r)"
                 :record-uuid="r.uuid"
-                :display-mode="toolDisplayModeFor('claude-code', r.message?.model)"
+                :display-mode="toolDisplayModeFor('claude-code')"
               />
               <template v-else v-for="(block, bi) in contentBlocks(r)" :key="bi">
                 <div

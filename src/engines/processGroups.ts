@@ -9,10 +9,9 @@ export interface EngineResponseSegmentEntry {
 }
 
 type EngineResponseRecord = Pick<ConversationRecord, 'id' | 'segments'>
-  & Partial<Pick<ConversationRecord, 'sourceMeta'>>
 
 export type EngineResponseBlock =
-  | { kind: 'process'; key: string; entries: EngineResponseSegmentEntry[]; processGroupKey: string | null }
+  | { kind: 'process'; key: string; entries: EngineResponseSegmentEntry[] }
   | { kind: 'content'; key: string; entry: EngineResponseSegmentEntry }
 
 export function isEngineThoughtSegment(segment: EngineSegment): boolean {
@@ -45,22 +44,19 @@ export function isEngineProcessSegment(segment: EngineSegment): boolean {
 export function buildEngineResponseBlocks(
   records: EngineResponseRecord[],
   groupToolActivity = true,
-  processGroupKeyOf?: (record: EngineResponseRecord) => string,
 ): EngineResponseBlock[] {
   const blocks: EngineResponseBlock[] = []
   let processBlock: Extract<EngineResponseBlock, { kind: 'process' }> | null = null
 
   for (const record of records) {
-    const processGroupKey = processGroupKeyOf?.(record) ?? null
     record.segments.forEach((segment, index) => {
       const entry = { key: `${record.id}:${index}`, segment }
       if (groupToolActivity && isEngineProcessSegment(segment)) {
-        if (!processBlock || processBlock.processGroupKey !== processGroupKey) {
+        if (!processBlock) {
           processBlock = {
             kind: 'process',
             key: `process:${entry.key}`,
             entries: [],
-            processGroupKey,
           }
           blocks.push(processBlock)
         }

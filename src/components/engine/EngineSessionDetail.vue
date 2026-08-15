@@ -405,7 +405,8 @@ function measureConversationGroup(
 }
 
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
-const { stickyUserPromptEnabled } = useStickyUserPrompt()
+const { stickyUserPromptFor } = useStickyUserPrompt()
+const stickyUserPromptEnabled = computed(() => stickyUserPromptFor(sessionEngineId.value))
 const shouldVirtualize = computed(() => historicalGroups.value.length > virtualizationThreshold.value)
 const conversationVirtualizer = useVirtualizer(computed(() => ({
   count: historicalGroups.value.length,

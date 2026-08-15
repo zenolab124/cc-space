@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { getVersion } from '@tauri-apps/api/app'
 import { useI18n } from 'vue-i18n'
@@ -36,11 +36,14 @@ import { useHtmlVisual } from '@/features'
 import { useVirtualizationSettings } from '@/composables/useVirtualizationSettings'
 import {
   TOOL_DISPLAY_MODES,
-  toolDisplayModelKey,
   useToolDisplayMode,
   type ToolDisplayMode,
 } from '@/composables/useToolDisplay'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
+import {
+  SESSION_READING_ENGINE_IDS,
+  type SessionReadingEngineId,
+} from '@/composables/sessionReadingEngines'
 import { useUpdater } from '@/composables/useUpdater'
 import { useEngineNotices } from '@/composables/useEngineNotices'
 import { MODELS } from '@/utils/modelContext'
@@ -77,14 +80,10 @@ const { activeTheme, activeThemeLabel } = useTheme()
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const { threshold: virtualizationThreshold } = useVirtualizationSettings()
 const {
-  toolDisplayMode,
-  toolDisplayModeOverrides,
-  setToolDisplayMode,
   toolDisplayModeFor,
-  toolDisplayModeOverrideFor,
   setToolDisplayModeFor,
 } = useToolDisplayMode()
-const { stickyUserPromptEnabled, setStickyUserPrompt } = useStickyUserPrompt()
+const { stickyUserPromptFor, setStickyUserPromptFor } = useStickyUserPrompt()
 const { status: updateStatus, newVersion: updateVersion, releaseNotes, errorMessage: updateError, downloadProgress, checkForUpdate, downloadAndInstall, channel: updateChannel, loadChannel, setChannel } = useUpdater()
 const { hasEngineNotice } = useEngineNotices()
 loadChannel()
@@ -611,92 +610,41 @@ async function loadCodexAgentModels() {
   }
 }
 
-interface ToolDisplayTargetOption {
-  key: string
-  engineId: SessionEngineId
-  model: string
-  label: string
-}
-
-const selectedToolDisplayTargetKey = ref('')
-
-const toolDisplayTargetGroups = computed(() => {
-  const groups: Array<{
-    engineId: SessionEngineId
-    label: string
-    options: ToolDisplayTargetOption[]
-  }> = [
-    { engineId: 'claude-code', label: t('settings.claudeCodeLabel'), options: [] },
-    { engineId: 'codex', label: t('settings.codexLabel'), options: [] },
-  ]
-  const seen = new Set<string>()
-
-  function add(engineId: SessionEngineId, model: string | null | undefined, label?: string) {
-    const value = model?.trim()
-    const key = toolDisplayModelKey(engineId, value)
-    if (!value || !key || seen.has(key)) return
-    seen.add(key)
-    groups.find(group => group.engineId === engineId)?.options.push({
-      key,
-      engineId,
-      model: value,
-      label: label && label !== value ? `${label} · ${value}` : value,
-    })
-  }
-
-  for (const model of MODELS) add('claude-code', model.id, model.label)
-  add('claude-code', defaultSessionModels.value['claude-code'])
-  add('codex', defaultSessionModels.value.codex)
-  add(defaultAgentEngine.value, defaultAgentModel.value)
-
-  for (const channel of channels.value) {
-    if (channelSupportsEngine(channel, 'claude-code')) {
-      channel.availableModels.forEach(model => add('claude-code', model))
-      add('claude-code', channel.defaultModel)
-      add('claude-code', channel.agentModel)
-    }
-    if (channelSupportsEngine(channel, 'codex')) {
-      channel.availableModels.forEach(model => add('codex', model))
-      channel.codex?.availableModels.forEach(model => add('codex', model))
-      add('codex', channel.codex?.defaultModel)
-    }
-  }
-  codexAgentModels.value.forEach(model => add('codex', model.id, model.label))
-
-  // 已保存但当前模型目录未返回的规则仍需可见、可修改或恢复默认。
-  for (const key of Object.keys(toolDisplayModeOverrides.value)) {
-    if (key.startsWith('claude-code:')) add('claude-code', key.slice('claude-code:'.length))
-    else if (key.startsWith('codex:')) add('codex', key.slice('codex:'.length))
-  }
-
-  for (const group of groups) group.options.sort((a, b) => a.label.localeCompare(b.label))
-  return groups.filter(group => group.options.length > 0)
-})
-
-const selectedToolDisplayTarget = computed<ToolDisplayTargetOption | null>(() => {
-  if (!selectedToolDisplayTargetKey.value) return null
-  return toolDisplayTargetGroups.value
-    .flatMap(group => group.options)
-    .find(option => option.key === selectedToolDisplayTargetKey.value) ?? null
-})
-const selectedToolDisplayMode = computed(() => {
-  const target = selectedToolDisplayTarget.value
-  return target ? toolDisplayModeFor(target.engineId, target.model) : toolDisplayMode.value
-})
-const selectedToolDisplayOverride = computed(() => {
-  const target = selectedToolDisplayTarget.value
-  return target ? toolDisplayModeOverrideFor(target.engineId, target.model) : null
-})
+const readingEngineTabs: Array<{
+  id: SessionReadingEngineId
+  labelKey: 'settings.claudeCodeLabel' | 'settings.codexLabel'
+  icon: string
+}> = [
+  { id: 'claude-code', labelKey: 'settings.claudeCodeLabel', icon: 'i-carbon-terminal' },
+  { id: 'codex', labelKey: 'settings.codexLabel', icon: 'i-carbon-code' },
+]
+const selectedReadingEngine = ref<SessionReadingEngineId>('claude-code')
+const selectedToolDisplayMode = computed(() => toolDisplayModeFor(selectedReadingEngine.value))
+const selectedStickyUserPrompt = computed(() => stickyUserPromptFor(selectedReadingEngine.value))
 
 function setSelectedToolDisplayMode(mode: ToolDisplayMode) {
-  const target = selectedToolDisplayTarget.value
-  if (target) setToolDisplayModeFor(target.engineId, target.model, mode)
-  else setToolDisplayMode(mode)
+  setToolDisplayModeFor(selectedReadingEngine.value, mode)
 }
 
-function resetSelectedToolDisplayMode() {
-  const target = selectedToolDisplayTarget.value
-  if (target) setToolDisplayModeFor(target.engineId, target.model, null)
+function toggleSelectedStickyUserPrompt() {
+  setStickyUserPromptFor(selectedReadingEngine.value, !selectedStickyUserPrompt.value)
+}
+
+function selectReadingEngine(engineId: SessionReadingEngineId) {
+  selectedReadingEngine.value = engineId
+}
+
+function onReadingEngineTabKeydown(event: KeyboardEvent, index: number) {
+  let nextIndex: number | null = null
+  if (event.key === 'ArrowRight') nextIndex = (index + 1) % SESSION_READING_ENGINE_IDS.length
+  if (event.key === 'ArrowLeft') nextIndex = (index - 1 + SESSION_READING_ENGINE_IDS.length) % SESSION_READING_ENGINE_IDS.length
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = SESSION_READING_ENGINE_IDS.length - 1
+  if (nextIndex === null) return
+  event.preventDefault()
+  const engineId = SESSION_READING_ENGINE_IDS[nextIndex]
+  selectReadingEngine(engineId)
+  nextTick(() => document.getElementById(`appearance-reading-tab-${engineId}`)?.focus())
 }
 
 const agentChannelId = ref(defaultAgentChannel.value ?? OFFICIAL_CHANNEL_ID)
@@ -975,43 +923,40 @@ function onSaved() {
                   <p>{{ $t('settings.appearanceReadingGroupHint') }}</p>
                 </div>
               </header>
-              <div class="appearance-reading-grid">
+              <div
+                class="appearance-engine-tabs"
+                role="tablist"
+                :aria-label="$t('settings.sessionReadingEngine')"
+              >
+                <button
+                  v-for="(engine, index) in readingEngineTabs"
+                  :id="`appearance-reading-tab-${engine.id}`"
+                  :key="engine.id"
+                  type="button"
+                  class="appearance-engine-tab"
+                  :class="{ active: selectedReadingEngine === engine.id }"
+                  :data-engine="engine.id"
+                  role="tab"
+                  :aria-selected="selectedReadingEngine === engine.id"
+                  :aria-controls="`appearance-reading-panel-${engine.id}`"
+                  :tabindex="selectedReadingEngine === engine.id ? 0 : -1"
+                  @click="selectReadingEngine(engine.id)"
+                  @keydown="onReadingEngineTabKeydown($event, index)"
+                >
+                  <span :class="engine.icon" aria-hidden="true" />
+                  <span>{{ $t(engine.labelKey) }}</span>
+                </button>
+              </div>
+              <div
+                :id="`appearance-reading-panel-${selectedReadingEngine}`"
+                class="appearance-reading-grid"
+                role="tabpanel"
+                :aria-labelledby="`appearance-reading-tab-${selectedReadingEngine}`"
+              >
                 <div class="appearance-reading-block">
                   <div class="appearance-field-heading">
                     <span class="setting-label">{{ $t('settings.toolDisplayMode') }}</span>
                     <span class="appearance-field-note">{{ $t('settings.toolDisplayModeHint') }}</span>
-                  </div>
-                  <div class="appearance-reading-scope">
-                    <label class="appearance-reading-scope-field" for="tool-display-target">
-                      <span>{{ $t('settings.toolDisplayScope') }}</span>
-                      <select
-                        id="tool-display-target"
-                        v-model="selectedToolDisplayTargetKey"
-                        class="form-select"
-                      >
-                        <option value="">{{ $t('settings.toolDisplayScopeDefault') }}</option>
-                        <optgroup
-                          v-for="group in toolDisplayTargetGroups"
-                          :key="group.engineId"
-                          :label="group.label"
-                        >
-                          <option v-for="option in group.options" :key="option.key" :value="option.key">
-                            {{ option.label }}
-                          </option>
-                        </optgroup>
-                      </select>
-                    </label>
-                    <div class="appearance-reading-scope-state" aria-live="polite">
-                      <span v-if="!selectedToolDisplayTarget">{{ $t('settings.toolDisplayScopeDefaultHint') }}</span>
-                      <span v-else-if="selectedToolDisplayOverride">{{ $t('settings.toolDisplayScopeOverrideHint') }}</span>
-                      <span v-else>{{ $t('settings.toolDisplayScopeInheritedHint', { mode: $t(`settings.toolDisplayMode_${toolDisplayMode}`) }) }}</span>
-                      <button
-                        v-if="selectedToolDisplayOverride"
-                        type="button"
-                        class="appearance-reading-reset"
-                        @click="resetSelectedToolDisplayMode"
-                      >{{ $t('settings.toolDisplayScopeReset') }}</button>
-                    </div>
                   </div>
                   <div class="tool-display-options" role="radiogroup" :aria-label="$t('settings.toolDisplayMode')">
                     <button
@@ -1032,16 +977,16 @@ function onSaved() {
                 <button
                   type="button"
                   class="appearance-setting-row"
-                  :aria-pressed="stickyUserPromptEnabled"
-                  @click="setStickyUserPrompt(!stickyUserPromptEnabled)"
+                  :aria-pressed="selectedStickyUserPrompt"
+                  @click="toggleSelectedStickyUserPrompt"
                 >
                   <span class="appearance-setting-row-copy">
                     <span class="setting-label">{{ $t('settings.stickyUserPrompt') }}</span>
                     <span class="setting-hint">{{ $t('settings.stickyUserPromptHint') }}</span>
                   </span>
                   <span class="appearance-setting-row-control">
-                    <span class="appearance-toggle-status">{{ $t(stickyUserPromptEnabled ? 'settings.stickyUserPromptOn' : 'settings.stickyUserPromptOff') }}</span>
-                    <span class="form-toggle" :class="{ on: stickyUserPromptEnabled }" aria-hidden="true">
+                    <span class="appearance-toggle-status">{{ $t(selectedStickyUserPrompt ? 'settings.stickyUserPromptOn' : 'settings.stickyUserPromptOff') }}</span>
+                    <span class="form-toggle" :class="{ on: selectedStickyUserPrompt }" aria-hidden="true">
                       <span class="form-toggle-knob" />
                     </span>
                   </span>
@@ -2538,57 +2483,55 @@ function onSaved() {
 }
 .appearance-translate-status { color: var(--muted-foreground); }
 .appearance-translate-error { color: var(--destructive); }
+.appearance-engine-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 -16px 14px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.appearance-engine-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 150ms, background 150ms;
+}
+.appearance-engine-tab:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.appearance-engine-tab.active {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.appearance-engine-tab.active::after {
+  position: absolute;
+  right: 8px;
+  bottom: -1px;
+  left: 8px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--primary);
+  content: '';
+}
+.appearance-engine-tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
 .appearance-reading-grid {
   grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
   align-items: stretch;
 }
 .appearance-reading-block {
   min-width: 0;
-}
-.appearance-reading-scope {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 8px 0;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--muted) 52%, transparent);
-}
-.appearance-reading-scope-field {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 4px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  font-weight: 600;
-}
-.appearance-reading-scope-field .form-select {
-  width: 100%;
-  min-width: 0;
-}
-.appearance-reading-scope-state {
-  display: flex;
-  max-width: 210px;
-  flex: none;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 3px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  line-height: 1.35;
-  text-align: right;
-}
-.appearance-reading-reset {
-  color: var(--primary);
-  font-size: 10px;
-  font-weight: 600;
-}
-.appearance-reading-reset:hover,
-.appearance-reading-reset:focus-visible {
-  text-decoration: underline;
 }
 .appearance-reading-block .tool-display-options {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2705,8 +2648,6 @@ function onSaved() {
   .appearance-theme-grid,
   .appearance-layout-grid { grid-template-columns: 1fr; }
   .appearance-reading-block .tool-display-options { grid-template-columns: 1fr; }
-  .appearance-reading-scope { align-items: stretch; flex-direction: column; }
-  .appearance-reading-scope-state { max-width: none; align-items: flex-start; text-align: left; }
   .appearance-field-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
   .appearance-field-note { text-align: left; }
 }

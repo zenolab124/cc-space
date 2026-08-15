@@ -21,8 +21,8 @@ const props = defineProps<{
   displayMode?: ToolDisplayMode
 }>()
 
-const { toolDisplayMode: defaultToolDisplayMode } = useToolDisplayMode()
-const toolDisplayMode = computed(() => props.displayMode ?? defaultToolDisplayMode.value)
+const { toolDisplayModeFor } = useToolDisplayMode()
+const toolDisplayMode = computed(() => props.displayMode ?? toolDisplayModeFor('claude-code'))
 const segments = computed(() => {
   let blockIndex = 0
   return segmentToolBlocks(props.blocks).map(segment => {

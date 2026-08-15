@@ -7,12 +7,16 @@ function source(path: string): string {
 }
 
 describe('用户提问吸顶开关', () => {
-  it('默认开启并通过设置桥持久化', () => {
+  it('两个引擎默认开启并分别通过设置桥持久化', () => {
     const composable = source('../../src/composables/useStickyUserPrompt.ts')
 
     expect(composable).toContain("const DEFAULT_ENABLED = true")
+    expect(composable).toContain("'claude-code': enabled")
+    expect(composable).toContain('codex: enabled')
+    expect(composable).toContain("const SETTING_KEY = 'stickyUserPromptByEngine'")
     expect(composable).toContain("key: SETTING_KEY")
     expect(composable).toContain('writeSetting(SETTING_KEY, value)')
+    expect(composable).toContain('setStickyUserPromptFor(engineId: SessionReadingEngineId')
   })
 
   it('保留虚拟化并用真实卡片边界驱动悬浮层定位', () => {
@@ -44,13 +48,14 @@ describe('用户提问吸顶开关', () => {
     expect(standardDetail).not.toContain('surfaceBounds.height')
   })
 
-  it('在外观设置中提供可持久化的全局开关', () => {
+  it('在外观设置中按引擎提供独立开关', () => {
     const settings = source('../../src/views/SettingsView.vue')
 
     expect(settings).toContain('useStickyUserPrompt')
     expect(settings).toContain("$t('settings.stickyUserPrompt')")
-    expect(settings).toContain(':aria-pressed="stickyUserPromptEnabled"')
+    expect(settings).toContain(':aria-pressed="selectedStickyUserPrompt"')
     expect(settings).toContain('settings.stickyUserPromptOn')
-    expect(settings).toContain('setStickyUserPrompt')
+    expect(settings).toContain('setStickyUserPromptFor(selectedReadingEngine.value')
+    expect(settings).toContain('role="tablist"')
   })
 })

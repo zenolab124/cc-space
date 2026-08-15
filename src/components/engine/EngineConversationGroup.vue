@@ -88,6 +88,7 @@ const artifactCandidates = computed(() => props.streaming
 const responseProcessEntries = computed(() => responseRecords.value.flatMap(record => record.segments
   .map((segment, index) => ({ key: `${record.id}:${index}`, segment }))
   .filter(entry => isEngineProcessSegment(entry.segment))))
+const toolDisplayMode = computed(() => toolDisplayModeFor(props.engineId))
 type ResponseBlockView =
   | Extract<EngineResponseBlock, { kind: 'content' }>
   | (Extract<EngineResponseBlock, { kind: 'process' }> & {
@@ -98,15 +99,11 @@ type ResponseBlockView =
 const responseBlocks = computed<ResponseBlockView[]>(() => buildEngineResponseBlocks(
   responseRecords.value,
   true,
-  record => toolDisplayModeFor(
-    props.engineId,
-    typeof record.sourceMeta?.model === 'string' ? record.sourceMeta.model : engineMeta.value.model,
-  ),
 ).map(block => block.kind === 'process'
   ? {
       ...block,
       projection: projectEngineProcessEntries(block.entries, responseProcessEntries.value),
-      displayMode: block.processGroupKey as ToolDisplayMode,
+      displayMode: toolDisplayMode.value,
     }
   : block))
 

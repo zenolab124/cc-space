@@ -267,7 +267,8 @@ provide('toolResultMap', toolResultMap)
 
 const toolFoldState = provideToolFoldState()
 const { toolDisplayModeFor, toolDisplayModeRevision } = useToolDisplayMode()
-const { stickyUserPromptEnabled } = useStickyUserPrompt()
+const { stickyUserPromptFor } = useStickyUserPrompt()
+const stickyUserPromptEnabled = computed(() => stickyUserPromptFor('claude-code'))
 
 // --- 异步任务面板（后台 Bash / Agent / Workflow / Monitor / Wakeup）---
 const {
@@ -3448,7 +3449,7 @@ async function onReload() {
             <ContentBlockList
               :blocks="filterConsumedResults(turn.content)"
               :streaming="!!turn.live"
-              :display-mode="toolDisplayModeFor('claude-code', turn.model)"
+              :display-mode="toolDisplayModeFor('claude-code')"
             />
           </div>
           <ArtifactPreviewList

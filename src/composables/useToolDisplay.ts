@@ -1,16 +1,20 @@
 import { inject, provide, reactive, ref, watch, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { ToolResultData } from '@/utils/toolPair'
 import { bridgeSetting, writeSetting } from '@/utils/settingBridge'
-import { inferModel } from '@/utils/modelContext'
+import {
+  SESSION_READING_ENGINE_IDS,
+  isSessionReadingEngineId,
+  type SessionReadingEngineId,
+} from './sessionReadingEngines'
 import { foldDefaultExpanded, foldDefaultRevision, setFoldDefault } from './useFoldDefaults'
 
 export const TOOL_DISPLAY_MODES = ['cards', 'individual', 'grouped'] as const
 export type ToolDisplayMode = typeof TOOL_DISPLAY_MODES[number]
 
-const STORAGE_KEY = 'monet:tool-display-mode'
-const OVERRIDES_STORAGE_KEY = 'monet:tool-display-mode-overrides'
-const SETTING_KEY = 'toolDisplayMode'
-const OVERRIDES_SETTING_KEY = 'toolDisplayModeOverrides'
+const STORAGE_KEY = 'monet:tool-display-modes'
+const LEGACY_STORAGE_KEY = 'monet:tool-display-mode'
+const SETTING_KEY = 'toolDisplayModes'
+const DEFAULT_MODE: ToolDisplayMode = 'grouped'
 
 function parseMode(value: unknown): ToolDisplayMode | null {
   return typeof value === 'string' && TOOL_DISPLAY_MODES.includes(value as ToolDisplayMode)
@@ -18,121 +22,73 @@ function parseMode(value: unknown): ToolDisplayMode | null {
     : null
 }
 
-function loadMode(): ToolDisplayMode {
-  try {
-    return parseMode(localStorage.getItem(STORAGE_KEY)) ?? 'grouped'
-  } catch {
-    return 'grouped'
+type ToolDisplayModes = Record<SessionReadingEngineId, ToolDisplayMode>
+
+function defaultModes(mode: ToolDisplayMode = DEFAULT_MODE): ToolDisplayModes {
+  return {
+    'claude-code': mode,
+    codex: mode,
   }
 }
 
-const toolDisplayMode = ref<ToolDisplayMode>(loadMode())
-
-function parseOverrides(value: unknown): Record<string, ToolDisplayMode> | null {
+function parseModes(value: unknown, fallback = DEFAULT_MODE): ToolDisplayModes | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const parsed: Record<string, ToolDisplayMode> = {}
-  for (const [key, mode] of Object.entries(value)) {
-    const validMode = parseMode(mode)
-    if (key && validMode) parsed[key] = validMode
-  }
-  return parsed
+  const source = value as Record<string, unknown>
+  return SESSION_READING_ENGINE_IDS.reduce<ToolDisplayModes>((modes, engineId) => {
+    modes[engineId] = parseMode(source[engineId]) ?? fallback
+    return modes
+  }, defaultModes(fallback))
 }
 
-function loadOverrides(): Record<string, ToolDisplayMode> {
+function loadModes(): ToolDisplayModes {
   try {
-    const raw = localStorage.getItem(OVERRIDES_STORAGE_KEY)
-    return raw ? parseOverrides(JSON.parse(raw)) ?? {} : {}
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return parseModes(JSON.parse(raw)) ?? defaultModes()
+    return defaultModes(parseMode(localStorage.getItem(LEGACY_STORAGE_KEY)) ?? DEFAULT_MODE)
   } catch {
-    return {}
+    return defaultModes()
   }
 }
 
-const toolDisplayModeOverrides = ref<Record<string, ToolDisplayMode>>(loadOverrides())
+const toolDisplayModes = ref<ToolDisplayModes>(loadModes())
 /** 展示方式变化会影响虚拟列表高度；统一 revision 供各会话表面触发重测。 */
 const toolDisplayModeRevision = ref(0)
 
-export function normalizeToolDisplayModel(model: string | null | undefined): string | null {
-  const value = model?.trim()
-  if (!value || value === '<synthetic>') return null
-  return inferModel(value)?.id ?? value.toLowerCase()
-}
-
-export function toolDisplayModelKey(engineId: string, model: string | null | undefined): string | null {
-  const normalizedModel = normalizeToolDisplayModel(model)
-  return normalizedModel ? `${engineId.trim().toLowerCase()}:${normalizedModel}` : null
-}
-
 bridgeSetting({
   key: SETTING_KEY,
-  uplift: () => localStorage.getItem(STORAGE_KEY) === null ? undefined : toolDisplayMode.value,
+  uplift: () => {
+    const hasLocalValue = localStorage.getItem(STORAGE_KEY) !== null
+      || localStorage.getItem(LEGACY_STORAGE_KEY) !== null
+    return hasLocalValue ? toolDisplayModes.value : undefined
+  },
   apply: value => {
-    const parsed = parseMode(value)
-    if (parsed) toolDisplayMode.value = parsed
+    const parsed = parseModes(value)
+    if (parsed) toolDisplayModes.value = parsed
   },
 })
 
-bridgeSetting({
-  key: OVERRIDES_SETTING_KEY,
-  uplift: () => localStorage.getItem(OVERRIDES_STORAGE_KEY) === null
-    ? undefined
-    : toolDisplayModeOverrides.value,
-  apply: value => {
-    const parsed = parseOverrides(value)
-    if (parsed) toolDisplayModeOverrides.value = parsed
-  },
-})
-
-watch(toolDisplayMode, value => {
+watch(toolDisplayModes, value => {
   try {
-    localStorage.setItem(STORAGE_KEY, value)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
   } catch {}
   writeSetting(SETTING_KEY, value)
-  toolDisplayModeRevision.value += 1
-})
-
-watch(toolDisplayModeOverrides, value => {
-  try {
-    localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(value))
-  } catch {}
-  writeSetting(OVERRIDES_SETTING_KEY, value)
   toolDisplayModeRevision.value += 1
 }, { deep: true })
 
 export function useToolDisplayMode() {
-  function setToolDisplayMode(mode: ToolDisplayMode) {
-    toolDisplayMode.value = mode
+  function toolDisplayModeFor(engineId: string): ToolDisplayMode {
+    return isSessionReadingEngineId(engineId) ? toolDisplayModes.value[engineId] : DEFAULT_MODE
   }
 
-  function toolDisplayModeFor(engineId: string, model: string | null | undefined): ToolDisplayMode {
-    const key = toolDisplayModelKey(engineId, model)
-    return (key ? toolDisplayModeOverrides.value[key] : null) ?? toolDisplayMode.value
-  }
-
-  function toolDisplayModeOverrideFor(engineId: string, model: string | null | undefined): ToolDisplayMode | null {
-    const key = toolDisplayModelKey(engineId, model)
-    return key ? toolDisplayModeOverrides.value[key] ?? null : null
-  }
-
-  function setToolDisplayModeFor(
-    engineId: string,
-    model: string,
-    mode: ToolDisplayMode | null,
-  ) {
-    const key = toolDisplayModelKey(engineId, model)
-    if (!key) return
-    const next = { ...toolDisplayModeOverrides.value }
-    if (mode) next[key] = mode
-    else delete next[key]
-    toolDisplayModeOverrides.value = next
+  function setToolDisplayModeFor(engineId: SessionReadingEngineId, mode: ToolDisplayMode) {
+    if (toolDisplayModes.value[engineId] === mode) return
+    toolDisplayModes.value = { ...toolDisplayModes.value, [engineId]: mode }
   }
 
   return {
-    toolDisplayMode,
-    toolDisplayModeOverrides,
+    toolDisplayModes,
     toolDisplayModeRevision,
-    setToolDisplayMode,
     toolDisplayModeFor,
-    toolDisplayModeOverrideFor,
     setToolDisplayModeFor,
   }
 }

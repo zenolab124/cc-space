@@ -118,9 +118,7 @@ const responseEntries = computed<ResponseEntry[]>(() => {
 
   props.group.responses.forEach((record, index) => {
     const blocks = record.type === 'assistant' ? props.contentBlocks(record) : []
-    const displayMode = record.type === 'assistant'
-      ? toolDisplayModeFor('claude-code', record.message?.model ?? props.responseMeta?.model)
-      : toolDisplayModeFor('claude-code', null)
+    const displayMode = toolDisplayModeFor('claude-code')
     if (record.type !== 'assistant') {
       flush()
       entries.push({
