@@ -1063,60 +1063,70 @@ function onSaved() {
                 <h3>{{ $t('settings.defaultSessionChannel') }}</h3>
                 <p>{{ $t('settings.defaultSessionChannelHint') }}</p>
               </div>
-              <span class="i-carbon-settings-adjust channel-panel-icon" />
             </header>
-            <div class="channel-default-grid">
-              <section v-for="engine in (['claude-code', 'codex'] as SessionEngineId[])" :key="engine" class="channel-engine-card">
+            <div class="channel-default-table">
+              <div class="channel-default-columns" aria-hidden="true">
+                <span />
+                <span>{{ $t('settings.agentConnectionLabel') }}</span>
+                <span>{{ $t('common.model') }}</span>
+                <span>{{ $t('common.effort') }}</span>
+              </div>
+              <section v-for="engine in (['claude-code', 'codex'] as SessionEngineId[])" :key="engine" class="channel-default-row">
                 <div class="channel-engine-heading">
-                  <span class="channel-engine-dot" :class="engine === 'codex' ? 'bg-codex' : 'bg-claude'" />
+                  <span class="channel-engine-mark" :class="engine === 'codex' ? 'codex' : 'claude'">
+                    <span :class="engine === 'codex' ? 'i-carbon-code' : 'i-carbon-terminal'" />
+                  </span>
                   <div>
-                    <h4 :class="engine === 'codex' ? 'text-codex' : 'text-claude'">{{ engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel') }}</h4>
+                    <h4>{{ engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel') }}</h4>
                     <p>{{ $t('settings.sessionEngineDefaultHint') }}</p>
                   </div>
                 </div>
-                <select
-                  class="form-select channel-default-select"
-                  :value="defaultSessionChannels[engine] ?? OFFICIAL_CHANNEL_ID"
-                  :aria-label="engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel')"
-                  @change="onSessionDefaultChange(engine, ($event.target as HTMLSelectElement).value)"
-                >
-                  <option v-for="ch in sessionChannelsFor(engine)" :key="`${engine}-${ch.id}`" :value="ch.id" :disabled="!ch.enabled">
-                    {{ builtinChannelName(ch) }}
-                  </option>
-                </select>
-                <div class="grid grid-cols-2 gap-2">
-                  <label class="form-field min-w-0">
-                    <span class="setting-hint">{{ $t('settings.channelForm.defaultModelLabel') }}</span>
-                    <input
-                      class="form-input min-w-0 font-mono"
-                      type="text"
-                      :value="defaultSessionModels[engine] ?? ''"
-                      :list="`session-default-models-${engine}`"
-                      :placeholder="$t('settings.followEngineDefault')"
-                      spellcheck="false"
-                      @change="onSessionRuntimeChange(engine, 'model', ($event.target as HTMLInputElement).value.trim())"
-                    />
-                    <datalist :id="`session-default-models-${engine}`">
-                      <option v-for="model in sessionDefaultModelsFor(engine)" :key="model" :value="model" />
-                    </datalist>
-                  </label>
-                  <label class="form-field min-w-0">
-                    <span class="setting-hint">{{ $t('settings.channelForm.defaultEffortLabel') }}</span>
-                    <select
-                      class="form-select min-w-0"
-                      :value="defaultSessionEfforts[engine] ?? ''"
-                      @change="onSessionRuntimeChange(engine, 'effort', ($event.target as HTMLSelectElement).value)"
-                    >
-                      <option value="">{{ $t('settings.followEngineDefault') }}</option>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="xhigh">xHigh</option>
-                      <option v-if="engine === 'claude-code'" value="max">Max</option>
-                      <option v-if="engine === 'claude-code'" value="ultracode">Ultracode</option>
-                    </select>
-                  </label>
-                </div>
+                <label class="channel-default-field">
+                  <span class="channel-default-field-label">{{ $t('settings.agentConnectionLabel') }}</span>
+                  <select
+                    class="form-select channel-default-control"
+                    :value="defaultSessionChannels[engine] ?? OFFICIAL_CHANNEL_ID"
+                    :aria-label="`${engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel')} · ${$t('settings.agentConnectionLabel')}`"
+                    @change="onSessionDefaultChange(engine, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="ch in sessionChannelsFor(engine)" :key="`${engine}-${ch.id}`" :value="ch.id" :disabled="!ch.enabled">
+                      {{ builtinChannelName(ch) }}
+                    </option>
+                  </select>
+                </label>
+                <label class="channel-default-field">
+                  <span class="channel-default-field-label">{{ $t('common.model') }}</span>
+                  <input
+                    class="form-input channel-default-control font-mono"
+                    type="text"
+                    :value="defaultSessionModels[engine] ?? ''"
+                    :list="`session-default-models-${engine}`"
+                    :placeholder="$t('settings.followEngineDefault')"
+                    :aria-label="`${engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel')} · ${$t('common.model')}`"
+                    spellcheck="false"
+                    @change="onSessionRuntimeChange(engine, 'model', ($event.target as HTMLInputElement).value.trim())"
+                  />
+                  <datalist :id="`session-default-models-${engine}`">
+                    <option v-for="model in sessionDefaultModelsFor(engine)" :key="model" :value="model" />
+                  </datalist>
+                </label>
+                <label class="channel-default-field">
+                  <span class="channel-default-field-label">{{ $t('common.effort') }}</span>
+                  <select
+                    class="form-select channel-default-control"
+                    :value="defaultSessionEfforts[engine] ?? ''"
+                    :aria-label="`${engine === 'codex' ? $t('settings.codexLabel') : $t('settings.claudeCodeLabel')} · ${$t('common.effort')}`"
+                    @change="onSessionRuntimeChange(engine, 'effort', ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="">{{ $t('settings.followEngineDefault') }}</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="xhigh">xHigh</option>
+                    <option v-if="engine === 'claude-code'" value="max">Max</option>
+                    <option v-if="engine === 'claude-code'" value="ultracode">Ultracode</option>
+                  </select>
+                </label>
               </section>
             </div>
           </section>
@@ -2782,33 +2792,70 @@ function onSaved() {
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
-.channel-default-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+.channel-default-table {
+  overflow: hidden;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
-.channel-engine-card {
+.channel-default-columns,
+.channel-default-row {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.72fr) minmax(180px, 1.2fr) minmax(190px, 1.3fr) minmax(132px, 0.72fr);
+  gap: 12px;
+  align-items: center;
+}
+.channel-default-columns {
+  padding: 8px 10px 6px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.channel-default-row {
   min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--background);
+  padding: 11px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.channel-default-row:first-of-type {
+  border-top-color: color-mix(in srgb, var(--border) 38%, transparent);
+}
+.channel-default-row:hover {
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
 }
 .channel-engine-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  min-width: 0;
 }
 .channel-engine-heading h4 {
-  margin: 0 0 2px;
+  margin: 0 0 1px;
   font-size: 12px;
   font-weight: 650;
+  color: var(--foreground);
 }
 .channel-engine-heading p {
   margin: 0;
   color: var(--muted-foreground);
   font-size: 10px;
+}
+.channel-engine-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: var(--card);
+}
+.channel-engine-mark.claude {
+  color: var(--claude);
+  background: color-mix(in srgb, var(--claude) 8%, var(--card));
+}
+.channel-engine-mark.codex {
+  color: var(--codex);
+  background: color-mix(in srgb, var(--codex) 8%, var(--card));
 }
 .channel-engine-dot {
   flex: none;
@@ -2817,9 +2864,23 @@ function onSaved() {
   margin-top: 4px;
   border-radius: 999px;
 }
-.channel-default-select {
+.channel-default-field {
+  position: relative;
+  min-width: 0;
+}
+.channel-default-field-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.channel-default-control {
   width: 100%;
-  margin-top: 2px;
 }
 .channel-engine-badge {
   display: inline-flex;
@@ -3095,14 +3156,34 @@ function onSaved() {
 @media (max-width: 900px) {
   .settings-card-grid-two { grid-template-columns: 1fr; }
   .settings-page .settings-card-grid-two > .settings-extension-card:last-child { grid-column: auto; }
+  .channel-default-columns { display: none; }
+  .channel-default-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 9px 10px;
+    padding-block: 13px;
+  }
+  .channel-engine-heading { grid-column: 1 / -1; }
+  .channel-default-field-label {
+    position: static;
+    display: block;
+    width: auto;
+    height: auto;
+    margin-bottom: 4px;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+    color: var(--muted-foreground);
+    font-size: 10px;
+    font-weight: 600;
+  }
 }
 @media (max-width: 620px) {
   .settings-page-hero { align-items: flex-start; flex-direction: column; }
   .settings-page-hero-icon { display: none; }
-  .channel-default-grid,
   .channel-agent-config,
   .channel-settings-grid,
   .system-settings-grid { grid-template-columns: 1fr; }
+  .channel-default-row { grid-template-columns: 1fr; }
   .settings-page .setting-row { align-items: flex-start; flex-direction: column; gap: 10px; }
   .settings-update-header { align-items: flex-start; flex-wrap: wrap; }
   .settings-update-header > .ml-auto { width: 100%; margin-left: 0; justify-content: flex-end; }
