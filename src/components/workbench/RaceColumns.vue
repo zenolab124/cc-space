@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useWorkbench, setRightZoneWidth } from '@/composables/useWorkbench'
 import { useHorizontalWheelScroll } from '@/composables/useHorizontalWheelScroll'
@@ -68,6 +68,21 @@ async function selectRaceEngine(sessionId: string, engineId: string) {
   } finally {
     selectingRaceEngine.value = null
   }
+}
+
+function scrollLaneIntoView(sessionId: string) {
+  const lane = Array.from(
+    containerRef.value?.querySelectorAll<HTMLElement>('[data-workbench-session-id]') ?? [],
+  ).find(element => element.dataset.workbenchSessionId === sessionId)
+  lane?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })
+}
+
+async function onAddLane() {
+  const sessionId = await forkNewLane()
+  if (!sessionId) return
+  if (canSwitchRaceEngine.value) enginePickerSessionId.value = sessionId
+  await nextTick()
+  scrollLaneIntoView(sessionId)
 }
 
 watch(canSwitchRaceEngine, (available) => {
@@ -139,6 +154,7 @@ function onInputKeydown(e: KeyboardEvent) {
           :key="col.id"
           class="h-full relative shrink-0 race-col"
           data-workbench-column
+          :data-workbench-session-id="col.sessionId"
           :class="{ 'no-transition': dragging || suppressColumnTransition }"
           :style="{
             width: `${activeTab.columnSizes[i] ?? minColumnWidth}px`,
@@ -245,7 +261,7 @@ function onInputKeydown(e: KeyboardEvent) {
           :disabled="raceMutationLoading || broadcasting"
           class="icon-btn icon-btn-lg icon-btn-dashed flex-1"
           v-tooltip="t('workbench.race.addLane')"
-          @click="forkNewLane"
+          @click="onAddLane"
         >
           <span class="i-carbon-add w-3.5 h-3.5" />
         </button>

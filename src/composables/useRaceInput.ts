@@ -406,10 +406,10 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
     }
   }
 
-  async function forkNewLane() {
-    if (raceMutationLoading.value || broadcasting.value) return
+  async function forkNewLane(): Promise<string | null> {
+    if (raceMutationLoading.value || broadcasting.value) return null
     const race = tab.value.race
-    if (!race || race.lanes.length === 0) return
+    if (!race || race.lanes.length === 0) return null
     const sourceLane = race.lanes[0]
     const context = laneContext(sourceLane.sessionId)
     raceError.value = null
@@ -437,7 +437,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
         })
         inheritEngineRunConfig(sourceLane.sessionId, sessionId)
         addRaceLane(tab.value.id, sessionId)
-        return
+        return sessionId
       }
       const { registerFork } = useWorkbench()
       const newSessionId = crypto.randomUUID()
@@ -445,8 +445,10 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
       registerFork(newSessionId, sourceLane.sessionId, race.cwd)
       inheritRunSettings(sourceLane.sessionId, newSessionId)
       addRaceLane(tab.value.id, newSessionId)
+      return newSessionId
     } catch (error) {
       raceError.value = String(error)
+      return null
     } finally {
       raceMutationLoading.value = false
     }

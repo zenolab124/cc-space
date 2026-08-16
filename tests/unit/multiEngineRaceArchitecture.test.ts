@@ -86,4 +86,18 @@ describe('multi-engine race architecture', () => {
     expect(workbenchColumns).toContain('await createSession(project, cwd, options)')
     expect(workbenchColumns).toContain('await forkSession(reference, null, options)')
   })
+
+  it('reveals and focuses a newly added race lane', () => {
+    const raceInput = source('../../src/composables/useRaceInput.ts')
+    const raceColumns = source('../../src/components/workbench/RaceColumns.vue')
+
+    expect(raceInput).toContain('async function forkNewLane(): Promise<string | null>')
+    expect(raceInput).toContain('return sessionId')
+    expect(raceInput).toContain('return newSessionId')
+    expect(raceColumns).toContain('const sessionId = await forkNewLane()')
+    expect(raceColumns).toContain('enginePickerSessionId.value = sessionId')
+    expect(raceColumns).toContain(':data-workbench-session-id="col.sessionId"')
+    expect(raceColumns).toContain('scrollLaneIntoView(sessionId)')
+    expect(raceColumns).toContain("scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })")
+  })
 })
