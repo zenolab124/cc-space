@@ -23,8 +23,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <section class="engine-picker h-full overflow-y-auto bg-background/35 px-5 py-8 flex items-center justify-center">
-    <div class="w-full max-w-2xl text-center">
+  <section class="engine-picker h-full overflow-y-auto bg-background/35 px-5 py-8">
+    <div class="engine-picker-content w-full max-w-2xl text-center">
       <div class="mx-auto mb-3 h-9 w-9 rounded border border-border bg-card shadow-paper flex items-center justify-center text-primary">
         <span class="i-carbon-rocket h-4.5 w-4.5" />
       </div>
@@ -78,9 +78,18 @@ const emit = defineEmits<{
 .engine-picker {
   container-type: inline-size;
 }
+.engine-picker-content {
+  min-height: 100%;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 .engine-choice-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 0.75rem;
 }
 .engine-choice {

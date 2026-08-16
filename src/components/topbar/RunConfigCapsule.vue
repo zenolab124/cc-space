@@ -72,6 +72,7 @@ type Layer = 'effort' | 'model' | 'channel'
 type Col = Layer | 'advanced'
 const openLayer = ref<Layer | null>(null)
 const containerRef = ref<HTMLElement>()
+const modelListRef = ref<HTMLElement>()
 
 /** 面板显示哪些列(自左向右);高级列只随全景出现 */
 const visibleCols = computed<Col[]>(() => {
@@ -107,6 +108,11 @@ function openFrom(layer: Layer) {
   openLayer.value = openLayer.value === target ? null : target
   if (openLayer.value) {
     placePanel()
+    nextTick(() => {
+      modelListRef.value
+        ?.querySelector<HTMLElement>('.rc-opt.sel')
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
     // 渠道文件/settings.json 都是活文件:开面板即重读,不显示过期值
     void refreshChannels()
     void refreshCliDefaults()
@@ -560,7 +566,12 @@ function openSettings() {
           <span class="rc-src">{{ engineConfig ? engineModelSrcLabel : standaloneMode ? $t('topbar.srcApp') : advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig?.display.modelSource) }}</span>
           <button v-if="modelOverridden" class="rc-reset" @click="emit('modelChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
-        <div class="rc-list" :class="{ 'opacity-45 pointer-events-none': advisorLocked }" :title="advisorLocked ? $t('topbar.modelAdvisorLocked') : ''">
+        <div
+          ref="modelListRef"
+          class="rc-list rc-model-list"
+          :class="{ 'opacity-45 pointer-events-none': advisorLocked }"
+          :title="advisorLocked ? $t('topbar.modelAdvisorLocked') : ''"
+        >
           <template v-for="(m, i) in modelListItems" :key="m.id">
             <div v-if="i > 0 && !!m.legacy !== !!modelListItems[i - 1].legacy" class="rc-divider" />
             <button
@@ -702,6 +713,11 @@ function openSettings() {
 .rc-src { font-size: 9px; color: var(--muted-foreground); opacity: .7; margin-left: auto; }
 .rc-reset { font-size: 9px; color: var(--primary); cursor: pointer; }
 .rc-list { display: flex; flex-direction: column; }
+.rc-model-list {
+  max-height: min(280px, calc(100vh - 96px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .rc-opt {
   font-size: 12px; padding: 3px 8px; border-radius: 4px; color: var(--muted-foreground);
   cursor: pointer; display: flex; align-items: center; gap: 5px; margin-bottom: 1px;
