@@ -8,6 +8,7 @@ import { readMigratedStorage } from '../utils/storageMigrate'
 import { resolveSessionRef } from '@/engines/directory'
 import type { ProjectRef, SessionRef } from '@/engines/types'
 import { clearEngineRunConfig, evictEngineRunConfig } from '@/engines/runConfig'
+import { clearRuntimeOptimisticInputs } from '@/engines/runtimeOptimisticInput'
 
 /**
  * 工作台状态模型（v2.1.0 FR-001/002/004 + NFR-002）
@@ -877,6 +878,7 @@ function teardownSession(sessionId: string) {
     useRunners().stopAllForSession(sessionId).catch(() => {})
     evictSessionTransients(sessionId)
     evictEngineRunConfig(sessionId)
+    clearRuntimeOptimisticInputs(sessionId)
     delete state.value.pendingTasks[sessionId]
     delete state.value.engineDrafts[sessionId]
   }

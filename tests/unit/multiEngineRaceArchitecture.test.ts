@@ -12,6 +12,9 @@ describe('multi-engine race architecture', () => {
     const draftChannel = source('../../src/engines/draftChannel.ts')
 
     expect(raceInput).toContain('startTurnWithInput(context.reference')
+    expect(raceInput).toContain('stageRuntimeOptimisticInput(')
+    expect(raceInput).toContain('bindRuntimeOptimisticInput(')
+    expect(raceInput).toContain('removeRuntimeOptimisticInput(')
     expect(raceInput).toContain('attachSession(context.reference, engineRuntimeOptions(sessionId))')
     expect(raceInput).toContain('sendInputWhileRunning(')
     expect(raceInput).toContain('actions.sendWhileRunning.available')

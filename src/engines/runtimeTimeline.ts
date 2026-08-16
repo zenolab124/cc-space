@@ -5,6 +5,7 @@ import type {
   NormalizedRuntimeEvent,
   RuntimeEventEnvelope,
   RuntimeSnapshot,
+  SessionRef,
 } from './types'
 
 const OPTIMISTIC_RECORD = 'optimistic'
@@ -235,6 +236,36 @@ export function reduceRuntimeTimeline(
 
 export function optimisticUserSourceMeta(): Record<string, unknown> {
   return { [OPTIMISTIC_RECORD]: true }
+}
+
+export interface OptimisticUserImage {
+  id: string
+  dataUrl: string
+  mediaType: string
+}
+
+/** 构造标准引擎统一使用的乐观用户记录，普通输入与赛马广播保持同一交接语义。 */
+export function createOptimisticUserRecord(
+  session: SessionRef,
+  id: string,
+  text: string,
+  images: OptimisticUserImage[] = [],
+  turnId: string | null = null,
+): ConversationRecord {
+  return {
+    id,
+    session,
+    turnId,
+    parentId: null,
+    role: 'user',
+    timestamp: new Date().toISOString(),
+    segments: text ? [{ kind: 'text', text }] : [],
+    usage: null,
+    sourceMeta: {
+      ...optimisticUserSourceMeta(),
+      optimisticImages: images,
+    },
+  }
 }
 
 /** 用 turn/start 的权威返回值收口乐观用户消息，避免依赖通知与 source reload 的先后。 */

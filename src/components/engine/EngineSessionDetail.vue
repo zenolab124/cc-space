@@ -11,7 +11,8 @@ import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
-import { bindOptimisticUserTurn, composeRuntimeTimeline, hasLiveTurn, optimisticUserSourceMeta, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
+import { bindOptimisticUserTurn, composeRuntimeTimeline, createOptimisticUserRecord, hasLiveTurn, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
+import { bindLatestRuntimeOptimisticInput, reconcileRuntimeOptimisticInputs, useRuntimeOptimisticInputs } from '@/engines/runtimeOptimisticInput'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import EngineAsyncTaskPanel from './EngineAsyncTaskPanel.vue'
@@ -207,7 +208,11 @@ function bindDetailRoot(element: HTMLElement | null) {
 
 const reference = computed(() => props.session.reference)
 const nativeSessionId = computed(() => props.session.native_id || props.session.id)
-const allRecords = computed(() => composeRuntimeTimeline(records.value, liveRecords.value)
+const runtimeOptimisticInputs = useRuntimeOptimisticInputs(reference)
+const allRecords = computed(() => composeRuntimeTimeline(
+  records.value,
+  [...liveRecords.value, ...runtimeOptimisticInputs.value],
+)
   .filter(record => !clearedRecordIds.value.has(record.id)))
 const asyncTasks = computed(() => buildEngineAsyncTasks(allRecords.value))
 const asyncPanelVisible = computed(() => asyncPanelOpen.value && asyncTasks.value.length > 0 && !!reference.value)
@@ -940,6 +945,7 @@ function generateMetadataForSettledTurn(turnId: string) {
 }
 
 function reconcileLoadedRecords(timelineRecords: ConversationRecord[]) {
+  if (reference.value) reconcileRuntimeOptimisticInputs(reference.value, timelineRecords)
   records.value = timelineRecords
   liveRecords.value = reconcileLiveRecords(
     timelineRecords,
@@ -1357,21 +1363,13 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
   sending.value = true
   error.value = null
   const optimisticId = `pending-user-${Date.now()}`
-  liveRecords.value.push({
-    id: optimisticId,
-    session: reference.value,
-    // startTurn 每次创建新 turn；不能继承可能滞后的运行时快照。
-    turnId: null,
-    parentId: null,
-    role: 'user',
-    timestamp: new Date().toISOString(),
-    segments: item.text ? [{ kind: 'text', text: item.text }] : [],
-    usage: null,
-    sourceMeta: {
-      ...optimisticUserSourceMeta(),
-      optimisticImages: item.images,
-    },
-  })
+  // startTurn 每次创建新 turn；不能继承可能滞后的运行时快照。
+  liveRecords.value.push(createOptimisticUserRecord(
+    reference.value,
+    optimisticId,
+    item.text,
+    item.images,
+  ))
   try {
     const turn = await startTurnWithFastFallback(reference.value, item.input)
     liveRecords.value = bindOptimisticUserTurn(
@@ -1663,6 +1661,9 @@ function scheduleTurnSettlement(turnId: string, attempt = 0) {
 
 function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
   if (!ownsSession(envelope.session)) return
+  if (envelope.event.kind === 'turnStarted') {
+    bindLatestRuntimeOptimisticInput(envelope.session, envelope.event.turnId)
+  }
   visualActiveTurnId.value = reduceRuntimeVisualActivity(
     visualActiveTurnId.value,
     envelope.event,

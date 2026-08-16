@@ -23,6 +23,7 @@ import { resolveSession } from '@/engines/directory'
 import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
 import { instanceKey, sameInstance } from '@/engines/identity'
 import { engineRuntimeSnapshot } from '@/engines/runtimeState'
+import { bindRuntimeOptimisticInput, removeRuntimeOptimisticInput, stageRuntimeOptimisticInput } from '@/engines/runtimeOptimisticInput'
 import { engineRunConfig, engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig, setEngineRunConfig } from '@/engines/runConfig'
 import { rebindDraftChannel, sameRuntimeChannel } from '@/engines/draftChannel'
 import { useEngines } from '@/engines/useEngines'
@@ -293,6 +294,11 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
           data: image.source.data,
         })
       }
+      const optimisticImages = pendingImages.map(image => ({
+        id: image.id,
+        dataUrl: image.dataUrl,
+        mediaType: image.mime,
+      }))
 
       // 先验证所有运行中的标准 lane，避免部分投递后才发现某个 adapter
       // 不支持运行中输入。原生 Claude lane 仍由 useStreaming 排到下一轮。
@@ -333,24 +339,41 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
 
       const promises = targets.map(async ({ sessionId, context }) => {
         if (!context.native && context.reference) {
-          const running = runningStandardSnapshots.get(sessionId)
-          if (running?.activeTurnId) {
-            return sendInputWhileRunning(
+          const optimisticId = stageRuntimeOptimisticInput(
+            context.reference,
+            text,
+            optimisticImages,
+          )
+          try {
+            const running = runningStandardSnapshots.get(sessionId)
+            if (running?.activeTurnId) {
+              bindRuntimeOptimisticInput(context.reference, optimisticId, running.activeTurnId)
+              return await sendInputWhileRunning(
+                context.reference,
+                running.runtimeId,
+                running.activeTurnId,
+                genericInput,
+              )
+            }
+            const config = engineRunConfig(sessionId)
+            if (!context.runtimeDraft) {
+              await attachSession(context.reference, engineRuntimeOptions(sessionId))
+            }
+            const turn = await startTurnWithInput(context.reference, genericInput, {
+              cwd: context.cwd,
+              ...(config?.model ? { model: config.model } : {}),
+              ...(config?.effort ? { effort: config.effort } : {}),
+            })
+            bindRuntimeOptimisticInput(
               context.reference,
-              running.runtimeId,
-              running.activeTurnId,
-              genericInput,
+              optimisticId,
+              turn.reference.nativeTurnId,
             )
+            return turn
+          } catch (cause) {
+            removeRuntimeOptimisticInput(context.reference, optimisticId)
+            throw cause
           }
-          const config = engineRunConfig(sessionId)
-          if (!context.runtimeDraft) {
-            await attachSession(context.reference, engineRuntimeOptions(sessionId))
-          }
-          return startTurnWithInput(context.reference, genericInput, {
-            cwd: context.cwd,
-            ...(config?.model ? { model: config.model } : {}),
-            ...(config?.effort ? { effort: config.effort } : {}),
-          })
         }
         const settings = getSessionSettings(sessionId)
         const rc = resolveRunConfig(settings, snapshot)
