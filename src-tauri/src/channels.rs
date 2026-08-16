@@ -1,8 +1,8 @@
 //! 多渠道(profile)配置域:`~/.monet/`
 //!
 //! - `settings.json`        应用设置:默认会话/Agent 渠道 + 渠道展示元数据
-//! - `channels/<id>.json`   Monet 渠道配置；连接凭据只存 `_ccSpace.connection` 一份，
-//!   Claude Code 的 settings/env 在启动时按适配器合成
+//! - `channels/<id>.json`   Monet 渠道配置；`_ccSpace.connection` 存共享连接，
+//!   Claude/Codex 适配器可按需覆盖，实际 API 地址在运行时统一解析
 //! - `runtime/<sid>-<ns>.json` per-spawn 合成产物(渠道内容 + 连接凭据 + 防御空值 + 会话覆盖),
 //!   进程结束即删,应用启动兜底清空
 //!
@@ -140,8 +140,10 @@ pub fn validate_id(id: &str) -> Result<(), String> {
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ChannelExt {
-    /// v2 共享连接。旧渠道缺省时从 Claude env / Codex 配置兼容读取。
+    /// 共享连接。旧渠道缺省时从 Claude env / Codex 配置兼容读取。
     pub connection: Option<ChannelConnectionExt>,
+    /// Claude Code 固定使用 Anthropic Messages；这里只保存可选连接覆盖。
+    pub claude: Option<EngineConnectionExt>,
     pub available_models: Vec<String>,
     pub agent_model: Option<String>,
     /// None 表示旧渠道，按兼容规则仅支持 Claude Code。
@@ -158,6 +160,27 @@ pub struct ChannelConnectionExt {
     pub auth_token: Option<String>,
 }
 
+/// 引擎适配器连接覆盖。空字段表示继承 `_ccSpace.connection`。
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EngineConnectionExt {
+    pub base_url: Option<String>,
+    pub auth_mode: Option<String>,
+    pub auth_token: Option<String>,
+    pub resolved_connection: Option<ResolvedConnectionExt>,
+    /// 新版渠道启用 URL 规则补全；旧渠道缺省为 false，保持原地址不变。
+    pub auto_resolve: bool,
+}
+
+/// 自动探测得到的派生地址缓存。只有 source_base_url 与当前适配器输入完全一致时才使用，
+/// 避免用户手改渠道文件后继续命中旧解析结果。
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResolvedConnectionExt {
+    pub source_base_url: String,
+    pub base_url: String,
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CodexChannelExt {
@@ -171,6 +194,27 @@ pub struct CodexChannelExt {
     pub default_model: Option<String>,
     pub default_effort: Option<String>,
     pub available_models: Vec<String>,
+    pub resolved_connection: Option<ResolvedConnectionExt>,
+    /// 新版托管 Provider 启用 URL 规则补全；旧配置缺省为 false。
+    pub auto_resolve: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChannelAdapter {
+    Claude,
+    Codex,
+    OpenAiChat,
+}
+
+impl ChannelAdapter {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "claude-code" | "anthropic" => Some(Self::Claude),
+            "codex" | "responses" => Some(Self::Codex),
+            "openai" | "openai-chat" => Some(Self::OpenAiChat),
+            _ => None,
+        }
+    }
 }
 
 impl ChannelExt {
@@ -195,6 +239,99 @@ fn channel_supports_engine(id: &str, engine_id: &str) -> bool {
         APPLE_FM_ID => false,
         _ => read_channel_ext(id).is_some_and(|extension| extension.supports_engine(engine_id)),
     }
+}
+
+fn normalize_base_url(value: &str) -> Option<String> {
+    let value = value.trim().trim_end_matches('/');
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn url_path_ends_with(value: &str, suffix: &str) -> bool {
+    reqwest::Url::parse(value).ok().is_some_and(|url| {
+        url.path().trim_end_matches('/').to_ascii_lowercase().ends_with(suffix)
+    })
+}
+
+fn replace_url_path(value: &str, transform: impl FnOnce(&str) -> String) -> Option<String> {
+    let mut url = reqwest::Url::parse(value).ok()?;
+    let path = transform(url.path().trim_end_matches('/'));
+    url.set_path(if path.is_empty() { "/" } else { &path });
+    let rendered = url.to_string();
+    Some(if url.path() == "/" && url.query().is_none() && url.fragment().is_none() {
+        rendered.trim_end_matches('/').to_string()
+    } else {
+        rendered
+    })
+}
+
+fn append_url_path(value: &str, suffix: &str) -> Option<String> {
+    replace_url_path(value, |path| format!("{}{}", path, suffix))
+}
+
+fn strip_url_path_suffix(value: &str, suffix: &str) -> Option<String> {
+    replace_url_path(value, |path| {
+        let keep = path.len().saturating_sub(suffix.len());
+        path[..keep].trim_end_matches('/').to_string()
+    })
+}
+
+/// 适配器接收的是 endpoint 前缀，不是完整 endpoint：
+/// Claude 在 base 后请求 `/v1/messages`；Codex 在 base 后请求 `/responses`。
+/// 候选顺序代表无探测结果时的安全默认，明确 override 也保留同样的容错探测。
+fn adapter_base_url_candidates(value: &str, adapter: ChannelAdapter) -> Vec<String> {
+    let Some(mut base) = normalize_base_url(value) else { return vec![] };
+    match adapter {
+        ChannelAdapter::Claude => {
+            if url_path_ends_with(&base, "/v1/messages") {
+                if let Some(stripped) = strip_url_path_suffix(&base, "/v1/messages") {
+                    base = stripped;
+                }
+            }
+            let mut candidates = Vec::new();
+            if url_path_ends_with(&base, "/v1") {
+                if let Some(stripped) = strip_url_path_suffix(&base, "/v1") {
+                    candidates.push(stripped);
+                }
+            }
+            if !candidates.contains(&base) {
+                candidates.push(base);
+            }
+            candidates
+        }
+        ChannelAdapter::Codex => {
+            if url_path_ends_with(&base, "/responses") {
+                if let Some(stripped) = strip_url_path_suffix(&base, "/responses") {
+                    base = stripped;
+                }
+            }
+            let mut candidates = if url_path_ends_with(&base, "/v1") {
+                vec![base.clone(), strip_url_path_suffix(&base, "/v1").unwrap_or(base)]
+            } else {
+                vec![append_url_path(&base, "/v1").unwrap_or_else(|| format!("{base}/v1")), base]
+            };
+            candidates.dedup();
+            candidates
+        }
+        ChannelAdapter::OpenAiChat => vec![base],
+    }
+}
+
+fn adapter_endpoint_url(base_url: &str, adapter: ChannelAdapter) -> String {
+    let suffix = match adapter {
+        ChannelAdapter::Claude => "/v1/messages",
+        ChannelAdapter::Codex => "/responses",
+        ChannelAdapter::OpenAiChat => "/v1/chat/completions",
+    };
+    append_url_path(base_url, suffix).unwrap_or_else(|| {
+        format!("{}{}", base_url.trim_end_matches('/'), suffix)
+    })
+}
+
+fn adapter_models_url(base_url: &str, adapter: ChannelAdapter) -> String {
+    let suffix = if adapter == ChannelAdapter::Codex { "/models" } else { "/v1/models" };
+    append_url_path(base_url, suffix).unwrap_or_else(|| {
+        format!("{}{}", base_url.trim_end_matches('/'), suffix)
+    })
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -661,15 +798,17 @@ fn resolve_channel_credentials(channel_id: &str, settings: &AppSettings, model_o
             agent_effort: None,
         });
     }
-    let protocol = meta.map_or("anthropic", |m| m.protocol()).to_string();
-    let (base_url, token) = read_channel_credentials(channel_id)?;
+    // 协议选择已从新渠道移除；仅为尚未保存迁移的历史 OpenAI 直调渠道保留旧行为。
+    let legacy_openai = meta.and_then(|value| value.protocol.as_deref()) == Some("openai");
+    let adapter = if legacy_openai { ChannelAdapter::OpenAiChat } else { ChannelAdapter::Claude };
+    let connection = read_channel_connection(channel_id, adapter)?;
     let agent_model = model_override
         .or_else(|| read_channel_ext(channel_id).and_then(|e| e.agent_model))
         .or_else(|| fallback_agent_model(channel_id));
     Some(AgentChannelCredentials {
         id: channel_id.to_string(), is_official: false,
-        base_url: Some(base_url), token: Some(token),
-        protocol, agent_model,
+        base_url: Some(connection.base_url), token: Some(connection.token),
+        protocol: if legacy_openai { "openai" } else { "anthropic" }.to_string(), agent_model,
         agent_effort: None,
     })
 }
@@ -698,43 +837,162 @@ pub(crate) fn fallback_agent_model(channel_id: &str) -> Option<String> {
         .cloned()
 }
 
-pub(crate) fn read_channel_credentials(id: &str) -> Option<(String, String)> {
-    let text = fs::read_to_string(channel_file_path(id)).ok()?;
-    let root: Value = serde_json::from_str(&text).ok()?;
-    channel_credentials_from_root(&root)
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ChannelConnectionCredentials {
+    base_url: String,
+    auth_mode: String,
+    token: String,
 }
 
-fn channel_credentials_from_root(root: &Value) -> Option<(String, String)> {
+fn read_channel_connection(id: &str, adapter: ChannelAdapter) -> Option<ChannelConnectionCredentials> {
+    let text = fs::read_to_string(channel_file_path(id)).ok()?;
+    let root: Value = serde_json::from_str(&text).ok()?;
+    channel_connection_from_root(&root, adapter)
+}
+
+fn legacy_channel_token_from_root(root: &Value, prefer_openai: bool) -> Option<String> {
+    let env = root.get("env").and_then(Value::as_object);
+    let anthropic = || env.and_then(|values| {
+        values.get("ANTHROPIC_AUTH_TOKEN")
+            .or_else(|| values.get("ANTHROPIC_API_KEY"))
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .map(String::from)
+    });
+    let openai = || env.and_then(|values| {
+        values.get("OPENAI_API_KEY")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .map(String::from)
+    });
+    let env_token = if prefer_openai {
+        openai().or_else(anthropic)
+    } else {
+        anthropic().or_else(openai)
+    };
+    env_token.or_else(|| {
+        root.get("_ccSpace")
+            .and_then(|value| serde_json::from_value::<ChannelExt>(value.clone()).ok())
+            .and_then(|extension| extension.codex)
+            .and_then(|codex| codex.auth_token)
+            .filter(|token| !token.is_empty())
+    })
+}
+
+fn read_legacy_channel_token(id: &str, prefer_openai: bool) -> Option<String> {
+    let text = fs::read_to_string(channel_file_path(id)).ok()?;
+    let root: Value = serde_json::from_str(&text).ok()?;
+    legacy_channel_token_from_root(&root, prefer_openai)
+}
+
+fn channel_connection_from_root(root: &Value, adapter: ChannelAdapter) -> Option<ChannelConnectionCredentials> {
     let extension = root.get("_ccSpace")
         .and_then(|value| serde_json::from_value::<ChannelExt>(value.clone()).ok());
-    if let Some(connection) = extension.as_ref().and_then(|ext| ext.connection.as_ref()) {
-        let base_url = connection.base_url.trim();
-        if !base_url.is_empty() {
-            return Some((base_url.to_string(), connection.auth_token.clone().unwrap_or_default()));
-        }
-    }
     let env = root.get("env").and_then(Value::as_object);
-    // Anthropic keys
-    if let Some(base_url) = env.and_then(|values| values.get("ANTHROPIC_BASE_URL")).and_then(|v| v.as_str()) {
+
+    let legacy_anthropic = || {
+        let base_url = env?.get("ANTHROPIC_BASE_URL")?.as_str()?.to_string();
         let token = env.and_then(|values| values.get("ANTHROPIC_AUTH_TOKEN")
             .or_else(|| values.get("ANTHROPIC_API_KEY")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        return Some((base_url.to_string(), token.to_string()));
-    }
-    // OpenAI keys
-    if let Some(base_url) = env.and_then(|values| values.get("OPENAI_BASE_URL")).and_then(|v| v.as_str()) {
+            .and_then(Value::as_str).unwrap_or("").to_string();
+        Some(ChannelConnectionCredentials {
+            base_url,
+            auth_mode: if token.is_empty() { "none" } else { "bearer" }.to_string(),
+            token,
+        })
+    };
+    let legacy_openai = || {
+        let base_url = env?.get("OPENAI_BASE_URL")?.as_str()?.to_string();
         let token = env.and_then(|values| values.get("OPENAI_API_KEY"))
-            .and_then(|v| v.as_str()).unwrap_or("");
-        return Some((base_url.to_string(), token.to_string()));
+            .and_then(Value::as_str).unwrap_or("").to_string();
+        Some(ChannelConnectionCredentials {
+            base_url,
+            auth_mode: if token.is_empty() { "none" } else { "bearer" }.to_string(),
+            token,
+        })
+    };
+
+    let shared = extension.as_ref().and_then(|ext| ext.connection.as_ref()).and_then(|connection| {
+        normalize_base_url(&connection.base_url).map(|base_url| ChannelConnectionCredentials {
+            base_url,
+            auth_mode: if connection.auth_mode.is_empty() {
+                if connection.auth_token.as_deref().is_some_and(|token| !token.is_empty()) { "bearer" } else { "none" }
+            } else {
+                connection.auth_mode.as_str()
+            }.to_string(),
+            token: connection.auth_token.clone().unwrap_or_default(),
+        })
+    });
+
+    let mut connection = shared.or_else(|| match adapter {
+        ChannelAdapter::Claude => legacy_anthropic().or_else(legacy_openai),
+        ChannelAdapter::Codex => extension.as_ref().and_then(|ext| ext.codex.as_ref()).and_then(|codex| {
+            normalize_base_url(codex.base_url.as_deref()?).map(|base_url| ChannelConnectionCredentials {
+                base_url,
+                auth_mode: if codex.auth_mode.is_empty() {
+                    if codex.auth_token.as_deref().is_some_and(|token| !token.is_empty()) { "bearer" } else { "none" }
+                } else {
+                    codex.auth_mode.as_str()
+                }.to_string(),
+                token: codex.auth_token.clone().unwrap_or_default(),
+            })
+        }).or_else(legacy_openai).or_else(legacy_anthropic),
+        ChannelAdapter::OpenAiChat => legacy_openai().or_else(legacy_anthropic),
+    })?;
+
+    let (resolved, auto_resolve) = match adapter {
+        ChannelAdapter::Claude => extension.as_ref().and_then(|ext| ext.claude.as_ref())
+            .map_or((None, false), |config| (config.resolved_connection.as_ref(), config.auto_resolve)),
+        ChannelAdapter::Codex => extension.as_ref().and_then(|ext| ext.codex.as_ref())
+            .map_or((None, false), |config| (config.resolved_connection.as_ref(), config.auto_resolve)),
+        ChannelAdapter::OpenAiChat => (None, false),
+    };
+
+    // Codex 兼容结构不能借用临时引用，单独覆盖；Claude 走共享结构。
+    match adapter {
+        ChannelAdapter::Claude => {
+            if let Some(config) = extension.as_ref().and_then(|ext| ext.claude.as_ref()) {
+                if let Some(base_url) = config.base_url.as_deref().and_then(normalize_base_url) {
+                    connection.base_url = base_url;
+                }
+                if let Some(auth_mode) = config.auth_mode.as_deref().filter(|value| !value.is_empty()) {
+                    connection.auth_mode = auth_mode.to_string();
+                }
+                if let Some(token) = config.auth_token.as_ref() {
+                    connection.token = token.clone();
+                }
+            }
+        }
+        ChannelAdapter::Codex => {
+            if let Some(config) = extension.as_ref().and_then(|ext| ext.codex.as_ref()) {
+                if let Some(base_url) = config.base_url.as_deref().and_then(normalize_base_url) {
+                    connection.base_url = base_url;
+                }
+                if !config.auth_mode.is_empty() {
+                    connection.auth_mode.clone_from(&config.auth_mode);
+                }
+                if let Some(token) = config.auth_token.as_ref() {
+                    connection.token = token.clone();
+                }
+            }
+        }
+        ChannelAdapter::OpenAiChat => {}
     }
-    // v1 Codex-only 渠道：升级前凭据只存在 Codex adapter 内。
-    if let Some(codex) = extension.and_then(|ext| ext.codex) {
-        if let Some(base_url) = codex.base_url.filter(|value| !value.trim().is_empty()) {
-            return Some((base_url, codex.auth_token.unwrap_or_default()));
+
+    // 显式关闭当前适配器鉴权时，不能继续沿用通用连接里的凭据。
+    if matches!(connection.auth_mode.as_str(), "none" | "openai") {
+        connection.token.clear();
+    }
+
+    let source_base_url = connection.base_url.clone();
+    if let Some(resolved) = resolved.filter(|cached| cached.source_base_url == source_base_url) {
+        connection.base_url.clone_from(&resolved.base_url);
+    } else if auto_resolve {
+        if let Some(preferred) = adapter_base_url_candidates(&source_base_url, adapter).into_iter().next() {
+            connection.base_url = preferred;
         }
     }
-    None
+    Some(connection)
 }
 
 
@@ -764,7 +1022,21 @@ pub struct ChannelView {
     pub default_effort: Option<String>,
     /// 渠道在统一引擎系统中的可用范围。旧渠道自动为 ["claude-code"]。
     pub engine_support: Vec<String>,
+    pub claude: Option<EngineConnectionView>,
     pub codex: Option<CodexChannelView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineConnectionView {
+    /// 仅返回显式覆盖；None 表示继承共享连接。
+    pub base_url: Option<String>,
+    pub auth_mode: Option<String>,
+    pub auth_token_masked: Option<String>,
+    /// 当前缓存或规则解析出的适配器 Base URL，用于最终地址预览。
+    pub resolved_base_url: Option<String>,
+    /// 仅返回与当前源地址匹配的真实探测缓存，保存时不得用规则推导值替代。
+    pub cached_base_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -778,6 +1050,8 @@ pub struct CodexChannelView {
     pub default_model: Option<String>,
     pub default_effort: Option<String>,
     pub available_models: Vec<String>,
+    pub resolved_base_url: Option<String>,
+    pub cached_base_url: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -815,6 +1089,16 @@ pub struct ChannelListResult {
     pub default_agent_effort: Option<String>,
 }
 
+fn matching_cached_base_url(
+    resolved: Option<&ResolvedConnectionExt>,
+    source_base_url: Option<&str>,
+) -> Option<String> {
+    let source_base_url = source_base_url.and_then(normalize_base_url)?;
+    resolved
+        .filter(|cached| cached.source_base_url == source_base_url)
+        .map(|cached| cached.base_url.clone())
+}
+
 fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
     if id == OFFICIAL_ID {
         return ChannelView {
@@ -835,6 +1119,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             default_model: meta.default_model.clone().filter(|s| !s.is_empty()),
             default_effort: meta.default_effort.clone().filter(|s| !s.is_empty()),
             engine_support: vec!["claude-code".to_string(), "codex".to_string()],
+            claude: None,
             codex: None,
         };
     }
@@ -857,6 +1142,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             default_model: meta.default_model.clone().filter(|s| !s.is_empty()),
             default_effort: meta.default_effort.clone().filter(|s| !s.is_empty()),
             engine_support: vec!["claude-code".to_string()],
+            claude: None,
             codex: None,
         };
     }
@@ -879,6 +1165,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
             default_model: None,
             default_effort: None,
             engine_support: vec![],
+            claude: None,
             codex: None,
         };
     }
@@ -927,23 +1214,55 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
         .or_else(|| legacy_codex.and_then(|config| config.auth_token.as_deref()).filter(|value| !value.is_empty()));
     let auth_mode = cc_ext.connection.as_ref()
         .map(|connection| connection.auth_mode.as_str()).filter(|value| !value.is_empty())
-        .or_else(|| legacy_codex.map(|config| config.auth_mode.as_str()).filter(|value| !value.is_empty()))
+        .or_else(|| legacy_codex.and_then(|config| match config.auth_mode.as_str() {
+            "bearer" => Some("bearer"),
+            "openai" | "none" => Some("none"),
+            _ => None,
+        }))
         .unwrap_or(if token.is_some() { "bearer" } else { "none" }).to_string();
     let engine_support = if meta.is_agent_only() {
         vec![]
     } else {
         cc_ext.engine_support.clone().unwrap_or_else(|| vec!["claude-code".to_string()])
     };
-    let codex = cc_ext.codex.as_ref().map(|config| CodexChannelView {
-        mode: if config.mode.is_empty() { "managed".to_string() } else { config.mode.clone() },
-        provider_id: config.provider_id.clone(),
-        base_url: base_url.clone(),
-        auth_mode: auth_mode.clone(),
-        auth_token_masked: token.map(mask_token),
-        // 仅供 v1 → v2 默认会话配置迁移；新保存不再写这些字段。
-        default_model: config.default_model.clone().filter(|value| !value.is_empty()),
-        default_effort: config.default_effort.clone().filter(|value| !value.is_empty()),
-        available_models: cc_ext.available_models.clone(),
+    let codex = cc_ext.codex.as_ref().map(|config| {
+        let cached_base_url = matching_cached_base_url(
+            config.resolved_connection.as_ref(),
+            config.base_url.as_deref().or(base_url.as_deref()),
+        );
+        CodexChannelView {
+            mode: if config.mode.is_empty() { "managed".to_string() } else { config.mode.clone() },
+            provider_id: config.provider_id.clone(),
+            // 这里只回传显式覆盖；共享值由 ChannelView 顶层字段承载。
+            base_url: config.base_url.clone().filter(|value| !value.trim().is_empty()),
+            auth_mode: if config.auth_mode.is_empty() { "inherit".to_string() } else { config.auth_mode.clone() },
+            auth_token_masked: config.auth_token.as_deref().filter(|value| !value.is_empty()).map(mask_token),
+            // 仅供历史默认会话配置迁移；新保存不再写这些字段。
+            default_model: config.default_model.clone().filter(|value| !value.is_empty()),
+            default_effort: config.default_effort.clone().filter(|value| !value.is_empty()),
+            available_models: cc_ext.available_models.clone(),
+            resolved_base_url: parsed.as_ref()
+                .and_then(|root| channel_connection_from_root(root, ChannelAdapter::Codex))
+                .map(|connection| connection.base_url),
+            cached_base_url,
+        }
+    });
+    let claude = engine_support.iter().any(|engine| engine == "claude-code").then(|| {
+        let config = cc_ext.claude.as_ref();
+        let cached_base_url = matching_cached_base_url(
+            config.and_then(|value| value.resolved_connection.as_ref()),
+            config.and_then(|value| value.base_url.as_deref()).or(base_url.as_deref()),
+        );
+        EngineConnectionView {
+            base_url: config.and_then(|value| value.base_url.clone()).filter(|value| !value.trim().is_empty()),
+            auth_mode: config.and_then(|value| value.auth_mode.clone()).filter(|value| !value.is_empty()),
+            auth_token_masked: config.and_then(|value| value.auth_token.as_deref())
+                .filter(|value| !value.is_empty()).map(mask_token),
+            resolved_base_url: parsed.as_ref()
+                .and_then(|root| channel_connection_from_root(root, ChannelAdapter::Claude))
+                .map(|connection| connection.base_url),
+            cached_base_url,
+        }
     });
     // 从 env 块过滤出 Monet 托管的模型角色映射键(明文回传)
     let model_env = env
@@ -994,6 +1313,7 @@ fn build_channel_view(id: &str, meta: &ChannelMeta) -> ChannelView {
         default_model,
         default_effort,
         engine_support,
+        claude,
         codex,
     }
 }
@@ -1179,9 +1499,22 @@ fn validate_effort_value(effort: &str) -> Result<(), String> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SaveEngineConnection {
+    pub base_url: Option<String>,
+    pub auth_mode: Option<String>,
+    pub auth_token: Option<String>,
+    pub resolved_base_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveCodexChannel {
     pub mode: String,
     pub provider_id: String,
+    pub base_url: Option<String>,
+    pub auth_mode: Option<String>,
+    pub auth_token: Option<String>,
+    pub resolved_base_url: Option<String>,
 }
 
 fn normalize_engine_support(engines: &[String]) -> Result<Vec<String>, String> {
@@ -1197,25 +1530,74 @@ fn normalize_engine_support(engines: &[String]) -> Result<Vec<String>, String> {
     Ok(normalized)
 }
 
-fn normalize_codex_channel(input: SaveCodexChannel) -> Result<CodexChannelExt, String> {
+fn normalize_engine_connection(input: SaveEngineConnection, shared_base_url: &str) -> Result<Option<EngineConnectionExt>, String> {
+    let base_url = input.base_url.as_deref().and_then(normalize_base_url);
+    let auth_mode = input.auth_mode.as_deref().map(str::trim).filter(|value| !value.is_empty() && *value != "inherit")
+        .map(String::from);
+    if auth_mode.as_deref().is_some_and(|mode| !matches!(mode, "bearer" | "none")) {
+        return Err("引擎连接覆盖的认证方式无效".to_string());
+    }
+    let mut auth_token = input.auth_token.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    if auth_mode.as_deref() == Some("none") {
+        auth_token = None;
+    }
+    let source_base_url = base_url.clone().or_else(|| normalize_base_url(shared_base_url));
+    let resolved_connection = match (source_base_url, input.resolved_base_url.as_deref().and_then(normalize_base_url)) {
+        (Some(source_base_url), Some(base_url)) => Some(ResolvedConnectionExt { source_base_url, base_url }),
+        _ => None,
+    };
+    Ok(Some(EngineConnectionExt {
+        base_url,
+        auth_mode,
+        auth_token,
+        resolved_connection,
+        auto_resolve: true,
+    }))
+}
+
+fn normalize_codex_channel(input: SaveCodexChannel, shared_base_url: &str) -> Result<CodexChannelExt, String> {
     let mode = input.mode.trim();
-    if mode != "managed" {
-        return Err("Codex 自定义渠道必须由 Monet 适配 Responses API".to_string());
+    if !matches!(mode, "managed" | "external") {
+        return Err("Codex 渠道接入方式无效".to_string());
     }
     let provider_id = input.provider_id.trim();
     validate_id(provider_id)?;
+    if mode == "external" {
+        return Ok(CodexChannelExt {
+            mode: "external".to_string(),
+            provider_id: provider_id.to_string(),
+            ..CodexChannelExt::default()
+        });
+    }
     if mode == "managed" && matches!(provider_id, "openai" | "ollama" | "lmstudio") {
         return Err(format!("{provider_id} 为 Codex 内置 Provider ID，请换一个自定义 ID"));
     }
+    let base_url = input.base_url.as_deref().and_then(normalize_base_url);
+    let auth_mode = input.auth_mode.as_deref().map(str::trim).filter(|value| !value.is_empty() && *value != "inherit")
+        .unwrap_or("");
+    if !auth_mode.is_empty() && !matches!(auth_mode, "bearer" | "openai" | "none") {
+        return Err("Codex 连接覆盖的认证方式无效".to_string());
+    }
+    let mut auth_token = input.auth_token.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    if matches!(auth_mode, "openai" | "none") {
+        auth_token = None;
+    }
+    let source_base_url = base_url.clone().or_else(|| normalize_base_url(shared_base_url));
+    let resolved_connection = match (source_base_url, input.resolved_base_url.as_deref().and_then(normalize_base_url)) {
+        (Some(source_base_url), Some(base_url)) => Some(ResolvedConnectionExt { source_base_url, base_url }),
+        _ => None,
+    };
     Ok(CodexChannelExt {
         mode: "managed".to_string(),
         provider_id: provider_id.to_string(),
-        base_url: None,
-        auth_mode: String::new(),
-        auth_token: None,
+        base_url,
+        auth_mode: auth_mode.to_string(),
+        auth_token,
         default_model: None,
         default_effort: None,
         available_models: vec![],
+        resolved_connection,
+        auto_resolve: true,
     })
 }
 
@@ -1235,6 +1617,7 @@ pub fn save_channel(
     model_env: Option<std::collections::HashMap<String, String>>,
     default_effort: Option<String>,
     engine_support: Option<Vec<String>>,
+    claude: Option<SaveEngineConnection>,
     codex: Option<SaveCodexChannel>,
 ) -> Result<(), String> {
     validate_id(&id)?;
@@ -1249,18 +1632,41 @@ pub fn save_channel(
     let supports_codex = normalized_engine_support
         .as_ref()
         .is_some_and(|engines| engines.iter().any(|engine| engine == "codex"));
+    let external_only = !supports_claude && supports_codex
+        && codex.as_ref().is_some_and(|config| config.mode.trim() == "external");
+    let uses_shared_connection = !external_only;
     let base_url = base_url.trim().to_string();
-    if !is_virtual && base_url.is_empty() {
+    if !is_virtual && uses_shared_connection && base_url.is_empty() {
         return Err("Base URL 不能为空".to_string());
     }
-    let auth_mode = auth_mode.unwrap_or_else(|| "bearer".to_string());
-    if !matches!(auth_mode.as_str(), "bearer" | "none") {
+    let auth_mode = if uses_shared_connection {
+        auth_mode.unwrap_or_else(|| "bearer".to_string())
+    } else {
+        "none".to_string()
+    };
+    if uses_shared_connection && !matches!(auth_mode.as_str(), "bearer" | "none") {
         return Err("渠道认证方式无效".to_string());
     }
-    let existing_shared_token = read_channel_credentials(&id).map(|(_, token)| token);
+    let existing_extension = fs::read_to_string(channel_file_path(&id)).ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|root| root.get("_ccSpace").cloned())
+        .and_then(|value| serde_json::from_value::<ChannelExt>(value).ok());
+    let existing_shared_token = existing_extension.as_ref()
+        .and_then(|extension| extension.connection.as_ref())
+        .and_then(|connection| connection.auth_token.as_ref())
+        .cloned()
+        .or_else(|| {
+            existing_extension.as_ref().and_then(|extension| extension.connection.as_ref()).is_none()
+                .then(|| {
+                    let prefer_openai = load_app_settings().channels.get(&id)
+                        .and_then(|meta| meta.protocol.as_deref()) == Some("openai");
+                    read_legacy_channel_token(&id, prefer_openai)
+                })
+                .flatten()
+        });
     let shared_token = auth_token.as_deref().map(str::trim).filter(|token| !token.is_empty())
         .map(String::from).or(existing_shared_token).filter(|token| !token.is_empty());
-    if !is_virtual && auth_mode == "bearer" && shared_token.is_none() {
+    if !is_virtual && uses_shared_connection && auth_mode == "bearer" && shared_token.is_none() {
         return Err("新建渠道必须提供 API Key".to_string());
     }
 
@@ -1326,7 +1732,7 @@ pub fn save_channel(
             .cloned()
             .and_then(|value| serde_json::from_value::<ChannelExt>(value).ok())
             .unwrap_or_default();
-        extension.connection = Some(ChannelConnectionExt {
+        extension.connection = uses_shared_connection.then(|| ChannelConnectionExt {
             base_url: base_url.trim_end_matches('/').to_string(),
             auth_mode: auth_mode.clone(),
             auth_token: if auth_mode == "bearer" { shared_token } else { None },
@@ -1341,10 +1747,32 @@ pub fn save_channel(
         if let Some(engines) = normalized_engine_support.clone() {
             extension.engine_support = Some(engines);
         }
+        if let Some(input) = claude {
+            extension.claude = normalize_engine_connection(input, &base_url)?;
+        }
         if let Some(input) = codex {
-            extension.codex = Some(normalize_codex_channel(input)?);
+            extension.codex = Some(normalize_codex_channel(input, &base_url)?);
         } else if supports_codex && extension.codex.is_none() {
             return Err("启用 Codex 前需要配置 Provider".to_string());
+        }
+        let shared_has_token = extension.connection.as_ref()
+            .and_then(|connection| connection.auth_token.as_deref())
+            .is_some_and(|token| !token.is_empty());
+        let claude_bearer_without_token = extension.claude.as_ref().is_some_and(|connection| {
+            connection.auth_mode.as_deref() == Some("bearer")
+                && connection.auth_token.as_deref().is_none_or(str::is_empty)
+                && !shared_has_token
+        });
+        if supports_claude && claude_bearer_without_token {
+            return Err("Claude Code 使用 Bearer 认证时必须提供 API Key".to_string());
+        }
+        let codex_bearer_without_token = extension.codex.as_ref().is_some_and(|connection| {
+            connection.auth_mode == "bearer"
+                && connection.auth_token.as_deref().is_none_or(str::is_empty)
+                && !shared_has_token
+        });
+        if supports_codex && codex_bearer_without_token {
+            return Err("Codex 使用 Bearer 认证时必须提供 API Key".to_string());
         }
         obj.insert(
             "_ccSpace".to_string(),
@@ -1635,14 +2063,30 @@ pub fn get_channel_token(id: String, engine: Option<String>) -> Result<Option<St
         return Ok(None);
     }
     validate_id(&id)?;
-    let _ = engine; // v2 凭据属于渠道连接，所有消费者读取同一份。
-    Ok(read_channel_credentials(&id).map(|(_, token)| token).filter(|token| !token.is_empty()))
+    let extension = read_channel_ext(&id);
+    let token = match engine.as_deref().unwrap_or("shared") {
+        "shared" => {
+            if let Some(connection) = extension.as_ref().and_then(|value| value.connection.as_ref()) {
+                connection.auth_token.clone()
+            } else {
+                let prefer_openai = load_app_settings().channels.get(&id)
+                    .and_then(|meta| meta.protocol.as_deref()) == Some("openai");
+                read_legacy_channel_token(&id, prefer_openai)
+            }
+        }
+        "claude-code" => extension.as_ref().and_then(|value| value.claude.as_ref())
+            .and_then(|value| value.auth_token.clone()),
+        "codex" => extension.as_ref().and_then(|value| value.codex.as_ref())
+            .and_then(|value| value.auth_token.clone()),
+        _ => return Err("不支持的渠道凭据类型".to_string()),
+    };
+    Ok(token.filter(|token| !token.is_empty()))
 }
 
 pub(crate) fn codex_channel_token(id: &str) -> Result<String, String> {
     validate_id(id)?;
-    read_channel_credentials(id)
-        .map(|(_, token)| token)
+    read_channel_connection(id, ChannelAdapter::Codex)
+        .map(|connection| connection.token)
         .filter(|token| !token.is_empty())
         .ok_or_else(|| "Codex 渠道凭据不可用".to_string())
 }
@@ -1667,22 +2111,19 @@ pub(crate) fn codex_runtime_channel_options(id: &str) -> Result<Map<String, Valu
     }
     let mut options = Map::new();
     options.insert("modelProvider".to_string(), Value::String(provider_id.to_string()));
-    // v1 external 渠道继续引用 Codex 自有配置；新表单只会写 managed。
-    if channel.mode == "external" && extension.connection.is_none() && channel.base_url.is_none() {
+    // external 始终只引用 Codex 自有 Provider，不由 Monet 注入连接覆盖。
+    if channel.mode == "external" {
         return Ok(options);
     }
     if matches!(provider_id, "openai" | "ollama" | "lmstudio") {
         return Err(format!("Codex 内置 Provider ID {provider_id} 不能被自定义渠道覆盖"));
     }
-    let (base_url, token) = read_channel_credentials(id)
+    let connection = read_channel_connection(id, ChannelAdapter::Codex)
         .ok_or_else(|| format!("渠道 {id} 缺少共享连接配置"))?;
-    let auth_mode = extension.connection.as_ref()
-        .map(|connection| connection.auth_mode.as_str()).filter(|value| !value.is_empty())
-        .or_else(|| Some(channel.auth_mode.as_str()).filter(|value| !value.is_empty()))
-        .unwrap_or(if token.is_empty() { "none" } else { "bearer" });
+    let auth_mode = connection.auth_mode.as_str();
     let mut provider = Map::from_iter([
         ("name".to_string(), Value::String(id.to_string())),
-        ("base_url".to_string(), Value::String(base_url.to_string())),
+        ("base_url".to_string(), Value::String(connection.base_url.clone())),
         ("wire_api".to_string(), Value::String("responses".to_string())),
     ]);
     match auth_mode {
@@ -1691,7 +2132,7 @@ pub(crate) fn codex_runtime_channel_options(id: &str) -> Result<Map<String, Valu
         }
         "none" => {}
         "bearer" | "" => {
-            if token.is_empty() {
+            if connection.token.is_empty() {
                 return Err(format!("渠道 {id} 缺少 Codex Bearer Token"));
             }
             let executable = std::env::current_exe()
@@ -1788,10 +2229,10 @@ pub fn prepare_injection(
         let env = obj.entry("env").or_insert_with(|| json!({}));
         let env_obj = env.as_object_mut().ok_or("注入配置 env 字段不是对象")?;
         if let Some(id) = channel_id.filter(|id| *id != OFFICIAL_DIRECT_ID) {
-            let (base_url, token) = read_channel_credentials(id)
-                .ok_or_else(|| format!("渠道 {} 共享连接配置不可读", id))?;
-            env_obj.insert("ANTHROPIC_BASE_URL".to_string(), json!(base_url));
-            env_obj.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(token));
+            let connection = read_channel_connection(id, ChannelAdapter::Claude)
+                .ok_or_else(|| format!("渠道 {} 的 Claude Code 连接配置不可读", id))?;
+            env_obj.insert("ANTHROPIC_BASE_URL".to_string(), json!(connection.base_url));
+            env_obj.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(connection.token));
         }
         if advisor {
             env_obj.insert(ADVISOR_ENABLE_ENV.to_string(), json!("1"));
@@ -1880,22 +2321,27 @@ pub struct ProbeResult {
     pub status: String,
     pub models: Vec<String>,
     pub latency_ms: u64,
+    pub resolved_base_url: Option<String>,
+    pub endpoint_url: Option<String>,
 }
 
 #[tauri::command]
 pub async fn probe_channel(
     id: String,
-    // 表单值直探(新建未保存渠道的「获取模型列表」):三者齐传时绕过渠道文件
+    // 表单值直探(新建未保存渠道):齐传时绕过渠道文件并尝试带/不带 /v1 的候选。
     base_url: Option<String>,
     token: Option<String>,
     protocol: Option<String>,
+    adapter: Option<String>,
 ) -> Result<ProbeResult, String> {
+    let draft_adapter = adapter.as_deref().and_then(ChannelAdapter::parse)
+        .or_else(|| protocol.as_deref().and_then(ChannelAdapter::parse));
     // 表单值直探路径:不读文件、不校验 id 存在性
     if let Some(url) = base_url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
         let token = token.unwrap_or_default();
-        let protocol = protocol.unwrap_or_else(|| "anthropic".to_string());
+        let adapter = draft_adapter.unwrap_or(ChannelAdapter::Claude);
         return tauri::async_runtime::spawn_blocking(move || {
-            probe_channel_blocking(&url, &token, &protocol)
+            probe_channel_candidates(&url, &token, adapter, false)
         })
         .await
         .map_err(|e| e.to_string())
@@ -1908,21 +2354,27 @@ pub async fn probe_channel(
             status: "official".to_string(),
             models: vec![],
             latency_ms: 0,
+            resolved_base_url: None,
+            endpoint_url: None,
         });
     }
 
-    let settings = load_app_settings();
-    let protocol = if id == APPLE_FM_ID {
-        "openai".to_string()
-    } else {
-        settings.channels.get(&id).map_or("anthropic", |m| m.protocol()).to_string()
-    };
-
     let is_apple_fm = id == APPLE_FM_ID;
-    let (base_url, token) = if is_apple_fm {
-        (format!("http://localhost:{}", APPLE_FM_PORT), String::new())
+    let adapter = if is_apple_fm {
+        ChannelAdapter::OpenAiChat
     } else {
-        read_channel_credentials(&id)
+        draft_adapter.unwrap_or_else(|| {
+            if channel_supports_engine(&id, "claude-code") { ChannelAdapter::Claude } else { ChannelAdapter::Codex }
+        })
+    };
+    let connection = if is_apple_fm {
+        ChannelConnectionCredentials {
+            base_url: format!("http://localhost:{}", APPLE_FM_PORT),
+            auth_mode: "none".to_string(),
+            token: String::new(),
+        }
+    } else {
+        read_channel_connection(&id, adapter)
             .ok_or_else(|| format!("渠道 {} 凭据不可读", id))?
     };
 
@@ -1930,72 +2382,128 @@ pub async fn probe_channel(
         if is_apple_fm {
             let _ = ensure_fm_serve_running();
         }
-        probe_channel_blocking(&base_url, &token, &protocol)
+        // 已保存渠道先探当前解析结果，不重新覆盖用户之前确认过的非 /v1 路径。
+        probe_channel_candidates(&connection.base_url, &connection.token, adapter, true)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-fn probe_channel_blocking(base_url: &str, token: &str, protocol: &str) -> Result<ProbeResult, String> {
-    let client = probe_client()?;
-    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-    let start = std::time::Instant::now();
+enum CandidateProbe {
+    Selected(ProbeResult),
+    Missing,
+    Unreachable(ProbeResult),
+}
 
-    let mut req = client.get(&url);
-    if protocol == "openai" {
-        if !token.is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", token));
-        }
-    } else {
-        req = req.header("x-api-key", token);
-        req = req.header("anthropic-version", "2023-06-01");
+fn apply_probe_auth(
+    request: reqwest::blocking::RequestBuilder,
+    token: &str,
+    adapter: ChannelAdapter,
+) -> reqwest::blocking::RequestBuilder {
+    match adapter {
+        ChannelAdapter::Claude => request
+            .header("x-api-key", token)
+            .header("anthropic-version", "2023-06-01"),
+        ChannelAdapter::Codex | ChannelAdapter::OpenAiChat if !token.is_empty() =>
+            request.header("Authorization", format!("Bearer {token}")),
+        _ => request,
     }
-    let resp = req.send();
+}
 
-    match resp {
-        Ok(r) => {
-            let latency = start.elapsed().as_millis() as u64;
-            let status_code = r.status().as_u16();
-
-            if status_code == 401 || status_code == 403 {
-                return Ok(ProbeResult {
-                    online: false,
-                    status: "auth_error".to_string(),
-                    models: vec![],
-                    latency_ms: latency,
-                });
-            }
-
+fn probe_candidate(base_url: &str, token: &str, adapter: ChannelAdapter) -> Result<CandidateProbe, String> {
+    let client = probe_client()?;
+    let models_url = adapter_models_url(base_url, adapter);
+    let endpoint_url = adapter_endpoint_url(base_url, adapter);
+    let start = std::time::Instant::now();
+    let resp = apply_probe_auth(client.get(&models_url), token, adapter).send();
+    let models = match resp {
+        Ok(r) if r.status().is_success() => {
             let mut models = Vec::new();
-            if r.status().is_success() {
-                if let Ok(body) = r.json::<Value>() {
-                    if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
-                        for item in data {
-                            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                                models.push(id.to_string());
-                            }
+            if let Ok(body) = r.json::<Value>() {
+                if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
+                    for item in data {
+                        if let Some(id) = item.get("id").and_then(Value::as_str) {
+                            models.push(id.to_string());
                         }
                     }
                 }
             }
-
-            Ok(ProbeResult {
-                online: true,
-                status: format!("{}", status_code),
-                models,
-                latency_ms: latency,
-            })
+            models
         }
+        Ok(_) => vec![],
         Err(e) => {
             let latency = start.elapsed().as_millis() as u64;
-            Ok(ProbeResult {
+            return Ok(CandidateProbe::Unreachable(ProbeResult {
                 online: false,
                 status: if e.is_timeout() { "timeout".to_string() } else { "offline".to_string() },
                 models: vec![],
                 latency_ms: latency,
-            })
+                resolved_base_url: None,
+                endpoint_url: Some(endpoint_url),
+            }));
+        }
+    };
+
+    // /models 的存在不能证明实际推理路由存在。用必然无效的空请求确认 endpoint；
+    // 400/422 表示路由存在且不会触发模型调用或计费。
+    let route_start = std::time::Instant::now();
+    let route_response = apply_probe_auth(client.post(&endpoint_url), token, adapter)
+        .header("content-type", "application/json")
+        .json(&json!({}))
+        .send();
+    match route_response {
+        Ok(response) => {
+            let status_code = response.status().as_u16();
+            let latency = start.elapsed().as_millis() as u64;
+            if matches!(status_code, 404 | 405) {
+                return Ok(CandidateProbe::Missing);
+            }
+            Ok(CandidateProbe::Selected(ProbeResult {
+                online: !matches!(status_code, 401 | 403 | 429 | 500..=599),
+                status: if matches!(status_code, 401 | 403) { "auth_error".to_string() } else { status_code.to_string() },
+                models,
+                latency_ms: latency.max(route_start.elapsed().as_millis() as u64),
+                resolved_base_url: Some(base_url.to_string()),
+                endpoint_url: Some(endpoint_url),
+            }))
+        }
+        Err(error) => Ok(CandidateProbe::Unreachable(ProbeResult {
+            online: false,
+            status: if error.is_timeout() { "timeout".to_string() } else { "offline".to_string() },
+            models: vec![],
+            latency_ms: start.elapsed().as_millis() as u64,
+            resolved_base_url: None,
+            endpoint_url: Some(endpoint_url),
+        })),
+    }
+}
+
+fn probe_channel_candidates(
+    base_url: &str,
+    token: &str,
+    adapter: ChannelAdapter,
+    exact_first: bool,
+) -> Result<ProbeResult, String> {
+    let candidates = if exact_first {
+        vec![base_url.to_string()]
+    } else {
+        adapter_base_url_candidates(base_url, adapter)
+    };
+    let mut last_missing_endpoint = None;
+    for candidate in candidates {
+        match probe_candidate(&candidate, token, adapter)? {
+            CandidateProbe::Selected(result) | CandidateProbe::Unreachable(result) => return Ok(result),
+            CandidateProbe::Missing => last_missing_endpoint = Some(adapter_endpoint_url(&candidate, adapter)),
         }
     }
+    Ok(ProbeResult {
+        online: false,
+        status: "route_not_found".to_string(),
+        models: vec![],
+        latency_ms: 0,
+        resolved_base_url: None,
+        endpoint_url: last_missing_endpoint,
+    })
 }
 
 // ---- Apple FM 自动检测 & 进程管理 ----
@@ -2243,8 +2751,12 @@ mod tests {
             }
         });
         assert_eq!(
-            channel_credentials_from_root(&root),
-            Some(("https://shared.example.com".into(), "shared-token".into()))
+            channel_connection_from_root(&root, ChannelAdapter::Claude),
+            Some(ChannelConnectionCredentials {
+                base_url: "https://shared.example.com".into(),
+                auth_mode: "bearer".into(),
+                token: "shared-token".into(),
+            })
         );
     }
 
@@ -2257,9 +2769,160 @@ mod tests {
             }
         });
         assert_eq!(
-            channel_credentials_from_root(&root),
-            Some(("https://legacy.example.com".into(), "legacy-token".into()))
+            channel_connection_from_root(&root, ChannelAdapter::Claude),
+            Some(ChannelConnectionCredentials {
+                base_url: "https://legacy.example.com".into(),
+                auth_mode: "bearer".into(),
+                token: "legacy-token".into(),
+            })
         );
+    }
+
+    #[test]
+    fn adapter_urls_add_or_remove_v1_without_duplication() {
+        assert_eq!(
+            adapter_base_url_candidates("https://proxy.example.com", ChannelAdapter::Codex),
+            vec!["https://proxy.example.com/v1", "https://proxy.example.com"]
+        );
+        assert_eq!(
+            adapter_base_url_candidates("https://proxy.example.com/v1", ChannelAdapter::Claude),
+            vec!["https://proxy.example.com", "https://proxy.example.com/v1"]
+        );
+        assert_eq!(
+            adapter_endpoint_url("https://proxy.example.com/v1", ChannelAdapter::Codex),
+            "https://proxy.example.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn engine_override_and_resolved_cache_are_applied_only_to_matching_source() {
+        let root = json!({
+            "_ccSpace": {
+                "connection": {
+                    "baseUrl": "https://shared.example.com",
+                    "authMode": "bearer",
+                    "authToken": "shared-token"
+                },
+                "claude": {
+                    "baseUrl": "https://claude.example.com/v1",
+                    "authMode": "none",
+                    "resolvedConnection": {
+                        "sourceBaseUrl": "https://claude.example.com/v1",
+                        "baseUrl": "https://claude.example.com"
+                    }
+                }
+            }
+        });
+        assert_eq!(
+            channel_connection_from_root(&root, ChannelAdapter::Claude),
+            Some(ChannelConnectionCredentials {
+                base_url: "https://claude.example.com".into(),
+                auth_mode: "none".into(),
+                token: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_codex_connection_keeps_exact_url_and_infers_no_auth() {
+        let root = json!({
+            "_ccSpace": {
+                "engineSupport": ["codex"],
+                "codex": {
+                    "mode": "managed",
+                    "providerId": "legacy-proxy",
+                    "baseUrl": "https://legacy.example.com",
+                    "authMode": ""
+                }
+            }
+        });
+        assert_eq!(
+            channel_connection_from_root(&root, ChannelAdapter::Codex),
+            Some(ChannelConnectionCredentials {
+                base_url: "https://legacy.example.com".into(),
+                auth_mode: "none".into(),
+                token: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn new_codex_connection_enables_url_completion_without_faking_cache() {
+        let channel = normalize_codex_channel(SaveCodexChannel {
+            mode: "managed".into(),
+            provider_id: "work-proxy".into(),
+            base_url: None,
+            auth_mode: Some("inherit".into()),
+            auth_token: None,
+            resolved_base_url: None,
+        }, "https://example.com").unwrap();
+        assert!(channel.auto_resolve);
+        assert!(channel.resolved_connection.is_none());
+
+        let root = json!({
+            "_ccSpace": {
+                "connection": {
+                    "baseUrl": "https://example.com",
+                    "authMode": "none"
+                },
+                "engineSupport": ["codex"],
+                "codex": channel
+            }
+        });
+        assert_eq!(
+            channel_connection_from_root(&root, ChannelAdapter::Codex)
+                .map(|connection| connection.base_url),
+            Some("https://example.com/v1".into())
+        );
+    }
+
+    #[test]
+    fn cached_base_url_is_exposed_only_for_its_original_source() {
+        let cache = ResolvedConnectionExt {
+            source_base_url: "https://example.com".into(),
+            base_url: "https://example.com/v1".into(),
+        };
+        assert_eq!(
+            matching_cached_base_url(Some(&cache), Some("https://example.com/")),
+            Some("https://example.com/v1".into())
+        );
+        assert_eq!(
+            matching_cached_base_url(Some(&cache), Some("https://other.example.com")),
+            None
+        );
+        assert_eq!(matching_cached_base_url(None, Some("https://example.com")), None);
+    }
+
+    #[test]
+    fn legacy_token_reveal_prefers_protocol_and_falls_back_to_codex() {
+        let both = json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "anthropic-token",
+                "OPENAI_API_KEY": "openai-token"
+            }
+        });
+        assert_eq!(legacy_channel_token_from_root(&both, false).as_deref(), Some("anthropic-token"));
+        assert_eq!(legacy_channel_token_from_root(&both, true).as_deref(), Some("openai-token"));
+
+        let codex_only = json!({
+            "_ccSpace": { "codex": { "authToken": "codex-token" } }
+        });
+        assert_eq!(legacy_channel_token_from_root(&codex_only, false).as_deref(), Some("codex-token"));
+    }
+
+    #[test]
+    fn external_codex_provider_remains_delegated() {
+        let channel = normalize_codex_channel(SaveCodexChannel {
+            mode: "external".into(),
+            provider_id: "existing-provider".into(),
+            base_url: None,
+            auth_mode: None,
+            auth_token: None,
+            resolved_base_url: None,
+        }, "").unwrap();
+        assert_eq!(channel.mode, "external");
+        assert!(!channel.auto_resolve);
+        assert!(channel.base_url.is_none());
     }
 
     #[test]
@@ -2280,12 +2943,17 @@ mod tests {
         let channel = normalize_codex_channel(SaveCodexChannel {
             mode: "managed".into(),
             provider_id: "work-proxy".into(),
-        }).unwrap();
+            base_url: None,
+            auth_mode: Some("inherit".into()),
+            auth_token: None,
+            resolved_base_url: Some("https://example.com/v1".into()),
+        }, "https://example.com").unwrap();
         assert_eq!(channel.mode, "managed");
         assert_eq!(channel.provider_id, "work-proxy");
         assert!(channel.base_url.is_none());
         assert!(channel.auth_token.is_none());
         assert!(channel.available_models.is_empty());
+        assert_eq!(channel.resolved_connection.as_ref().map(|value| value.base_url.as_str()), Some("https://example.com/v1"));
     }
 
     #[test]

@@ -24,18 +24,29 @@ export interface ChannelInfo {
   defaultEffort: string | null
   /** 同一渠道可绑定多个引擎；每个引擎由自己的 adapter 解释配置。 */
   engineSupport: string[]
+  claude: EngineConnectionInfo | null
   codex: CodexChannelInfo | null
+}
+
+export interface EngineConnectionInfo {
+  baseUrl: string | null
+  authMode: 'bearer' | 'none' | null
+  authTokenMasked: string | null
+  resolvedBaseUrl: string | null
+  cachedBaseUrl: string | null
 }
 
 export interface CodexChannelInfo {
   mode: 'external' | 'managed'
   providerId: string
   baseUrl: string | null
-  authMode: 'bearer' | 'openai' | 'none'
+  authMode: 'inherit' | 'bearer' | 'openai' | 'none'
   authTokenMasked: string | null
   defaultModel: string | null
   defaultEffort: string | null
   availableModels: string[]
+  resolvedBaseUrl: string | null
+  cachedBaseUrl: string | null
 }
 
 /** 通用会话外壳只消费这组字段；引擎原生渠道结构在此处适配。 */
@@ -207,9 +218,19 @@ export interface SaveChannelPayload {
   /** 渠道默认思考强度:传字符串=按值重写(空串=清除),不传=不动(默认模型走 modelEnv.ANTHROPIC_MODEL) */
   defaultEffort?: string
   engineSupport?: string[]
+  claude?: {
+    baseUrl?: string
+    authMode?: 'inherit' | 'bearer' | 'none'
+    authToken?: string
+    resolvedBaseUrl?: string
+  }
   codex?: {
-    mode: 'managed'
+    mode: 'external' | 'managed'
     providerId: string
+    baseUrl?: string
+    authMode?: 'inherit' | 'bearer' | 'openai' | 'none'
+    authToken?: string
+    resolvedBaseUrl?: string
   }
 }
 
@@ -228,6 +249,7 @@ async function saveChannel(payload: SaveChannelPayload): Promise<void> {
     modelEnv: payload.modelEnv ?? null,
     defaultEffort: payload.defaultEffort ?? null,
     engineSupport: payload.engineSupport ?? null,
+    claude: payload.claude ?? null,
     codex: payload.codex ?? null,
   })
   await refreshChannels()
@@ -344,7 +366,7 @@ async function setChannelEnabled(id: string, enabled: boolean): Promise<void> {
 
 const revealedTokens = ref<Record<string, string>>({})
 
-async function revealToken(id: string, engine = 'claude-code'): Promise<string | null> {
+async function revealToken(id: string, engine = 'shared'): Promise<string | null> {
   const key = `${engine}:${id}`
   if (revealedTokens.value[key]) return revealedTokens.value[key]
   try {
@@ -354,7 +376,7 @@ async function revealToken(id: string, engine = 'claude-code'): Promise<string |
   } catch { return null }
 }
 
-function hideToken(id: string, engine = 'claude-code') {
+function hideToken(id: string, engine = 'shared') {
   const key = `${engine}:${id}`
   const { [key]: _, ...rest } = revealedTokens.value
   revealedTokens.value = rest
@@ -364,38 +386,46 @@ async function revealChannelsDir(): Promise<void> {
   await invoke('reveal_channels_dir')
 }
 
-interface ProbeResult {
+export interface ProbeResult {
   online: boolean
   status: string
   models: string[]
   latencyMs: number
+  resolvedBaseUrl: string | null
+  endpointUrl: string | null
 }
 
 const probeResults = ref<Record<string, ProbeResult>>({})
 const probing = ref<Record<string, boolean>>({})
+const activeProbeCounts = new Map<string, number>()
 
 /** 表单值直探参数(新建未保存渠道的「获取模型列表」):齐传时 Rust 侧绕过渠道文件 */
 export interface ProbeDraft {
   baseUrl: string
   token: string
-  protocol: string
+  adapter: 'claude-code' | 'codex' | 'openai-chat'
 }
 
 async function probeChannel(id: string, draft?: ProbeDraft): Promise<ProbeResult | null> {
+  activeProbeCounts.set(id, (activeProbeCounts.get(id) ?? 0) + 1)
   probing.value = { ...probing.value, [id]: true }
   try {
     const result = await invoke<ProbeResult>('probe_channel', {
       id,
       baseUrl: draft?.baseUrl ?? null,
       token: draft?.token ?? null,
-      protocol: draft?.protocol ?? null,
+      protocol: null,
+      adapter: draft?.adapter ?? null,
     })
     probeResults.value = { ...probeResults.value, [id]: result }
     return result
   } catch {
     return null
   } finally {
-    probing.value = { ...probing.value, [id]: false }
+    const remaining = (activeProbeCounts.get(id) ?? 1) - 1
+    if (remaining > 0) activeProbeCounts.set(id, remaining)
+    else activeProbeCounts.delete(id)
+    probing.value = { ...probing.value, [id]: remaining > 0 }
   }
 }
 
