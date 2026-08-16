@@ -1406,7 +1406,11 @@
     "reload": "重新读取文件",
     "frameTitle": "{name} 的安全预览",
     "fileLinkUnavailable": "当前会话没有可用的工作目录",
-    "sandboxNote": "安全预览：作品脚本、网络与宿主访问已禁用"
+    "sandboxNote": "静态预览：作品脚本、网络与宿主访问已禁用",
+    "interactiveNote": "交互预览：作品脚本已启用，仍与 Monet 和本地文件隔离",
+    "allowScripts": "允许运行 JS",
+    "disableScripts": "停止运行 JS",
+    "runtimeBlocked": "当前平台无法安全隔离作品脚本，已恢复静态预览"
   },
   "image": {
     "pending": "待发送图片",

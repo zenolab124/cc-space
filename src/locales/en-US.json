@@ -1406,7 +1406,11 @@
     "reload": "Reload file",
     "frameTitle": "Safe preview of {name}",
     "fileLinkUnavailable": "This session has no available working directory",
-    "sandboxNote": "Safe preview: artifact scripts, network, and host access are disabled"
+    "sandboxNote": "Static preview: artifact scripts, network, and host access are disabled",
+    "interactiveNote": "Interactive preview: artifact scripts are enabled and remain isolated from Monet and local files",
+    "allowScripts": "Allow JavaScript",
+    "disableScripts": "Stop JavaScript",
+    "runtimeBlocked": "This platform cannot safely isolate artifact scripts; static preview has been restored"
   },
   "image": {
     "pending": "Image pending send",

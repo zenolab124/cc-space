@@ -1,6 +1,16 @@
 export const ARTIFACT_SIZE_MESSAGE = 'monet:artifact-size'
 export const ARTIFACT_WHEEL_BOUNDARY_MESSAGE = 'monet:artifact-wheel-boundary'
+export const ARTIFACT_RUNTIME_BLOCKED_MESSAGE = 'monet:artifact-runtime-blocked'
 export const MIN_ARTIFACT_FRAME_HEIGHT = 240
+
+interface SandboxedHtmlOptions {
+  scriptNonce: string
+  messageToken: string
+  allowArtifactScripts: boolean
+}
+
+const ARTIFACT_SCRIPT_MARKER = 'data-monet-artifact-script'
+const ARTIFACT_EVENT_STORE = 'data-monet-artifact-events'
 
 export function clampArtifactFrameHeight(contentHeight: number, frameWidth: number): number {
   const portraitFourThreeHeight = Math.max(1, frameWidth) * 4 / 3
@@ -10,11 +20,67 @@ export function clampArtifactFrameHeight(contentHeight: number, frameWidth: numb
   ))
 }
 
-function measurementScript(token: string): string {
+function sandboxRuntimeScript(options: SandboxedHtmlOptions): string {
+  const { scriptNonce, messageToken, allowArtifactScripts } = options
   return `(() => {
     const type = ${JSON.stringify(ARTIFACT_SIZE_MESSAGE)};
     const wheelType = ${JSON.stringify(ARTIFACT_WHEEL_BOUNDARY_MESSAGE)};
-    const token = ${JSON.stringify(token)};
+    const blockedType = ${JSON.stringify(ARTIFACT_RUNTIME_BLOCKED_MESSAGE)};
+    const token = ${JSON.stringify(messageToken)};
+    const allowArtifactScripts = ${JSON.stringify(allowArtifactScripts)};
+    const scriptMarker = ${JSON.stringify(ARTIFACT_SCRIPT_MARKER)};
+    const eventStore = ${JSON.stringify(ARTIFACT_EVENT_STORE)};
+    const scriptNonce = ${JSON.stringify(scriptNonce)};
+    document.currentScript?.remove();
+
+    const hostBridgeExposed = Boolean(window.__TAURI_INTERNALS__ || window.isTauri);
+    if (allowArtifactScripts && hostBridgeExposed) {
+      parent.postMessage({ type: blockedType, token }, '*');
+    } else if (allowArtifactScripts) {
+      let eventBindingIndex = 0;
+      const installEventHandler = (element, name, value) => {
+        const eventName = name.slice(2);
+        if (!eventName) return;
+        const bindingKey = '__monetArtifactEvent_' + scriptNonce + '_' + eventBindingIndex++;
+        window[bindingKey] = element;
+        const handler = document.createElement('script');
+        handler.setAttribute('nonce', scriptNonce);
+        handler.textContent =
+          'window[' + JSON.stringify(bindingKey) + '].addEventListener(' +
+          JSON.stringify(eventName) +
+          ', function(event) { const result = (function(event) { ' + value +
+          '\\n }).call(this, event); if (result === false) event.preventDefault(); });';
+        document.head.append(handler);
+        handler.remove();
+        delete window[bindingKey];
+      };
+      for (const element of document.querySelectorAll('[' + eventStore + ']')) {
+        const serialized = element.getAttribute(eventStore);
+        element.removeAttribute(eventStore);
+        if (!serialized) continue;
+        try {
+          for (const [name, value] of JSON.parse(serialized)) installEventHandler(element, name, value);
+        } catch {}
+      }
+      const placeholders = [...document.querySelectorAll('template[' + scriptMarker + ']')];
+      for (const placeholder of placeholders) {
+        const source = placeholder.content.querySelector('script');
+        if (!source || source.hasAttribute('src')) {
+          placeholder.remove();
+          continue;
+        }
+        const active = document.createElement('script');
+        for (const attribute of source.attributes) {
+          if (attribute.name !== 'nonce' && attribute.name !== 'src') {
+            active.setAttribute(attribute.name, attribute.value);
+          }
+        }
+        active.setAttribute('nonce', scriptNonce);
+        active.textContent = source.textContent;
+        placeholder.replaceWith(active);
+      }
+    }
+
     let timer = 0;
     const measure = () => {
       timer = 0;
@@ -102,15 +168,38 @@ function measurementScript(token: string): string {
   })();`
 }
 
-export function prepareSandboxedHtml(source: string, nonce: string): string {
-  const document = new DOMParser().parseFromString(source, 'text/html')
+function neutralizeArtifactScripts(document: Document, allowArtifactScripts: boolean) {
+  document.querySelectorAll(`[${ARTIFACT_SCRIPT_MARKER}], [${ARTIFACT_EVENT_STORE}]`).forEach(element => {
+    element.removeAttribute(ARTIFACT_SCRIPT_MARKER)
+    element.removeAttribute(ARTIFACT_EVENT_STORE)
+  })
 
-  document.querySelectorAll('script').forEach(element => element.remove())
+  document.querySelectorAll('script').forEach(element => {
+    if (!allowArtifactScripts) {
+      element.remove()
+      return
+    }
+    const placeholder = document.createElement('template')
+    placeholder.setAttribute(ARTIFACT_SCRIPT_MARKER, '')
+    placeholder.content.append(element.cloneNode(true))
+    element.replaceWith(placeholder)
+  })
+
   document.querySelectorAll('*').forEach(element => {
-    for (const attribute of [...element.attributes]) {
-      if (attribute.name.toLowerCase().startsWith('on')) element.removeAttribute(attribute.name)
+    const eventAttributes = [...element.attributes]
+      .filter(attribute => attribute.name.toLowerCase().startsWith('on'))
+      .map(attribute => [attribute.name, attribute.value])
+    for (const [name] of eventAttributes) element.removeAttribute(name)
+    if (allowArtifactScripts && eventAttributes.length > 0) {
+      element.setAttribute(ARTIFACT_EVENT_STORE, JSON.stringify(eventAttributes))
     }
   })
+}
+
+export function prepareSandboxedHtml(source: string, options: SandboxedHtmlOptions): string {
+  const document = new DOMParser().parseFromString(source, 'text/html')
+
+  neutralizeArtifactScripts(document, options.allowArtifactScripts)
   document.querySelectorAll('meta[http-equiv]').forEach(element => {
     const directive = element.getAttribute('http-equiv')?.toLowerCase()
     if (directive === 'refresh' || directive === 'content-security-policy') element.remove()
@@ -129,7 +218,8 @@ export function prepareSandboxedHtml(source: string, nonce: string): string {
     "media-src data: blob:",
     "font-src data:",
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${options.scriptNonce}'`,
+    "script-src-attr 'none'",
     "connect-src 'none'",
     "frame-src 'none'",
     "child-src 'none'",
@@ -137,6 +227,7 @@ export function prepareSandboxedHtml(source: string, nonce: string): string {
     "object-src 'none'",
     "form-action 'none'",
     "base-uri 'none'",
+    "navigate-to 'none'",
   ].join('; ')
   document.head.prepend(policy)
 
@@ -145,8 +236,8 @@ export function prepareSandboxedHtml(source: string, nonce: string): string {
   document.head.append(scrollPolicy)
 
   const script = document.createElement('script')
-  script.nonce = nonce
-  script.textContent = measurementScript(nonce)
+  script.setAttribute('nonce', options.scriptNonce)
+  script.textContent = sandboxRuntimeScript(options)
   document.body.append(script)
 
   return `<!doctype html>\n${document.documentElement.outerHTML}`

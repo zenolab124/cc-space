@@ -9,6 +9,7 @@ import {
   type ArtifactKind,
 } from '@/features/artifact-preview/detectArtifacts'
 import {
+  ARTIFACT_RUNTIME_BLOCKED_MESSAGE,
   ARTIFACT_SIZE_MESSAGE,
   ARTIFACT_WHEEL_BOUNDARY_MESSAGE,
   MIN_ARTIFACT_FRAME_HEIGHT,
@@ -48,7 +49,9 @@ const loading = ref(false)
 const expanded = ref(false)
 const error = ref<string | null>(null)
 const imageLightboxOpen = ref(false)
-const sandboxNonce = ref('')
+const artifactScriptsAllowed = ref(false)
+const sandboxScriptNonce = ref('')
+const sandboxMessageToken = ref('')
 const frameHeight = ref(MIN_ARTIFACT_FRAME_HEIGHT)
 let visibilityObserver: IntersectionObserver | null = null
 let stageResizeObserver: ResizeObserver | null = null
@@ -80,9 +83,18 @@ const kindLabel = computed(() => {
 
 const sandboxedHtml = computed(() => {
   const source = artifact.value?.text
-  if (!source || !sandboxNonce.value) return ''
-  return prepareSandboxedHtml(source, sandboxNonce.value)
+  if (!source || !sandboxScriptNonce.value || !sandboxMessageToken.value) return ''
+  return prepareSandboxedHtml(source, {
+    scriptNonce: sandboxScriptNonce.value,
+    messageToken: sandboxMessageToken.value,
+    allowArtifactScripts: artifactScriptsAllowed.value,
+  })
 })
+
+function rotateSandboxIdentity() {
+  sandboxScriptNonce.value = crypto.randomUUID()
+  sandboxMessageToken.value = crypto.randomUUID()
+}
 
 function resetFrameMeasurement() {
   measuredContentHeight = Number.POSITIVE_INFINITY
@@ -106,7 +118,12 @@ async function loadPreview() {
       path: props.candidate.path,
     })
     if (revision !== loadRevision) return
-    sandboxNonce.value = loaded.kind === 'html' ? crypto.randomUUID() : ''
+    artifactScriptsAllowed.value = false
+    if (loaded.kind === 'html') rotateSandboxIdentity()
+    else {
+      sandboxScriptNonce.value = ''
+      sandboxMessageToken.value = ''
+    }
     resetFrameMeasurement()
     artifact.value = loaded
     expanded.value = true
@@ -130,8 +147,17 @@ function reloadPreview() {
   closeImageLightbox(false)
   loadRevision++
   artifact.value = null
-  sandboxNonce.value = ''
+  artifactScriptsAllowed.value = false
+  sandboxScriptNonce.value = ''
+  sandboxMessageToken.value = ''
   void loadPreview()
+}
+
+function toggleArtifactScripts() {
+  artifactScriptsAllowed.value = !artifactScriptsAllowed.value
+  error.value = null
+  rotateSandboxIdentity()
+  resetFrameMeasurement()
 }
 
 function clearDisposeTimer() {
@@ -147,7 +173,9 @@ function disposePreview() {
   loading.value = false
   expanded.value = false
   artifact.value = null
-  sandboxNonce.value = ''
+  artifactScriptsAllowed.value = false
+  sandboxScriptNonce.value = ''
+  sandboxMessageToken.value = ''
   resetFrameMeasurement()
 }
 
@@ -220,8 +248,15 @@ function onSandboxMessage(event: MessageEvent) {
     !frame
     || event.source !== frame.contentWindow
     || !data
-    || data.token !== sandboxNonce.value
+    || data.token !== sandboxMessageToken.value
   ) return
+
+  if (data.type === ARTIFACT_RUNTIME_BLOCKED_MESSAGE) {
+    artifactScriptsAllowed.value = false
+    error.value = t('artifactPreview.runtimeBlocked')
+    rotateSandboxIdentity()
+    return
+  }
 
   if (data.type === ARTIFACT_WHEEL_BOUNDARY_MESSAGE) {
     if (
@@ -344,6 +379,27 @@ onUnmounted(() => {
       {{ error }}
     </div>
 
+    <div v-if="expanded && artifact?.kind === 'html'" class="artifact-runtime-bar">
+      <p class="artifact-runtime-status" aria-live="polite">
+        <span
+          :class="artifactScriptsAllowed ? 'i-carbon-unlocked' : 'i-carbon-locked'"
+          class="h-3.5 w-3.5 shrink-0"
+          aria-hidden="true"
+        />
+        {{ artifactScriptsAllowed ? $t('artifactPreview.interactiveNote') : $t('artifactPreview.sandboxNote') }}
+      </p>
+      <button
+        type="button"
+        class="artifact-script-button"
+        :class="artifactScriptsAllowed && 'is-active'"
+        :aria-pressed="artifactScriptsAllowed"
+        @click="toggleArtifactScripts"
+      >
+        <span :class="artifactScriptsAllowed ? 'i-carbon-stop-filled' : 'i-carbon-play-filled-alt'" class="h-3.5 w-3.5" aria-hidden="true" />
+        {{ artifactScriptsAllowed ? $t('artifactPreview.disableScripts') : $t('artifactPreview.allowScripts') }}
+      </button>
+    </div>
+
     <div v-if="expanded && artifact" ref="stageRef" class="artifact-stage">
       <iframe
         v-if="artifact.kind === 'html'"
@@ -379,11 +435,6 @@ onUnmounted(() => {
         />
       </button>
     </div>
-
-    <p v-if="expanded && artifact?.kind === 'html'" class="artifact-sandbox-note">
-      <span class="i-carbon-locked h-3 w-3" aria-hidden="true" />
-      {{ $t('artifactPreview.sandboxNote') }}
-    </p>
 
     <Teleport to="body">
       <div
@@ -475,6 +526,53 @@ onUnmounted(() => {
 }
 .artifact-action-button:disabled,
 .artifact-icon-button:disabled { cursor: wait; opacity: 0.55; }
+.artifact-runtime-bar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 5px 8px 5px 10px;
+  background: var(--muted);
+}
+.artifact-runtime-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.artifact-script-button {
+  display: inline-flex;
+  min-height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  color: var(--foreground);
+  background: var(--card);
+  font-size: 11px;
+  font-weight: 600;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.artifact-script-button:hover { background: var(--secondary); }
+.artifact-script-button.is-active {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.artifact-script-button.is-active:hover { opacity: 0.9; }
+.artifact-script-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
 .artifact-stage {
   position: relative;
   display: flex;
@@ -558,17 +656,9 @@ onUnmounted(() => {
   outline: 2px solid white;
   outline-offset: 2px;
 }
-.artifact-sandbox-note {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-top: 1px solid var(--border);
-  padding: 5px 9px;
-  color: var(--muted-foreground);
-  font-size: 10px;
-}
 @media (prefers-reduced-motion: reduce) {
   .artifact-action-button,
-  .artifact-icon-button { transition: none; }
+  .artifact-icon-button,
+  .artifact-script-button { transition: none; }
 }
 </style>
