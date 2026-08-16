@@ -155,7 +155,7 @@ impl CodexSupervisor {
             phase: CodexReadinessPhase::Warming,
             error: None,
         });
-        let runtime_version = crate::codex_env::current_installed_version();
+        let runtime_version = crate::codex_env::current_runtime_version();
         let result = self
             .request("model/list", json!({ "cursor": null, "limit": 1 }))
             .and_then(|response| {

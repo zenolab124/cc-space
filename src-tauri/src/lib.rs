@@ -299,6 +299,7 @@ pub fn run() {
             cli_env::claude_env_diagnose,
             codex_env::codex_env_check,
             codex_env::codex_env_install,
+            codex_env::codex_runtime_source_set,
             channels::list_channels,
             channels::list_codex_providers,
             channels::get_cli_env_target,

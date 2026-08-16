@@ -52,12 +52,16 @@ pub fn read_app_setting(key: &str) -> Option<serde_json::Value> {
 /// 写入 ~/.monet/settings.json 中的单个设置键；value 为 null 时删除该键。
 /// 文件存在但解析失败时拒绝覆写，避免带着空 map 清掉其他设置键
 pub fn write_app_setting(key: &str, value: serde_json::Value) {
+    let _ = write_app_setting_checked(key, value);
+}
+
+pub fn write_app_setting_checked(key: &str, value: serde_json::Value) -> Result<(), String> {
     let path = data_dir().join("settings.json");
     let mut settings: serde_json::Map<String, serde_json::Value> =
         match std::fs::read_to_string(&path) {
             Ok(s) => match serde_json::from_str(&s) {
                 Ok(m) => m,
-                Err(_) => return,
+                Err(error) => return Err(format!("设置文件解析失败: {error}")),
             },
             Err(_) => Default::default(),
         };
@@ -66,9 +70,9 @@ pub fn write_app_setting(key: &str, value: serde_json::Value) {
     } else {
         settings.insert(key.to_string(), value);
     }
-    if let Ok(json) = serde_json::to_string_pretty(&serde_json::Value::Object(settings)) {
-        let _ = atomic_write(&path, &json);
-    }
+    let json = serde_json::to_string_pretty(&serde_json::Value::Object(settings))
+        .map_err(|error| format!("设置序列化失败: {error}"))?;
+    atomic_write(&path, &json).map_err(|error| format!("设置写入失败: {error}"))
 }
 
 /// Claude Code 数据根目录（默认 ~/.claude）的**唯一**解析入口。

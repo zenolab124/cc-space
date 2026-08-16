@@ -375,7 +375,7 @@ fn parse_version(value: &str) -> Option<(u32, u32, u32)> {
     ))
 }
 
-pub(super) fn supported_version(value: Option<&str>) -> Option<bool> {
+pub(crate) fn supported_version(value: Option<&str>) -> Option<bool> {
     value
         .and_then(parse_version)
         .map(|version| version >= MINIMUM_CODEX_VERSION)

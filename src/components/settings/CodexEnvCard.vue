@@ -2,10 +2,11 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { relaunch } from '@tauri-apps/plugin-process'
 import { useI18n } from 'vue-i18n'
 import { isWindows } from '@/composables/usePlatform'
 import { openExternalUrl } from '@/composables/useFileOpener'
-import { useEngineNotices } from '@/composables/useEngineNotices'
+import { useEngineNotices, type CodexRuntimeSource } from '@/composables/useEngineNotices'
 
 const { t } = useI18n()
 
@@ -30,7 +31,32 @@ const installPhase = ref<InstallPhase | null>(null)
 const installMsg = ref<{ kind: 'ok' | 'err'; text: string } | null>(null)
 const installTail = ref('')
 const copiedCmd = ref('')
+const savingRuntime = ref(false)
+const runtimeMsg = ref<{ kind: 'ok' | 'err'; text: string } | null>(null)
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+const showRuntimeSelector = computed(() => !!info.value
+  && (info.value.runtimeSelectionSuggested || info.value.configuredRuntimeSource === 'desktop'))
+const versionMismatchHintKey = computed(() => {
+  if (info.value?.updateAvailable) return 'settings.codexEnv.versionMismatchUpgradeHint'
+  if (showRuntimeSelector.value) return 'settings.codexEnv.versionMismatchHint'
+  return 'settings.codexEnv.versionMismatchUnavailableHint'
+})
+const runtimeSourceHintKey = computed(() => info.value?.runtimeSelectionSuggested
+  ? 'settings.codexEnv.runtimeSourceHint'
+  : 'settings.codexEnv.runtimeSourceConfiguredHint')
+const configuredRuntimeVersion = computed(() => {
+  if (!info.value) return null
+  return info.value.configuredRuntimeSource === 'desktop'
+    ? info.value.desktopVersion
+    : info.value.installedVersion
+})
+function normalizeVersion(version: string) {
+  return version.trim().replace(/^v/, '')
+}
+const selectedCacheMismatch = computed(() => !!configuredRuntimeVersion.value
+  && !!info.value?.cacheVersion
+  && normalizeVersion(configuredRuntimeVersion.value) !== normalizeVersion(info.value.cacheVersion))
 
 const installOptions = computed(() => {
   if (isWindows) {
@@ -52,18 +78,7 @@ async function runInstall() {
     const result = await invoke<InstallResult>('codex_env_install')
     if (result.success) {
       installPhase.value = 'verifying'
-      if (result.newVersion && result.binaryPath) {
-        info.value = {
-          latestVersion: info.value?.latestVersion ?? null,
-          updateAvailable: false,
-          installedVersion: result.newVersion,
-          binaryPath: result.binaryPath,
-          desktopVersion: info.value?.desktopVersion ?? null,
-          versionMismatch: info.value?.desktopVersion != null && info.value.desktopVersion !== result.newVersion,
-          cacheVersion: info.value?.cacheVersion ?? null,
-          cacheVersionMismatch: info.value?.cacheVersion != null && info.value.cacheVersion !== result.newVersion,
-        }
-      }
+      await check()
       installMsg.value = { kind: 'ok', text: t('settings.codexInstall.installOk', { version: result.newVersion ?? '?' }) }
     } else {
       installMsg.value = { kind: 'err', text: t('settings.codexInstall.installFail') }
@@ -75,6 +90,27 @@ async function runInstall() {
     installing.value = false
     installPhase.value = null
   }
+}
+
+async function changeRuntimeSource(event: Event) {
+  const source = (event.target as HTMLSelectElement).value as CodexRuntimeSource
+  if (!info.value || source === info.value.configuredRuntimeSource) return
+  savingRuntime.value = true
+  runtimeMsg.value = null
+  try {
+    await invoke('codex_runtime_source_set', { source })
+    await check()
+    runtimeMsg.value = { kind: 'ok', text: t('settings.codexEnv.runtimeSaved') }
+  } catch (cause) {
+    runtimeMsg.value = { kind: 'err', text: String(cause) }
+  } finally {
+    savingRuntime.value = false
+  }
+}
+
+async function restartForRuntime() {
+  runtimeMsg.value = { kind: 'ok', text: t('engineSettings.restarting') }
+  await relaunch()
 }
 
 async function copyCmd(command: string) {
@@ -140,7 +176,7 @@ onUnmounted(() => {
     </p>
 
     <div
-      v-if="info?.cacheVersionMismatch"
+      v-if="info?.cacheVersionMismatch && !showRuntimeSelector"
       role="status"
       class="mt-2 rounded border border-accent/30 bg-accent/5 px-2.5 py-2 text-[10.5px] leading-relaxed"
     >
@@ -149,7 +185,10 @@ onUnmounted(() => {
         <span>{{ t('settings.codexEnv.cacheMismatchTitle') }}</span>
       </p>
       <p class="mt-1 text-muted-foreground">
-        {{ t('settings.codexEnv.cacheMismatchHint', { cache: info.cacheVersion ?? '?' }) }}
+        {{ t('settings.codexEnv.cacheMismatchHint', {
+          cache: info.cacheVersion ?? '?',
+          runtime: info.activeRuntimeVersion ?? '?',
+        }) }}
       </p>
     </div>
 
@@ -163,25 +202,81 @@ onUnmounted(() => {
         <span>{{ t('settings.codexEnv.versionMismatchTitle') }}</span>
       </p>
       <p class="mt-1 text-muted-foreground">
-        {{ t('settings.codexEnv.versionMismatchHint', {
+        {{ t(versionMismatchHintKey, {
           standalone: info.installedVersion ?? '?',
           desktop: info.desktopVersion ?? '?',
         }) }}
       </p>
     </div>
 
-    <div v-if="info && !info.binaryPath" class="mt-2 px-2.5 py-2 rounded border border-border bg-muted/40">
+    <div
+      v-if="showRuntimeSelector"
+      class="mt-2 rounded border border-border bg-muted/25 px-2.5 py-2.5"
+    >
+      <div class="flex items-center gap-3">
+        <div class="min-w-0 flex-1">
+          <p class="text-[11px] font-medium text-foreground">{{ t('settings.codexEnv.runtimeSourceTitle') }}</p>
+          <p class="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+            {{ t(runtimeSourceHintKey) }}
+          </p>
+        </div>
+        <select
+          class="form-select form-select-sm w-52 shrink-0"
+          :value="info?.configuredRuntimeSource"
+          :disabled="savingRuntime"
+          :aria-label="t('settings.codexEnv.runtimeSourceTitle')"
+          @change="changeRuntimeSource"
+        >
+          <option value="standalone" :disabled="!info?.installedVersion">
+            {{ t('settings.codexEnv.runtimeStandalone', { version: info?.installedVersion ?? '?' }) }}
+          </option>
+          <option value="desktop" :disabled="!info?.desktopVersion">
+            {{ t('settings.codexEnv.runtimeDesktop', { version: info?.desktopVersion ?? '?' }) }}
+          </option>
+        </select>
+      </div>
+
+      <div
+        v-if="selectedCacheMismatch"
+        role="status"
+        class="mt-2 flex items-start gap-1.5 rounded border border-accent/30 bg-accent/5 px-2 py-1.5 text-[10px] leading-relaxed text-accent"
+      >
+        <span class="i-carbon-warning-alt mt-0.5 h-3 w-3 shrink-0" />
+        <span>{{ t('settings.codexEnv.runtimeCacheWarning', {
+          runtime: configuredRuntimeVersion ?? '?',
+          cache: info?.cacheVersion ?? '?',
+        }) }}</span>
+      </div>
+
+      <div v-if="info?.runtimeRestartRequired" class="mt-2 flex items-center justify-between gap-3 border-t border-border pt-2">
+        <p class="text-[10px] text-muted-foreground">{{ t('settings.codexEnv.runtimeRestartHint') }}</p>
+        <button type="button" class="env-btn shrink-0" @click="restartForRuntime">
+          {{ t('engineSettings.restart') }}
+        </button>
+      </div>
+      <p
+        v-if="runtimeMsg"
+        role="status"
+        :class="['mt-1.5 text-[10px]', runtimeMsg.kind === 'ok' ? 'text-primary' : 'text-destructive']"
+      >
+        {{ runtimeMsg.text }}
+      </p>
+    </div>
+
+    <div v-if="info && (!info.binaryPath || info.updateAvailable)" class="mt-2 px-2.5 py-2 rounded border border-border bg-muted/40">
       <p class="text-[11px] font-medium flex items-center gap-1">
         <span class="i-carbon-download w-3 h-3" />
-        {{ t('settings.codexInstall.title') }}
+        {{ t(info.updateAvailable ? 'settings.codexInstall.updateTitle' : 'settings.codexInstall.title') }}
       </p>
-      <p class="text-[10.5px] text-muted-foreground mt-0.5">{{ t('settings.codexInstall.hint') }}</p>
+      <p class="text-[10.5px] text-muted-foreground mt-0.5">
+        {{ t(info.updateAvailable ? 'settings.codexInstall.updateHint' : 'settings.codexInstall.hint') }}
+      </p>
       <div class="mt-1.5 flex items-center gap-2">
         <button class="env-btn primary" :disabled="installing" @click="runInstall">
           <span v-if="installing" class="i-carbon-circle-dash w-3 h-3 animate-spin" />
           {{ installing
             ? t(installPhase === 'verifying' ? 'settings.codexInstall.verifying' : 'settings.codexInstall.installing')
-            : t('settings.codexInstall.installNow') }}
+            : t(info.updateAvailable ? 'settings.codexInstall.updateNow' : 'settings.codexInstall.installNow') }}
         </button>
         <code class="env-path flex-1 !mt-0 truncate text-muted-foreground" :title="installOptions[0].cmd">{{ installOptions[0].cmd }}</code>
       </div>

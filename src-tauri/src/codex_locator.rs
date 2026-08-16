@@ -1,11 +1,30 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const FAIL_TTL: Duration = Duration::from_secs(60);
+pub const RUNTIME_SOURCE_SETTING_KEY: &str = "codexRuntimeSource";
 
 static MEM_HIT: Mutex<Option<PathBuf>> = Mutex::new(None);
 static MEM_FAIL: Mutex<Option<Instant>> = Mutex::new(None);
+static ACTIVE_RUNTIME_SOURCE: OnceLock<CodexRuntimeSource> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexRuntimeSource {
+    Standalone,
+    Desktop,
+}
+
+impl CodexRuntimeSource {
+    fn from_setting(value: &serde_json::Value) -> Option<Self> {
+        match value.as_str()? {
+            "standalone" => Some(Self::Standalone),
+            "desktop" => Some(Self::Desktop),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(unix)]
 fn is_valid_binary(path: &Path) -> bool {
@@ -121,9 +140,31 @@ fn candidate_paths() -> Vec<PathBuf> {
     candidates
 }
 
+fn settings_path() -> Option<PathBuf> {
+    std::env::var_os("MONET_DATA_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".monet")))
+        .map(|directory| directory.join("settings.json"))
+}
+
+pub fn configured_runtime_source() -> CodexRuntimeSource {
+    settings_path()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|settings| settings.get(RUNTIME_SOURCE_SETTING_KEY).cloned())
+        .as_ref()
+        .and_then(CodexRuntimeSource::from_setting)
+        .unwrap_or(CodexRuntimeSource::Standalone)
+}
+
+pub fn active_runtime_source() -> CodexRuntimeSource {
+    *ACTIVE_RUNTIME_SOURCE.get_or_init(configured_runtime_source)
+}
+
 /// Detect the Codex binary bundled inside the ChatGPT desktop app without
-/// treating it as a standalone CLI candidate. The bundle is managed by the
-/// desktop app and is not a stable runtime contract for Monet.
+/// treating it as a standalone CLI candidate. Monet only uses this path when
+/// the user explicitly selects the desktop runtime.
 pub fn desktop_bundle_path() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
@@ -143,6 +184,15 @@ pub fn desktop_bundle_path() -> Option<PathBuf> {
 }
 
 pub fn locate() -> Result<PathBuf, String> {
+    match active_runtime_source() {
+        CodexRuntimeSource::Standalone => locate_standalone(),
+        CodexRuntimeSource::Desktop => desktop_bundle_path().ok_or_else(|| {
+            "The selected ChatGPT bundled Codex runtime is not available".to_string()
+        }),
+    }
+}
+
+pub fn locate_standalone() -> Result<PathBuf, String> {
     {
         let mut hit = MEM_HIT.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(path) = hit.clone() {
@@ -177,10 +227,10 @@ pub fn is_available() -> bool {
 }
 
 /// 清除探测缓存后重新定位，供设置页安装完成后立即复测。
-pub fn redetect() -> Result<PathBuf, String> {
+pub fn redetect_standalone() -> Result<PathBuf, String> {
     *MEM_HIT.lock().unwrap_or_else(|error| error.into_inner()) = None;
     *MEM_FAIL.lock().unwrap_or_else(|error| error.into_inner()) = None;
-    locate()
+    locate_standalone()
 }
 
 #[cfg(test)]
@@ -201,6 +251,22 @@ mod tests {
         );
         assert_eq!(
             absolute_root(PathBuf::from("relative/bin"), Some(&home)),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_supported_runtime_source_values() {
+        assert_eq!(
+            CodexRuntimeSource::from_setting(&serde_json::json!("standalone")),
+            Some(CodexRuntimeSource::Standalone)
+        );
+        assert_eq!(
+            CodexRuntimeSource::from_setting(&serde_json::json!("desktop")),
+            Some(CodexRuntimeSource::Desktop)
+        );
+        assert_eq!(
+            CodexRuntimeSource::from_setting(&serde_json::json!("unknown")),
             None
         );
     }

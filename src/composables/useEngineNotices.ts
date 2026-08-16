@@ -9,9 +9,16 @@ export interface CodexEnvInfo {
   binaryPath: string | null
   desktopVersion: string | null
   versionMismatch: boolean
+  activeRuntimeSource: CodexRuntimeSource
+  configuredRuntimeSource: CodexRuntimeSource
+  activeRuntimeVersion: string | null
+  runtimeRestartRequired: boolean
+  runtimeSelectionSuggested: boolean
   cacheVersion: string | null
   cacheVersionMismatch: boolean
 }
+
+export type CodexRuntimeSource = 'standalone' | 'desktop'
 
 const codexInfo = ref<CodexEnvInfo | null>(null)
 const checking = ref(false)

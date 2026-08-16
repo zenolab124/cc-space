@@ -28,6 +28,11 @@ pub struct CodexEnvInfo {
     pub binary_path: Option<String>,
     pub desktop_version: Option<String>,
     pub version_mismatch: bool,
+    pub active_runtime_source: codex_locator::CodexRuntimeSource,
+    pub configured_runtime_source: codex_locator::CodexRuntimeSource,
+    pub active_runtime_version: Option<String>,
+    pub runtime_restart_required: bool,
+    pub runtime_selection_suggested: bool,
     pub cache_version: Option<String>,
     pub cache_version_mismatch: bool,
 }
@@ -109,7 +114,21 @@ fn versions_differ(left: &str, right: &str) -> bool {
     left.trim().trim_start_matches('v') != right.trim().trim_start_matches('v')
 }
 
-pub(crate) fn current_installed_version() -> Option<String> {
+fn should_suggest_runtime_selection(
+    version_mismatch: bool,
+    update_available: bool,
+    standalone_available: bool,
+    desktop_available: bool,
+    desktop_supported: bool,
+) -> bool {
+    version_mismatch
+        && !update_available
+        && standalone_available
+        && desktop_available
+        && desktop_supported
+}
+
+pub(crate) fn current_runtime_version() -> Option<String> {
     codex_locator::locate()
         .ok()
         .as_deref()
@@ -188,27 +207,41 @@ fn tail(text: &str) -> String {
 }
 
 fn codex_env_check_sync() -> CodexEnvInfo {
-    let located = codex_locator::locate().ok();
-    let binary_path = located
+    let standalone_path = codex_locator::locate_standalone().ok();
+    let binary_path = standalone_path
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned());
-    let installed_version = located.as_ref().and_then(|path| run_version(path));
+    let installed_version = standalone_path.as_deref().and_then(run_version);
     let latest_version = fetch_latest_version();
     let update_available = matches!(
         (&installed_version, &latest_version),
         (Some(installed), Some(latest)) if semver_gt(latest, installed)
     );
-    let desktop_version = codex_locator::desktop_bundle_path()
-        .as_deref()
-        .and_then(run_version);
+    let desktop_path = codex_locator::desktop_bundle_path();
+    let desktop_version = desktop_path.as_deref().and_then(run_version);
     let version_mismatch = matches!(
         (&installed_version, &desktop_version),
         (Some(installed), Some(desktop)) if versions_differ(installed, desktop)
     );
+    let active_runtime_source = codex_locator::active_runtime_source();
+    let configured_runtime_source = codex_locator::configured_runtime_source();
+    let active_runtime_version = match active_runtime_source {
+        codex_locator::CodexRuntimeSource::Standalone => installed_version.clone(),
+        codex_locator::CodexRuntimeSource::Desktop => desktop_version.clone(),
+    };
+    let desktop_supported =
+        crate::engines::codex::supported_version(desktop_version.as_deref()) != Some(false);
+    let runtime_selection_suggested = should_suggest_runtime_selection(
+        version_mismatch,
+        update_available,
+        standalone_path.is_some(),
+        desktop_path.is_some(),
+        desktop_supported,
+    );
     let cache_version = read_cache_version();
     let cache_version_mismatch = matches!(
-        (&installed_version, &cache_version),
-        (Some(installed), Some(cache)) if versions_differ(installed, cache)
+        (&active_runtime_version, &cache_version),
+        (Some(runtime), Some(cache)) if versions_differ(runtime, cache)
     );
     CodexEnvInfo {
         installed_version,
@@ -217,6 +250,11 @@ fn codex_env_check_sync() -> CodexEnvInfo {
         binary_path,
         desktop_version,
         version_mismatch,
+        active_runtime_source,
+        configured_runtime_source,
+        active_runtime_version,
+        runtime_restart_required: active_runtime_source != configured_runtime_source,
+        runtime_selection_suggested,
         cache_version,
         cache_version_mismatch,
     }
@@ -227,6 +265,24 @@ pub async fn codex_env_check() -> Result<CodexEnvInfo, String> {
     tauri::async_runtime::spawn_blocking(codex_env_check_sync)
         .await
         .map_err(|error| format!("Codex 环境检查线程异常退出: {error}"))
+}
+
+#[tauri::command]
+pub fn codex_runtime_source_set(source: codex_locator::CodexRuntimeSource) -> Result<(), String> {
+    let path = match source {
+        codex_locator::CodexRuntimeSource::Standalone => codex_locator::locate_standalone()?,
+        codex_locator::CodexRuntimeSource::Desktop => codex_locator::desktop_bundle_path()
+            .ok_or_else(|| "ChatGPT 内置 Codex 运行时不可用".to_string())?,
+    };
+    let version = run_version(&path).ok_or_else(|| "无法读取所选 Codex 运行时版本".to_string())?;
+    if crate::engines::codex::supported_version(Some(&version)) == Some(false) {
+        return Err(format!(
+            "Codex 运行时版本 {version} 低于 Monet 支持的最低版本"
+        ));
+    }
+    let value =
+        serde_json::to_value(source).map_err(|error| format!("运行时设置序列化失败: {error}"))?;
+    crate::config::write_app_setting_checked(codex_locator::RUNTIME_SOURCE_SETTING_KEY, value)
 }
 
 fn codex_env_install_sync(app: AppHandle) -> Result<CodexInstallResult, String> {
@@ -260,7 +316,7 @@ fn codex_env_install_sync(app: AppHandle) -> Result<CodexInstallResult, String> 
         String::from_utf8_lossy(&output.stderr)
     );
     emit_install_progress(&app, "verifying");
-    let binary_path = codex_locator::redetect().ok();
+    let binary_path = codex_locator::redetect_standalone().ok();
     let new_version = binary_path.as_deref().and_then(run_version);
     let success = output.status.success() && new_version.is_some();
     emit_install_progress(&app, if success { "completed" } else { "failed" });
@@ -308,5 +364,24 @@ mod tests {
     fn detects_exact_runtime_version_differences() {
         assert!(versions_differ("0.148.0", "0.148.0-alpha.9"));
         assert!(!versions_differ("v0.147.0", "0.147.0"));
+    }
+
+    #[test]
+    fn suggests_runtime_choice_only_when_upgrade_cannot_resolve_mismatch() {
+        assert!(should_suggest_runtime_selection(
+            true, false, true, true, true
+        ));
+        assert!(!should_suggest_runtime_selection(
+            true, true, true, true, true
+        ));
+        assert!(!should_suggest_runtime_selection(
+            false, false, true, true, true
+        ));
+        assert!(!should_suggest_runtime_selection(
+            true, false, true, false, true
+        ));
+        assert!(!should_suggest_runtime_selection(
+            true, false, true, true, false
+        ));
     }
 }
