@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
 import { useNotifications } from '@/composables/useNotifications'
+import LocalNetworkRecovery from './LocalNetworkRecovery.vue'
 
 type Status = 'granted' | 'denied' | 'undetermined' | 'targetNotRunning' | 'unverified' | 'unknown'
 
@@ -102,15 +103,13 @@ function reportLocalNetworkResult(status: Status) {
   }
 }
 
+function requestLocalNetwork() {
+  const row = appRows.find(row => row.key === 'localNetwork')
+  if (row) requestApp(row)
+}
+
 async function requestApp(row: PermRow) {
-  if (row.key === 'localNetwork' && appStatus(row.key) === 'denied') {
-    notifyTransient(
-      t('settings.permCheck.localNetworkDenied'),
-      t('settings.permCheck.localNetworkDeniedHint'),
-    )
-    openPanel(row.panel)
-    return
-  }
+  const wasLocalNetworkDenied = row.key === 'localNetwork' && appStatus(row.key) === 'denied'
   requesting.value = row.key
   const slowTimer = row.key === 'localNetwork' ? startSlowRequest(row.key) : null
   try {
@@ -118,7 +117,11 @@ async function requestApp(row: PermRow) {
       const r = await requestPermission()
       appPerms.value = { ...appPerms.value, notifications: r === 'granted' ? 'granted' : 'denied' }
     } else {
-      const status = await invoke<Status>('request_system_permission', { kind: row.key })
+      const request = invoke<Status>('request_system_permission', { kind: row.key })
+      // 先启动 NWConnection，再打开设置。连接保持存活期间用户开启权限，
+      // Network.framework 会自动重试，避免旧实现“按钮只跳设置、实际没请求”。
+      if (wasLocalNetworkDenied) setTimeout(() => openPanel(row.panel), 250)
+      const status = await request
       appPerms.value = { ...appPerms.value, [row.key]: status }
       if (row.key === 'localNetwork') reportLocalNetworkResult(status)
       // 屏幕录制授权写入后，本进程要重启才能读到新状态
@@ -137,19 +140,17 @@ async function requestApp(row: PermRow) {
 
 // runner 行的授权请求：经 launchd 以 prompt 模式跑一次，系统弹窗归因给 runner
 async function requestRunner(row: PermRow) {
-  if (row.key === 'localNetwork' && runnerStatus(row.key) === 'denied') {
-    notifyTransient(
-      t('settings.permCheck.localNetworkDenied'),
-      t('settings.permCheck.localNetworkDeniedHint'),
-    )
-    openPanel(row.panel)
-    return
-  }
+  const wasLocalNetworkDenied = row.key === 'localNetwork' && runnerStatus(row.key) === 'denied'
   requesting.value = `runner:${row.key}`
   const slowTimer = row.key === 'localNetwork' ? startSlowRequest(`runner:${row.key}`) : null
   try {
     const before = runnerStatus(row.key)
-    runnerResult.value = await invoke('run_runner_health_check', { promptKind: row.key })
+    const request = invoke<{ checkedAt: string; permissions: Record<string, Status> }>(
+      'run_runner_health_check',
+      { promptKind: row.key },
+    )
+    if (wasLocalNetworkDenied) setTimeout(() => openPanel(row.panel), 450)
+    runnerResult.value = await request
     if (row.key === 'localNetwork') reportLocalNetworkResult(runnerStatus(row.key))
     // denied 记录系统不再弹窗，且 runner 是路径型记录无法程序化重置，
     // 只能引导用户去系统设置删除旧条目后重试
@@ -263,6 +264,11 @@ onUnmounted(() => {
         </button>
       </div>
     </section>
+
+    <LocalNetworkRecovery
+      :status="appStatus('localNetwork')"
+      @request="requestLocalNetwork"
+    />
 
     <!-- runner 账本 -->
     <section class="permissions-card">

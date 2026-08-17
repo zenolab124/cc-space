@@ -168,7 +168,8 @@ pub fn check_system_permissions() -> serde_json::Value {
 /// 用户明确点击“重新检测”后执行一次快速本地网络探测。
 #[tauri::command]
 pub async fn check_local_network_permission() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| crate::tcc::check_local_network().to_string())
+    let data_dir = crate::config::data_dir().clone();
+    tauri::async_runtime::spawn_blocking(move || crate::tcc::check_local_network(&data_dir).to_string())
         .await
         .map_err(|e| e.to_string())
 }
@@ -207,13 +208,171 @@ pub async fn request_system_permission(kind: String) -> Result<String, String> {
                 Ok(crate::tcc::prompt_accessibility().to_string())
             }
             "localNetwork" => {
-                Ok(crate::tcc::request_local_network().to_string())
+                Ok(crate::tcc::request_local_network(crate::config::data_dir()).to_string())
             }
             _ => Err(format!("unsupported permission kind: {}", kind)),
         }
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppCopyInfo {
+    path: String,
+    current: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn current_app_bundle() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+        .map(PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
+fn bundle_identifier(path: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+        .arg(path.join("Contents/Info.plist"))
+        .output()
+        .ok()?;
+    output.status.success().then(|| {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn scan_app_copies(identifier: &str) -> Vec<PathBuf> {
+    let query = format!("kMDItemCFBundleIdentifier == '{}'", identifier);
+    let Ok(output) = std::process::Command::new("/usr/bin/mdfind")
+        .arg(query)
+        .output()
+    else {
+        return Vec::new();
+    };
+    let trash = dirs::home_dir().map(|home| home.join(".Trash"));
+    let mut copies = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .filter(|path| {
+            path.is_dir()
+                && trash.as_ref().map_or(true, |trash| !path.starts_with(trash))
+                && bundle_identifier(path).as_deref() == Some(identifier)
+        })
+        .collect::<Vec<_>>();
+    if let Some(current) = current_app_bundle()
+        .filter(|path| bundle_identifier(path).as_deref() == Some(identifier))
+    {
+        copies.push(current);
+    }
+    copies.sort();
+    copies.dedup();
+    copies
+}
+
+/// 列出被 macOS 当作同一个应用的副本。多个路径会让本地网络
+/// 设置出现重复条目，也可能使用户修改到不是当前运行的副本。
+#[tauri::command]
+pub fn list_app_copies(app: tauri::AppHandle) -> Vec<AppCopyInfo> {
+    #[cfg(target_os = "macos")]
+    {
+        let identifier = &app.config().identifier;
+        let current = current_app_bundle().and_then(|path| path.canonicalize().ok());
+        scan_app_copies(identifier)
+            .into_iter()
+            .map(|path| {
+                let is_current = path
+                    .canonicalize()
+                    .ok()
+                    .zip(current.as_ref())
+                    .is_some_and(|(path, current)| &path == current);
+                AppCopyInfo {
+                    path: path.to_string_lossy().to_string(),
+                    current: is_current,
+                }
+            })
+            .collect()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Vec::new()
+    }
+}
+
+/// 只允许把已校验、非当前运行的同 Bundle ID 副本移到废纸篓。
+/// 使用 rename 保持可恢复，不直接删除用户数据。
+#[tauri::command]
+pub fn move_app_copy_to_trash(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let identifier = &app.config().identifier;
+        let requested = PathBuf::from(&path)
+            .canonicalize()
+            .map_err(|_| "APP_COPY_UNREADABLE".to_string())?;
+        if requested.extension().map_or(true, |ext| ext != "app")
+            || bundle_identifier(&requested).as_deref() != Some(identifier)
+        {
+            return Err("APP_COPY_INVALID".to_string());
+        }
+        if current_app_bundle()
+            .and_then(|current| current.canonicalize().ok())
+            .is_some_and(|current| current == requested)
+        {
+            return Err("APP_COPY_CURRENT".to_string());
+        }
+        if !scan_app_copies(identifier).into_iter().any(|candidate| {
+            candidate.canonicalize().is_ok_and(|candidate| candidate == requested)
+        }) {
+            return Err("APP_COPY_STALE".to_string());
+        }
+
+        let trash = dirs::home_dir().ok_or("TRASH_UNAVAILABLE")?.join(".Trash");
+        std::fs::create_dir_all(&trash).map_err(|_| "TRASH_UNAVAILABLE".to_string())?;
+        let stem = requested
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Monet");
+        let destination = trash.join(format!(
+            "{}-copy-{}.app",
+            stem,
+            chrono::Utc::now().timestamp_millis()
+        ));
+        std::fs::rename(&requested, &destination)
+            .map_err(|_| "APP_COPY_MOVE_FAILED".to_string())?;
+        Ok(destination.to_string_lossy().to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, path);
+        Err("APP_COPY_UNSUPPORTED".to_string())
+    }
+}
+
+/// 用户确认后清除当前 Bundle ID 的本地网络决策。调用方随后
+/// 重启应用，下次真实探测会让 macOS 重新建立权限记录。
+#[tauri::command]
+pub fn reset_local_network_permission(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("/usr/bin/tccutil")
+            .args(["reset", "LocalNetwork", &app.config().identifier])
+            .status()
+            .map_err(|_| "LOCAL_NETWORK_RESET_FAILED".to_string())?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| "LOCAL_NETWORK_RESET_FAILED".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("LOCAL_NETWORK_RESET_UNSUPPORTED".to_string())
+    }
 }
 
 /// 打开系统设置对应隐私面板（白名单锚点）

@@ -978,6 +978,16 @@ export async function initStreamListeners(): Promise<void> {
         break
       case 'error':
         state.streamError = payload.message || i18n.global.t('common.unknownError')
+        if (payload.message?.includes('FailedToOpenSocket')) {
+          const originalError = state.streamError
+          void invoke<string>('check_local_network_permission')
+            .then(status => {
+              if (status === 'denied' && state.streamError === originalError) {
+                state.streamError = i18n.global.t('session.localNetworkSocketDenied')
+              }
+            })
+            .catch(() => { /* 诊断失败时保留 API 原始错误 */ })
+        }
         markTailDirty(sid)
         break
     }

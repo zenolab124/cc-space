@@ -19,7 +19,7 @@
     "mcp:build": "cargo build --bin monet-mcp --manifest-path src-tauri/Cargo.toml",
     "mcp:build:release": "cargo build --release --bin monet-mcp --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "bash scripts/tauri-cli.sh",
     "release": "bash scripts/release.sh",
     "version": "bash scripts/sync-version.sh"
   },

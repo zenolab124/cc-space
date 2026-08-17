@@ -207,7 +207,7 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 
 - Resume any session in the system terminal (channel carried along); open projects in VS Code; reveal files in Finder
 - Jump straight to the relevant system privacy settings pane
-- TCC permission checkup (macOS): silently detects Automation/Accessibility/Screen Recording grants, one-click request, self-heals denied records
+- TCC permission checkup (macOS): detects Automation, Accessibility, Screen Recording, and Local Network status; Local Network checks use a real channel endpoint over TCP, keep denied requests alive while the user enables access, and can identify and remove extra app copies that confuse macOS permission records
 - Claude Code services: a four-layer locator chain finds the claude binary (nvm/fnm/volta all work), one-click CLI install, one-click upgrade, environment diagnostic report
 - Custom Claude data root (multi-account / custom CLAUDE_CONFIG_DIR setups)
 - App self-update: GitHub Releases + signature verification; when a release is available, Settings shows localized New / Improved / Fixed notes with expandable details, download progress, and restart status in place

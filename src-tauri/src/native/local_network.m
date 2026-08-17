@@ -2,8 +2,8 @@
 //
 // macOS 没有通用的权限查询 API。Apple 推荐对真实局域网地址建立 NWConnection：
 // 权限被阻止时连接进入 waiting，currentPath.unsatisfiedReason 为
-// nw_path_unsatisfied_reason_local_network_denied；权限允许时 UDP connection
-// 无需对端响应即可进入 ready。
+// nw_path_unsatisfied_reason_local_network_denied。TCP 连接被对端拒绝同样说明
+// 本地网络路径已经通过，只是目标端口没有服务。
 //
 // 返回值：0=路径可用，1=本地网络权限阻止，2=其他网络原因/超时，-1=内部错误。
 // wait_for_grant=true 时，遇到 localNetworkDenied 不立即结束：连接保持存活，
@@ -11,6 +11,7 @@
 
 #include <Network/Network.h>
 #include <dispatch/dispatch.h>
+#include <errno.h>
 #include <stdbool.h>
 
 static bool monet_path_is_local_network_denied(nw_connection_t connection) {
@@ -18,6 +19,14 @@ static bool monet_path_is_local_network_denied(nw_connection_t connection) {
     if (!path) return false;
     return nw_path_get_unsatisfied_reason(path) ==
            nw_path_unsatisfied_reason_local_network_denied;
+}
+
+static bool monet_error_proves_path_allowed(nw_error_t error) {
+    if (!error || nw_error_get_error_domain(error) != nw_error_domain_posix) {
+        return false;
+    }
+    int code = nw_error_get_error_code(error);
+    return code == ECONNREFUSED || code == ECONNRESET;
 }
 
 int monet_nw_probe(const char *host,
@@ -29,8 +38,8 @@ int monet_nw_probe(const char *host,
     nw_endpoint_t endpoint = nw_endpoint_create_host(host, port);
     if (!endpoint) return -1;
 
-    // UDP connect 只建立本地路径，不依赖目标端口有服务，也不会发送数据。
-    nw_parameters_t parameters = nw_parameters_create_secure_udp(
+    // Apple TN3179 建议用 TCP NWConnection 探测 TCP 局域网目标。
+    nw_parameters_t parameters = nw_parameters_create_secure_tcp(
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION);
     if (!parameters) return -1;
@@ -51,7 +60,6 @@ int monet_nw_probe(const char *host,
     nw_connection_set_state_changed_handler(
         connection,
         ^(nw_connection_state_t state, nw_error_t error) {
-            (void)error;
             if (completed) return;
 
             if (state == nw_connection_state_ready) {
@@ -69,6 +77,12 @@ int monet_nw_probe(const char *host,
                         completed = true;
                         dispatch_semaphore_signal(semaphore);
                     }
+                } else if (saw_local_network_denied) {
+                    // 用户在设置中开启后，原连接会自动重试。即使目标离线，
+                    // 只要已离开 localNetworkDenied 状态就说明权限已恢复。
+                    result = 0;
+                    completed = true;
+                    dispatch_semaphore_signal(semaphore);
                 } else {
                     result = 2;
                     completed = true;
@@ -78,7 +92,14 @@ int monet_nw_probe(const char *host,
             }
 
             if (state == nw_connection_state_failed) {
-                result = monet_path_is_local_network_denied(connection) ? 1 : 2;
+                if (monet_path_is_local_network_denied(connection)) {
+                    result = 1;
+                } else if (saw_local_network_denied ||
+                           monet_error_proves_path_allowed(error)) {
+                    result = 0;
+                } else {
+                    result = 2;
+                }
                 completed = true;
                 dispatch_semaphore_signal(semaphore);
             }

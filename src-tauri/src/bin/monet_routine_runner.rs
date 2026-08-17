@@ -318,7 +318,7 @@ fn run_health_check(prompt: Option<&str>) {
             Some("localNetwork") => {
                 // 保持进程与 NWConnection 存活，避免系统提示尚未完成时瞬态
                 // health-check 已退出；授权后连接会自动从 waiting 恢复。
-                local_network_result = Some(tcc::request_local_network());
+                local_network_result = Some(tcc::request_local_network(&data_dir()));
             }
             _ => {}
         }
