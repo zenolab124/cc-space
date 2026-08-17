@@ -27,13 +27,14 @@ Object.defineProperty(globalThis, 'localStorage', {
 afterEach(() => clearEngineRunConfig(sessionId))
 
 describe('engine run config', () => {
-  it('preserves an explicit official channel instead of falling back to the global default', () => {
+  it('migrates a legacy inherited channel from the observed provider', () => {
     const stored = {
       model: null, effort: null, serviceTier: null, channelId: null, modelOverridden: false, effortOverridden: false,
     }
 
-    expect(resolveInitialEngineChannel(stored, 'plus')).toBeNull()
-    expect(resolveInitialEngineChannel(null, 'plus')).toBe('plus')
+    expect(resolveInitialEngineChannel(stored, 'plus', 'observed')).toBe('observed')
+    expect(resolveInitialEngineChannel(null, 'plus', 'observed')).toBe('plus')
+    expect(resolveInitialEngineChannel(null, null, 'observed')).toBe('observed')
   })
 
   it('keeps model and effort scoped to a standard-engine session', () => {

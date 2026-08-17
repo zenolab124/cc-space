@@ -179,7 +179,34 @@ impl CodexRuntime {
             session: SessionRef::new(self.instance.clone(), thread_id)?,
             runtime_id: state.runtime_id.clone(),
             generation: state.generation,
+            source_meta: BTreeMap::new(),
         })
+    }
+
+    fn runtime_session_from_response(
+        &self,
+        thread_id: &str,
+        new_generation: bool,
+        response: &Value,
+        requested_provider: Option<&str>,
+    ) -> EngineResult<RuntimeSession> {
+        let provider = response_model_provider(response).ok_or_else(|| {
+            EngineError::new(
+                EngineErrorKind::Protocol,
+                "Codex thread response has no model provider",
+            )
+        })?;
+        if requested_provider.is_some_and(|requested| requested != provider) {
+            return Err(EngineError::new(
+                EngineErrorKind::Conflict,
+                "Codex resumed with a different model provider than requested",
+            ));
+        }
+        let mut runtime = self.runtime_session(thread_id, new_generation)?;
+        runtime
+            .source_meta
+            .insert("modelProvider".into(), Value::String(provider.to_string()));
+        Ok(runtime)
     }
 
     fn emit(&self, thread_id: &str, event: NormalizedRuntimeEvent) {
@@ -559,6 +586,10 @@ impl AgentRuntime for CodexRuntime {
             );
             apply_channel_options(&request.options, &mut params)?;
             apply_session_capabilities(&request.options, &mut params)?;
+            let requested_provider = params
+                .get("modelProvider")
+                .and_then(Value::as_str)
+                .map(String::from);
             let response = self
                 .supervisor
                 .request("thread/start", Value::Object(params))?;
@@ -571,7 +602,12 @@ impl AgentRuntime for CodexRuntime {
                         "Codex thread/start response has no thread id",
                     )
                 })?;
-            let runtime = self.runtime_session(&thread_id, true)?;
+            let runtime = self.runtime_session_from_response(
+                &thread_id,
+                true,
+                &response,
+                requested_provider.as_deref(),
+            )?;
             self.emit(&thread_id, NormalizedRuntimeEvent::SessionAttached);
             Ok(runtime)
         })
@@ -581,6 +617,10 @@ impl AgentRuntime for CodexRuntime {
         Box::pin(async move {
             self.supervisor.ensure_ready()?;
             let params = fork_params(&request)?;
+            let requested_provider = params
+                .get("modelProvider")
+                .and_then(Value::as_str)
+                .map(String::from);
             let response = self
                 .supervisor
                 .request("thread/fork", Value::Object(params))?;
@@ -593,7 +633,12 @@ impl AgentRuntime for CodexRuntime {
                         "Codex thread/fork response has no thread id",
                     )
                 })?;
-            let runtime = self.runtime_session(&thread_id, true)?;
+            let runtime = self.runtime_session_from_response(
+                &thread_id,
+                true,
+                &response,
+                requested_provider.as_deref(),
+            )?;
             self.emit(&thread_id, NormalizedRuntimeEvent::SessionAttached);
             Ok(runtime)
         })
@@ -625,9 +670,19 @@ impl AgentRuntime for CodexRuntime {
             );
             apply_channel_options(&options.options, &mut params)?;
             apply_session_capabilities(&options.options, &mut params)?;
-            self.supervisor
+            let requested_provider = params
+                .get("modelProvider")
+                .and_then(Value::as_str)
+                .map(String::from);
+            let response = self
+                .supervisor
                 .request("thread/resume", Value::Object(params))?;
-            let runtime = self.runtime_session(session.native_id(), true)?;
+            let runtime = self.runtime_session_from_response(
+                session.native_id(),
+                true,
+                &response,
+                requested_provider.as_deref(),
+            )?;
             self.emit(session.native_id(), NormalizedRuntimeEvent::SessionAttached);
             Ok(runtime)
         })
@@ -844,6 +899,19 @@ fn copy_options(source: &BTreeMap<String, Value>, target: &mut Map<String, Value
     }
 }
 
+fn response_model_provider(response: &Value) -> Option<&str> {
+    response
+        .get("modelProvider")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            response
+                .get("thread")
+                .and_then(|thread| thread.get("modelProvider"))
+                .and_then(Value::as_str)
+        })
+        .filter(|provider| !provider.is_empty())
+}
+
 fn apply_channel_options(
     source: &BTreeMap<String, Value>,
     target: &mut Map<String, Value>,
@@ -871,7 +939,9 @@ fn apply_session_capabilities(
         "developerInstructions".into(),
         bundle
             .developer_instructions()
-            .map_or(Value::Null, |instructions| Value::String(instructions.to_string())),
+            .map_or(Value::Null, |instructions| {
+                Value::String(instructions.to_string())
+            }),
     );
     Ok(())
 }

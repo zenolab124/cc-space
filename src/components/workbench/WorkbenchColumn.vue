@@ -222,6 +222,7 @@ async function onFork() {
         project: session.project_reference,
         engineName: session.engine_name || engineName.value || session.engine?.engineId || 'Agent',
         cwd: session.cwd,
+        sourceMeta: created.sourceMeta,
         attachedChannel,
         attachedCapabilityFingerprint: created.capabilityFingerprint,
       })
@@ -274,6 +275,7 @@ async function onNewSession() {
         project: session.project_reference,
         engineName: session.engine_name || engineName.value || session.engine?.engineId || 'Agent',
         cwd,
+        sourceMeta: created.sourceMeta,
         attachedChannel,
         attachedCapabilityFingerprint: created.capabilityFingerprint,
       })

@@ -28,6 +28,7 @@ function dependencies(replaceSession = vi.fn(() => true)) {
     createSession: vi.fn(async () => ({
       session: replacementReference,
       runtimeId: 'runtime-new',
+      sourceMeta: { modelProvider: 'provider-b' },
       capabilityFingerprint: '[]',
     })),
     sessionId: vi.fn(() => 'session-new'),
@@ -100,6 +101,7 @@ describe('standard-engine draft channel rebinding', () => {
       sessionId: 'session-new',
       reference: replacementReference,
       runtimeId: 'runtime-new',
+      sourceMeta: { modelProvider: 'provider-b' },
       attachedChannel: 'channel-b',
       attachedCapabilityFingerprint: '[]',
     })

@@ -189,6 +189,13 @@ export interface RuntimeSnapshot {
   lastError: string | null
 }
 
+export interface RuntimeSession {
+  session: SessionRef
+  runtimeId: { 0: string } | string
+  generation: number
+  sourceMeta: Record<string, unknown>
+}
+
 export type EngineItemStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined' | 'interrupted'
 export type EngineTurnStatus = 'completed' | 'interrupted' | 'failed'
 

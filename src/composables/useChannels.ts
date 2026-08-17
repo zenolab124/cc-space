@@ -112,6 +112,19 @@ export function engineProviderIdFromSource(
   return null
 }
 
+export function engineChannelFromProvider(
+  channelList: readonly ChannelInfo[],
+  engineId: string,
+  providerId: string | null,
+): ChannelInfo | null {
+  if (!providerId) return null
+  return channelList.find(channel =>
+    channel.enabled
+    && channelSupportsEngine(channel, engineId)
+    && engineChannelBinding(channel, engineId)?.providerId === providerId,
+  ) ?? null
+}
+
 const channels = ref<ChannelInfo[]>([])
 const defaultSessionChannels = ref<Record<SessionEngineId, string | null>>({
   'claude-code': null,

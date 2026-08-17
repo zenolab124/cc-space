@@ -51,7 +51,7 @@ import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState, useToolDisplayMode } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { rebindDraftChannel, sameRuntimeChannel, type DraftChannelReplacement } from '@/engines/draftChannel'
-import { channelSupportsEngine, engineChannelBinding, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels, type SessionEngineId } from '@/composables/useChannels'
+import { channelSupportsEngine, engineChannelBinding, engineChannelFromProvider, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels, type SessionEngineId } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
 import { groupConversationRecords } from '@/engines/conversationGroups'
 import { isRenderableEngineSegment } from '@/engines/processGroups'
@@ -112,6 +112,7 @@ const modelOverridden = ref(false)
 const effortOverridden = ref(false)
 const selectedChannel = ref<string | null>(null)
 const attachedChannel = ref<string | null | undefined>(undefined)
+const runtimeProviderId = ref<string | null>(null)
 const attachedCapabilityFingerprint = ref<string | undefined>(undefined)
 const runConfigSyncing = ref(false)
 const asyncPanelOpen = ref(false)
@@ -278,11 +279,14 @@ const timelineProvider = computed(() => engineProviderIdFromSource(
   props.session.source_meta,
   sessionEngineId.value,
 ))
-const providerChannel = computed(() => channels.value.find(channel =>
-  channel.enabled
-  && channelSupportsEngine(channel, sessionEngineId.value)
-  && engineChannelBinding(channel, sessionEngineId.value)?.providerId === timelineProvider.value,
-) ?? null)
+const observedProvider = computed(() => runtimeProviderId.value ?? timelineProvider.value)
+const providerChannel = computed(() => engineChannelFromProvider(
+  channels.value,
+  sessionEngineId.value,
+  observedProvider.value,
+))
+const observedChannelId = computed(() => providerChannel.value?.id ?? OFFICIAL_CHANNEL_ID)
+const observedChannelLabel = computed(() => providerChannel.value?.name ?? observedProvider.value)
 
 function configuredDefaultChannelId(): string | null {
   if (sessionEngineId.value !== 'claude-code' && sessionEngineId.value !== 'codex') return null
@@ -294,12 +298,13 @@ function configuredDefaultChannelId(): string | null {
     ? id
     : null
 }
-const activeChannel = computed(() => selectedChannel.value
+const activeChannel = computed(() => selectedChannel.value && selectedChannel.value !== OFFICIAL_CHANNEL_ID
   ? channels.value.find(channel => channel.id === selectedChannel.value) ?? null
   : null)
 const effectiveChannel = computed(() => activeChannel.value ?? providerChannel.value)
 const activeChannelBinding = computed(() => engineChannelBinding(effectiveChannel.value, sessionEngineId.value))
-const usesConfiguredSessionDefault = computed(() => selectedChannel.value === configuredDefaultChannelId())
+const configuredChannelId = computed(() => configuredDefaultChannelId() ?? OFFICIAL_CHANNEL_ID)
+const usesConfiguredSessionDefault = computed(() => selectedChannel.value === configuredChannelId.value)
 const engineDefaultModel = computed(() => usesConfiguredSessionDefault.value
   ? defaultSessionModels.value[sessionEngineId.value as SessionEngineId] ?? null
   : null)
@@ -346,6 +351,9 @@ const capsuleConfig = computed<EngineCapsuleConfig>(() => ({
   engineName: enginePresentation.value.displayName,
   showFastMode: sessionEngineId.value === 'codex',
   channelId: selectedChannel.value,
+  channelOverridden: selectedChannel.value !== null && selectedChannel.value !== configuredChannelId.value,
+  channelPending: attachedChannel.value !== undefined && selectedChannel.value !== attachedChannel.value,
+  observedChannelLabel: observedChannelLabel.value,
   model: selectedModel.value,
   effort: selectedEffort.value,
   modelOverridden: modelOverridden.value,
@@ -1002,7 +1010,20 @@ async function loadRuntimeConfiguration() {
     if (!isCurrentTarget(target, generation) || props.session.id !== sessionId) return
     models.value = loadedModels
     const stored = engineRunConfig(sessionId)
-    selectedChannel.value = resolveInitialEngineChannel(stored, configuredDefaultChannelId())
+    const draft = engineDraft(sessionId)
+    const draftProvider = engineProviderIdFromSource(draft?.sourceMeta, sessionEngineId.value)
+    if (draftProvider) runtimeProviderId.value = draftProvider
+    const currentChannelId = draft?.attachedChannel ?? observedChannelId.value
+    selectedChannel.value = resolveInitialEngineChannel(
+      stored,
+      configuredDefaultChannelId(),
+      currentChannelId,
+    ) ?? OFFICIAL_CHANNEL_ID
+    if (attachedChannel.value === undefined) {
+      attachedChannel.value = draft?.attachedChannel
+        ?? stored?.channelId
+        ?? observedChannelId.value
+    }
     const defaultModel = models.value.find(model => model.model === stored?.model)
       ?? models.value.find(model => model.model === engineDefaultModel.value)
       ?? models.value.find(model => model.model === timelineModel.value)
@@ -1090,6 +1111,7 @@ async function rebindCurrentDraftChannel(): Promise<boolean> {
     return false
   }
   runtimeId.value = replacement.runtimeId
+  runtimeProviderId.value = engineProviderIdFromSource(replacement.sourceMeta, sessionEngineId.value)
   attachedChannel.value = replacement.attachedChannel
   attachedCapabilityFingerprint.value = replacement.attachedCapabilityFingerprint
   return true
@@ -1118,10 +1140,13 @@ async function ensureAttached(): Promise<AttachOutcome> {
       draft = engineDraft(props.session.id)
     }
     if (runtimeId.value && draft) {
-      // create/fork 草稿记录的是实际附着渠道；空线程首条消息前尚无
+      // create/fork 草稿记录的是已确认渠道选择；空线程首条消息前尚无
       // rollout，不能重复 resume。已落盘会话没有这份可靠记录，必须走
       // attach 来应用当前渠道，不能把 UI 选择误当成 runtime 真实状态。
       if (attachedChannel.value === undefined) attachedChannel.value = draft.attachedChannel
+      if (!runtimeProviderId.value) {
+        runtimeProviderId.value = engineProviderIdFromSource(draft.sourceMeta, sessionEngineId.value)
+      }
       // 旧版运行期草稿没有该字段。它由同一 capability 收集器创建，按当前值
       // 接管可避免在首轮 rollout 生成前发出必然失败的 thread/resume。
       if (attachedCapabilityFingerprint.value === undefined) {
@@ -1152,6 +1177,7 @@ async function ensureAttached(): Promise<AttachOutcome> {
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
       })
       runtimeId.value = attached.runtimeId
+      runtimeProviderId.value = engineProviderIdFromSource(attached.sourceMeta, sessionEngineId.value)
       attachedChannel.value = selectedChannel.value
       attachedCapabilityFingerprint.value = attached.capabilityFingerprint
       showSessionBanner(!engineDraft(props.session.id))
@@ -1209,6 +1235,7 @@ async function forkAndSend(inputItems: RuntimeInputItem[]): Promise<boolean> {
       project,
       engineName: props.session.engine_name || enginePresentation.value.displayName,
       cwd,
+      sourceMeta: created.sourceMeta,
       attachedChannel: selectedChannel.value,
       attachedCapabilityFingerprint: created.capabilityFingerprint,
     })
@@ -1503,8 +1530,8 @@ async function interrupt() {
 
 function onEngineChannelChange(channelId: string | null) {
   fastModeNotice.value = null
-  selectedChannel.value = channelId === OFFICIAL_CHANNEL_ID ? null : channelId
-  const channel = selectedChannel.value
+  selectedChannel.value = channelId ?? configuredChannelId.value
+  const channel = selectedChannel.value !== OFFICIAL_CHANNEL_ID
     ? channels.value.find(item => item.id === selectedChannel.value) ?? null
     : null
   const binding = engineChannelBinding(channel, sessionEngineId.value)
@@ -1727,6 +1754,7 @@ watch(() => props.session.id, async () => {
     visualActiveTurnId.value = null
     runtimeId.value = replacement?.runtimeId ?? null
     if (replacement) {
+      runtimeProviderId.value = engineProviderIdFromSource(replacement.sourceMeta, sessionEngineId.value)
       attachedChannel.value = replacement.attachedChannel
       attachedCapabilityFingerprint.value = replacement.attachedCapabilityFingerprint
     } else {
@@ -1738,6 +1766,7 @@ watch(() => props.session.id, async () => {
       effortOverridden.value = false
       selectedChannel.value = null
       attachedChannel.value = undefined
+      runtimeProviderId.value = null
       attachedCapabilityFingerprint.value = undefined
     }
     asyncPanelOpen.value = false

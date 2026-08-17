@@ -73,6 +73,8 @@ type Col = Layer | 'advanced'
 const openLayer = ref<Layer | null>(null)
 const containerRef = ref<HTMLElement>()
 const modelListRef = ref<HTMLElement>()
+const modelSearchRef = ref<HTMLInputElement>()
+const modelSearchQuery = ref('')
 
 /** 面板显示哪些列(自左向右);高级列只随全景出现 */
 const visibleCols = computed<Col[]>(() => {
@@ -109,6 +111,7 @@ function openFrom(layer: Layer) {
   if (openLayer.value) {
     placePanel()
     nextTick(() => {
+      if (layer === 'model') modelSearchRef.value?.focus()
       modelListRef.value
         ?.querySelector<HTMLElement>('.rc-opt.sel')
         ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -132,6 +135,9 @@ function onDocumentClick(e: MouseEvent) {
 }
 onMounted(() => document.addEventListener('mousedown', onDocumentClick))
 onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
+watch(openLayer, layer => {
+  if (!layer) modelSearchQuery.value = ''
+})
 
 // ---- 渠道列 ----
 
@@ -215,7 +221,7 @@ const defaultChannelKey = computed(() => {
   return ch && ch.enabled ? id : OFFICIAL_CHANNEL_ID
 })
 const channelOverridden = computed(() => props.engineConfig
-  ? props.engineConfig.channelId !== null
+  ? props.engineConfig.channelOverridden
   : standaloneMode.value ? false
   : props.settings?.channelId !== null)
 
@@ -301,6 +307,24 @@ const modelListItems = computed<ModelInfo[]>(() => {
   return base
 })
 
+const filteredModelListItems = computed(() => {
+  const query = modelSearchQuery.value.trim().toLocaleLowerCase()
+  if (!query) return modelListItems.value
+  return modelListItems.value.filter(model =>
+    model.label.toLocaleLowerCase().includes(query)
+    || model.id.toLocaleLowerCase().includes(query),
+  )
+})
+const longestModelLabel = computed(() => modelListItems.value.reduce(
+  (longest, model) => model.label.length > longest.length ? model.label : longest,
+  '',
+))
+
+function clearModelSearch() {
+  modelSearchQuery.value = ''
+  nextTick(() => modelSearchRef.value?.focus())
+}
+
 function pickModel(id: string) {
   if (advisorLocked.value) return
   emit('modelChange', id)
@@ -385,12 +409,17 @@ const fastModeTitle = computed(() => props.engineConfig
 
 const channelSegLabel = computed(() => {
   const id = props.engineConfig?.channelId ?? props.defaultConfig?.channelId ?? props.runConfig?.channelId
-  if (!id) {
-    return t(props.engineConfig || props.defaultConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
+  const base = !id || id === OFFICIAL_CHANNEL_ID
+    ? t(props.engineConfig || props.defaultConfig ? 'topbar.channelFollowEngine' : 'topbar.channelOfficial', {
       engine: props.engineConfig?.engineName ?? props.defaultConfig?.engineName,
     })
+    : channels.value.find(c => c.id === id)?.name ?? id
+  if (!props.engineConfig) return base
+  if (props.engineConfig.channelPending) return `${base} · ${t('topbar.channelPending')}`
+  if (id === OFFICIAL_CHANNEL_ID && props.engineConfig.observedChannelLabel) {
+    return `${base} · ${props.engineConfig.observedChannelLabel}`
   }
-  return channels.value.find(c => c.id === id)?.name ?? id
+  return base
 })
 
 const modelSegLabel = computed(() => {
@@ -560,30 +589,59 @@ function openSettings() {
       </div>
 
       <!-- 模型列 -->
-      <div v-if="visibleCols.includes('model')" class="rc-col">
+      <div v-if="visibleCols.includes('model')" class="rc-col rc-model-col">
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.modelLabel') }}</span>
           <span class="rc-src">{{ engineConfig ? engineModelSrcLabel : standaloneMode ? $t('topbar.srcApp') : advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig?.display.modelSource) }}</span>
           <button v-if="modelOverridden" class="rc-reset" @click="emit('modelChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
+        <div class="rc-model-search">
+          <span class="i-carbon-search rc-model-search-icon" aria-hidden="true" />
+          <input
+            ref="modelSearchRef"
+            v-model="modelSearchQuery"
+            type="text"
+            :placeholder="$t('topbar.modelSearchPlaceholder')"
+            :aria-label="$t('topbar.modelSearchPlaceholder')"
+            :disabled="advisorLocked"
+            autocomplete="off"
+            spellcheck="false"
+            @keydown.esc.stop.prevent="clearModelSearch"
+          />
+          <button
+            v-if="modelSearchQuery"
+            type="button"
+            class="rc-model-search-clear"
+            :aria-label="$t('common.clear')"
+            @mousedown.prevent
+            @click.stop="clearModelSearch"
+          >
+            <span class="i-carbon-close" aria-hidden="true" />
+          </button>
+        </div>
+        <span class="rc-model-width-probe" aria-hidden="true">{{ longestModelLabel }}</span>
         <div
           ref="modelListRef"
           class="rc-list rc-model-list"
           :class="{ 'opacity-45 pointer-events-none': advisorLocked }"
           :title="advisorLocked ? $t('topbar.modelAdvisorLocked') : ''"
         >
-          <template v-for="(m, i) in modelListItems" :key="m.id">
-            <div v-if="i > 0 && !!m.legacy !== !!modelListItems[i - 1].legacy" class="rc-divider" />
+          <template v-for="(m, i) in filteredModelListItems" :key="m.id">
+            <div v-if="i > 0 && !!m.legacy !== !!filteredModelListItems[i - 1].legacy" class="rc-divider" />
             <button
               class="rc-opt"
+              :title="m.label"
               :class="{ sel: m.id === selectedModelKey, 'opacity-55': m.legacy }"
               @click="pickModel(m.id)"
             >
-              <span class="truncate">{{ m.label }}</span>
+              <span class="rc-model-name">{{ m.label }}</span>
               <span v-if="m.mappedRole" class="rc-hint">{{ $t('topbar.roleTier', { role: ROLE_DISPLAY[m.mappedRole] }) }}</span>
               <span v-if="m.id === defaultModelKey" class="rc-hint">{{ $t('topbar.hintDefault') }}</span>
             </button>
           </template>
+          <div v-if="!filteredModelListItems.length" class="rc-model-empty">
+            {{ $t('topbar.modelSearchEmpty') }}
+          </div>
         </div>
       </div>
 
@@ -689,6 +747,7 @@ function openSettings() {
 .seg-tier { margin-left: 4px; font-size: 9px; opacity: .65; flex-shrink: 0; font-weight: 400; }
 
 .rc-col { width: 152px; padding: 8px 8px 6px; display: flex; flex-direction: column; }
+.rc-model-col { width: max-content; min-width: 152px; max-width: 280px; }
 .rc-col + .rc-col { border-left: 1px solid var(--border); }
 .rc-fast-block {
   margin: -2px 0 6px; padding-bottom: 5px; border-bottom: 1px solid var(--border);
@@ -713,6 +772,32 @@ function openSettings() {
 .rc-src { font-size: 9px; color: var(--muted-foreground); opacity: .7; margin-left: auto; }
 .rc-reset { font-size: 9px; color: var(--primary); cursor: pointer; }
 .rc-list { display: flex; flex-direction: column; }
+.rc-model-search {
+  min-height: 26px; margin-bottom: 5px; padding: 0 6px;
+  display: flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--background); color: var(--muted-foreground);
+}
+.rc-model-search:focus-within { border-color: var(--primary); color: var(--foreground); }
+.rc-model-search-icon { width: 12px; height: 12px; flex-shrink: 0; opacity: .65; }
+.rc-model-search input {
+  min-width: 0; width: 100%; border: 0; outline: 0; padding: 0;
+  background: transparent; color: var(--foreground); font-size: 11px;
+}
+.rc-model-search input::placeholder { color: var(--muted-foreground); opacity: .65; }
+.rc-model-search input:disabled { cursor: not-allowed; }
+.rc-model-search-clear {
+  width: 18px; height: 18px; margin-right: -3px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 3px; cursor: pointer;
+}
+.rc-model-search-clear:hover { background: var(--muted); color: var(--foreground); }
+.rc-model-search-clear:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.rc-model-search-clear span { width: 11px; height: 11px; }
+.rc-model-width-probe {
+  height: 0; padding: 0 8px; overflow: hidden;
+  font-size: 12px; line-height: 0; white-space: nowrap; visibility: hidden;
+}
 .rc-model-list {
   max-height: min(280px, calc(100vh - 96px));
   overflow-y: auto;
@@ -725,6 +810,15 @@ function openSettings() {
 }
 .rc-opt:hover { background: var(--muted); color: var(--foreground); }
 .rc-opt.sel { background: var(--primary); color: var(--primary-foreground); }
+.rc-model-name {
+  min-width: 0; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  line-height: 1.35;
+}
+.rc-model-empty {
+  padding: 9px 8px; color: var(--muted-foreground);
+  font-size: 11px; line-height: 1.4; text-align: center;
+}
 .rc-hint { opacity: .6; font-size: 10px; margin-left: auto; flex-shrink: 0; }
 /* 双标注并列(默认+不支持):第二个不再 auto 推移,紧随首个 */
 .rc-hint + .rc-hint { margin-left: 0; }

@@ -223,6 +223,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
           project,
           engineName: target.displayName,
           cwd: race.cwd,
+          sourceMeta: created.sourceMeta,
           attachedChannel,
           attachedCapabilityFingerprint: created.capabilityFingerprint,
         })
@@ -455,6 +456,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
           project: context.project,
           engineName: context.engineName,
           cwd: context.cwd,
+          sourceMeta: created.sourceMeta,
           attachedChannel,
           attachedCapabilityFingerprint: created.capabilityFingerprint,
         })
@@ -501,6 +503,7 @@ export function useRaceInput(tab: Ref<WorkbenchTab>) {
             project: context.project,
             engineName: context.engineName,
             cwd: race.cwd,
+            sourceMeta: runtime.sourceMeta,
             attachedChannel: engineRuntimeChannel(lane.sessionId),
             attachedCapabilityFingerprint: runtime.capabilityFingerprint,
           })

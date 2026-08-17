@@ -6,6 +6,7 @@ export interface RuntimeEngineDraft {
   project: ProjectRef
   engineName: string
   cwd: string
+  sourceMeta?: Record<string, unknown>
   attachedChannel: string | null
   attachedCapabilityFingerprint?: string
 }
@@ -14,6 +15,7 @@ export interface DraftChannelReplacement {
   sessionId: string
   reference: SessionRef
   runtimeId: unknown
+  sourceMeta: Record<string, unknown>
   attachedChannel: string | null
   attachedCapabilityFingerprint: string
 }
@@ -41,7 +43,12 @@ interface RebindDraftChannelDependencies {
     project: ProjectRef,
     cwd: string,
     options: Record<string, unknown>,
-  ) => Promise<{ session: SessionRef; runtimeId: unknown; capabilityFingerprint: string }>
+  ) => Promise<{
+    session: SessionRef
+    runtimeId: unknown
+    sourceMeta: Record<string, unknown>
+    capabilityFingerprint: string
+  }>
   sessionId: (session: SessionRef) => string
   stageDraft: (sessionId: string, draft: RuntimeEngineDraft) => void
   saveConfig: (sessionId: string, config: EngineRunConfig) => void
@@ -75,6 +82,7 @@ export async function rebindDraftChannel(
     sessionId: replacementSessionId,
     reference: created.session,
     runtimeId: created.runtimeId,
+    sourceMeta: created.sourceMeta,
     attachedChannel: request.selectedChannel,
     attachedCapabilityFingerprint: created.capabilityFingerprint,
   }
@@ -85,6 +93,7 @@ export async function rebindDraftChannel(
       project: request.draft.project,
       engineName: request.draft.engineName,
       cwd: request.draft.cwd,
+      sourceMeta: created.sourceMeta,
       attachedChannel: request.selectedChannel,
       attachedCapabilityFingerprint: created.capabilityFingerprint,
     })

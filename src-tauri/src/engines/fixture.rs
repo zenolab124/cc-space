@@ -151,6 +151,7 @@ impl FixtureEngine {
             session,
             runtime_id: RuntimeId("fixture-runtime".into()),
             generation: 1,
+            source_meta: BTreeMap::new(),
         }
     }
 

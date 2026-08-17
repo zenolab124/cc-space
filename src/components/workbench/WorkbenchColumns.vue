@@ -78,6 +78,7 @@ async function onStartRace(sessionId: string) {
         project,
         engineName: session?.engine_name ?? draft?.engineName ?? reference.engine.engineId,
         cwd,
+        sourceMeta: created.sourceMeta,
         attachedChannel,
         attachedCapabilityFingerprint: created.capabilityFingerprint,
       })

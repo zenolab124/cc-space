@@ -115,6 +115,7 @@ async function selectEngine(engineId: string) {
         project,
         engineName: choice.descriptor.displayName,
         cwd: props.cwd,
+        sourceMeta: created.sourceMeta,
         attachedChannel,
         attachedCapabilityFingerprint: created.capabilityFingerprint,
       })

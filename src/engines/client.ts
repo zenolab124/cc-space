@@ -14,6 +14,7 @@ import type {
   SessionRef,
   SessionActions,
   RuntimeSnapshot,
+  RuntimeSession,
   RuntimeInputItem,
   TurnHandle,
 } from './types'
@@ -37,10 +38,7 @@ function withSessionCapabilities(options: Record<string, unknown>) {
   }
 }
 
-interface AttachedSessionResult {
-  session: SessionRef
-  runtimeId: unknown
-  generation: number
+export interface AttachedSessionResult extends RuntimeSession {
   capabilityFingerprint: string
 }
 

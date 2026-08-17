@@ -28,6 +28,9 @@ export interface EngineCapsuleConfig {
   engineName: string
   showFastMode: boolean
   channelId: string | null
+  channelOverridden: boolean
+  channelPending: boolean
+  observedChannelLabel: string | null
   model: string | null
   effort: string | null
   modelOverridden: boolean
@@ -91,8 +94,11 @@ export function engineRunConfig(sessionId: string): EngineRunConfig | null {
 export function resolveInitialEngineChannel(
   stored: EngineRunConfig | null,
   defaultChannelId: string | null,
+  observedChannelId: string | null,
 ): string | null {
-  return stored ? stored.channelId : defaultChannelId
+  if (stored?.channelId) return stored.channelId
+  if (stored) return observedChannelId
+  return defaultChannelId ?? observedChannelId
 }
 
 export function setEngineRunConfig(sessionId: string, config: EngineRunConfig) {

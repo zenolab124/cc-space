@@ -2101,7 +2101,7 @@ pub(crate) fn codex_channel_token(id: &str) -> Result<String, String> {
 /// 托管 Provider 的凭据不进入 App Server 请求或 argv，使用短命令按需读取渠道令牌。
 pub(crate) fn codex_runtime_channel_options(id: &str) -> Result<Map<String, Value>, String> {
     if id == OFFICIAL_ID {
-        return Ok(Map::new());
+        return Ok(Map::from_iter([("modelProvider".to_string(), Value::Null)]));
     }
     validate_id(id)?;
     let extension = read_channel_ext(id)

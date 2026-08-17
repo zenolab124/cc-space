@@ -58,7 +58,9 @@ export interface EngineDraft {
   project: ProjectRef
   engineName: string
   cwd: string
-  /** thread/start / fork 时实际附着的渠道；避免空线程被重复 resume。 */
+  /** runtime 创建或恢复响应确认的引擎源信息。 */
+  sourceMeta?: Record<string, unknown>
+  /** thread/start / fork 时已确认的渠道选择；避免空线程被重复 resume。 */
   attachedChannel: string | null
   /** thread/start / fork 时实际附着的受控能力；避免空线程被重复 resume。 */
   attachedCapabilityFingerprint?: string

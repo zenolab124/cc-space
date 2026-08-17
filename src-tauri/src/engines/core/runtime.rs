@@ -80,6 +80,7 @@ pub struct RuntimeSession {
     pub session: SessionRef,
     pub runtime_id: RuntimeId,
     pub generation: u64,
+    pub source_meta: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

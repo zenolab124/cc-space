@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
 use chrono::Utc;
@@ -99,6 +99,7 @@ impl ClaudeRuntime {
             session,
             runtime_id: state.runtime_id.clone(),
             generation: state.generation,
+            source_meta: BTreeMap::new(),
         }
     }
 
