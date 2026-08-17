@@ -1,6 +1,6 @@
 # Monet — AI 安装指南
 
-> 本文档写给替用户安装 Monet 的 AI agent（Claude Code、Cursor 等）。如果你是人类，[README](../README.zh-CN.md) 更友好。如果你的用户还在犹豫要不要装，先读 [discover.zh-CN.md](discover.zh-CN.md)。（English: [install.md](install.md)）
+> 本文档写给替用户安装 Monet 的 AI agent（Claude Code、Cursor 等）。如果你是人类，[README](../README.md) 更友好。如果你的用户还在犹豫要不要装，先读 [discover.zh-CN.md](discover.zh-CN.md)。（English: [install.md](install.md)）
 
 ## Monet 是什么（讲给用户听）
 
@@ -31,7 +31,7 @@ brew install --cask zenolab124/tap/monet
 
 **备选——直接下载：** 从 `https://github.com/zenolab124/monet/releases/latest` 获取最新安装包（macOS 用 `.dmg`，Windows 用 NSIS `.exe`），macOS 挂载后把 `Monet.app` 拖入 `/Applications`。
 
-**Gatekeeper（macOS）：** Monet 尚未经过 Apple 公证。安装后先从「应用程序」打开 Monet 一次并关闭拦截提示，再立即进入「系统设置 → 隐私与安全性」，找到 Monet 的提示并点「仍要打开」，按系统要求确认。该按钮只有在尝试打开后才出现，并会在约一小时后消失。不要运行 `xattr` 移除 quarantine 等系统安全属性；Homebrew cask 安装同样需要这次一次性授权。菜单栏和小组件后台刷新使用 macOS 系统后台项目机制，不需要 Developer ID 或 $99 证书；首次启动若系统询问，允许 Monet 的后台项目。
+**Gatekeeper（macOS）：** 正式版安装包已经过 Apple 公证，下载后直接打开即可，无需「仍要打开」之类的额外授权；Homebrew cask 安装同样直接可用。如果用户装的是早期未公证版本仍被拦截，建议直接换装最新版。菜单栏和小组件后台刷新使用 macOS 系统后台项目机制；首次启动若系统询问，允许 Monet 的后台项目。
 
 ## 预配置（可选，首次启动前）
 

@@ -6,7 +6,7 @@ body:
     id: monet-version
     attributes:
       label: Monet version
-      placeholder: e.g. 0.1.23 (About panel or Settings)
+      placeholder: e.g. 2.1.16 (About panel or Settings)
     validations:
       required: true
   - type: input
@@ -19,8 +19,8 @@ body:
   - type: input
     id: cli-version
     attributes:
-      label: Claude Code CLI version
-      placeholder: output of `claude --version`
+      label: Engine CLI version
+      placeholder: output of `claude --version` / `codex --version` (whichever is relevant)
     validations:
       required: false
   - type: textarea

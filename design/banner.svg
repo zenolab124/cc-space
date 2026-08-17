@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" role="img" aria-label="Monet — Mission Control for Claude Code">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" role="img" aria-label="Monet — Multi-engine mission control for coding agents">
   <defs>
     <radialGradient id="bglow" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#E8663F" stop-opacity=".30"/>
@@ -30,5 +30,5 @@
   <rect x="188" y="288" width="62" height="18" rx="9" fill="#E8663F" opacity=".42"/>
   <!-- 字标 -->
   <text x="520" y="184" font-family="ui-sans-serif, -apple-system, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', sans-serif" font-size="118" font-weight="700" letter-spacing="1" fill="#F2EBDC">Monet</text>
-  <text x="526" y="240" font-family="ui-sans-serif, -apple-system, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif" font-size="30" font-weight="500" letter-spacing=".5" fill="#93A7B4">Mission Control for Claude Code</text>
+  <text x="526" y="240" font-family="ui-sans-serif, -apple-system, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif" font-size="30" font-weight="500" letter-spacing=".5" fill="#93A7B4">Multi-engine mission control for coding agents</text>
 </svg>

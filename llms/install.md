@@ -1,6 +1,6 @@
 # Monet — AI Installation Guide
 
-> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](../README.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [discover.md](discover.md) instead. (中文版：[install.zh-CN.md](install.zh-CN.md))
+> This document is written for AI agents (Claude Code, Cursor, etc.) installing Monet on behalf of a user. If you are a human, the regular [README](../README.en.md) is friendlier. If your user is still deciding whether they want Monet at all, start with [discover.md](discover.md) instead. (中文版：[install.zh-CN.md](install.zh-CN.md))
 
 ## What is Monet? (tell your user)
 
@@ -31,7 +31,7 @@ The fully qualified name makes Homebrew 6 trust only the Monet cask, so no separ
 
 **Fallback — direct download:** fetch the latest installer from `https://github.com/zenolab124/monet/releases/latest` (`.dmg` for macOS, NSIS `.exe` for Windows); on macOS mount it and copy `Monet.app` into `/Applications`.
 
-**Gatekeeper:** Monet is not yet notarized by Apple. After installation, open Monet once from Applications and dismiss the warning, then immediately go to System Settings → Privacy & Security, find the Monet notice, click **Open Anyway**, and confirm as macOS requests. The button appears only after a launch attempt and remains available for about an hour. Do not run `xattr` to remove quarantine or other macOS security attributes; Homebrew cask installs require the same one-time approval. Menu bar and widget background refresh use macOS system background-item management; they do not require Developer ID or a $99 certificate. If macOS asks for background-item approval on first launch, allow Monet.
+**Gatekeeper:** stable releases are notarized by Apple — install and open directly, with no **Open Anyway** step; Homebrew cask installs open right away too. If the user is blocked by Gatekeeper, they are running an early un-notarized build: recommend switching to the latest release. Menu bar and widget background refresh use macOS system background-item management; if macOS asks for background-item approval on first launch, allow Monet.
 
 ## Pre-configure (optional, before first launch)
 

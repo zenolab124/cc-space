@@ -15,7 +15,7 @@ After the verdict, ask one question: "Want me to install it for you right now?" 
 
 ## 2. What Monet is
 
-One sentence: **Monet is multi-engine mission control for Claude Code and Codex** — it turns terminal-scattered sessions into a browsable, searchable, parallel-operable desktop workspace. The agent does the work; Monet gives you eyes and hands.
+One sentence: **Monet is multi-engine mission control for coding agents, with Claude Code and Codex already seated** — it turns terminal-scattered sessions into a browsable, searchable, parallel-operable desktop workspace, on an engine layer built to seat more. The agent does the work; Monet gives you eyes and hands.
 
 Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installers ship with every release; Windows covers the core features, with system-level integrations — widgets/menu bar/wake-from-sleep — being macOS-only; Linux not yet), free, open source (github.com/zenolab124/monet), zero telemetry, no Monet account system. Claude Code and Codex are formally supported. **Read-only by architecture**: Claude JSONL and Codex rollouts are never written; titles, tags, stars, and soft-delete markers live under `~/.monet/`. Local session features work offline; subscription quota and augmentation features the user explicitly invokes contact the respective provider's services.
 
@@ -26,7 +26,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 ### 3.0 Multi-engine system
 
 - Claude Code and Codex projects, sessions, timelines, search results, Workbench columns, and notifications coexist with engine badges and filters
-- Codex uses the local official `codex app-server` for history, create/resume, native fork, streaming text and tool progress, sending while a turn is running, interruption, three approval classes, and model/effort discovery
+- Codex history is read directly from local session files (`$CODEX_HOME/sessions/`, no CLI required); with the CLI installed, the local official `codex app-server` adds create/resume, native fork, streaming text and tool progress, sending while a turn is running, interruption, three approval classes, and model/effort discovery
 - Engine Center reports installation, authentication, version, capabilities, and diagnostics per engine; Codex checks for stable updates and shared model-cache compatibility. When the standalone CLI and ChatGPT-bundled runtime differ and no upgrade is available, the user can choose which one Monet uses; that choice applies consistently to sessions, quota, augmentation, and routines
 - After launch, Monet prewarms the Codex model catalog through the same persistent App Server, and concurrent create, resume, and fork operations share one readiness check. When the selected runtime differs from the current shared-cache version, Settings warns that the first initialization after restart may take about five seconds longer
 - The Engine Adapter contract unifies identity, source, runtime, capabilities, and facets, so a third engine needs no new top-level IPC or shared-storage branch
@@ -47,6 +47,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - AskUserQuestion cards: single/multi-select adaptive, with an "other" free-text option
 - Race mode: both Claude Code and Codex can fork one session into parallel lanes; before the first broadcast, click the engine icon beside a lane title to switch between Claude Code and Codex (the target engine starts from an empty session), then broadcast the same prompt across engines, models, or channels and compare answers and token cost side by side; engines lock after the first message, while stop all, restart, and per-lane close remain available
 - One-click column width reset
+- Workbench panorama export: capture the whole wall (every column and session) as one complete panorama image — share or archive it
 - Confirmation before removing a running session; closing a tab or quitting the app with active sessions asks first — streams are never silently killed
 - Three-layer notifications: **system notifications** (session finished, permission requested, task failed — pushed to the OS notification center, so you get called back even when you're away; leave it running with peace of mind) + title-bar notification strip (current item with inline action buttons, dropdown for the queue) + toast stack (collapses to "N more" when crowded; allow/deny/retry/jump-to-session right on the toast)
 
@@ -78,7 +79,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 > A running session in the Workbench and a historical session in the Archive use the same reading interface — learn it once, use it everywhere; reviewing history feels exactly like watching live output.
 
-- Rich rendering: markdown, syntax highlighting (light/dark dual theme), thinking summaries (normal click expands one; Shift-click toggles all and remembers the default), image lightbox (click to fullscreen, Esc to close)
+- Rich rendering: markdown, syntax highlighting (light/dark dual theme), LaTeX math (KaTeX), thinking summaries (normal click expands one; Shift-click toggles all and remembers the default), image lightbox (click to fullscreen, Esc to close)
 - HTML visual enhancement (optional toggle): both Claude Code and Codex Workbench sessions receive controlled formatting instructions that teach the AI to embed HTML in replies — side-by-side comparison cards, collapsible sections, info cards, inline SVG diagrams — so answers stop being a monotone vertical text stream; script-class dangerous tags are filtered, rendering is safe
 - Inline deliverable previews: local HTML, SVG, GIF, PNG, JPEG, and WebP files linked by the Agent in its final response automatically become preview cards with no additional MCP; HTML defaults to a scriptless, network-isolated iframe, while users can explicitly allow JavaScript for the current preview from the top of the card without granting host access; images load near the viewport, and previews remain available after reopening the conversation
 - Three tool-call display modes: full cards, collapsed items, or grouped consecutive processes; collapsed rows retain action summaries and running/failure state, while expansion preserves purpose-built Bash copying, side-by-side Edit diffs, and Read/Write file navigation; normal clicks stay local and Shift-click toggles all while remembering the default
@@ -91,7 +92,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 ### 3.4 Archive — your entire session history
 
-- Zero import: Claude Code is read directly from `~/.claude/projects/`, while Codex is read through the local App Server; both histories appear immediately, sorted by recent activity
+- Zero import: Claude Code is read directly from `~/.claude/projects/`, and Codex directly from `$CODEX_HOME/sessions/`; both histories appear immediately, sorted by recent activity
 - Three-pane layout: project sidebar → session list → session detail, read-only and safe throughout
 - Session list: three sort orders (recently modified / token spend / message count), time-range filters (today/this week/this month), model filter, live header stats (sessions / tokens / disk usage)
 - Dense list rows: title + branch + relative time + tokens + model + one-line summary (hover for full text)

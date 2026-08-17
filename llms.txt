@@ -1,19 +1,19 @@
 # Monet
 
-> Free, open-source desktop app (macOS Apple Silicon + Windows) that turns Claude Code session history into a browsable, searchable, interactive workspace — parallel-agent workbench, session archive, scheduled routines. Read-only over Claude Code's files, fully offline. A companion to the Claude Code CLI.
+> Free, open-source desktop app (macOS Apple Silicon + Windows) — multi-engine mission control for coding agents, with Claude Code and Codex seated today and the engine layer built to seat more. It turns agent session history into one browsable, searchable, interactive workspace: parallel-agent workbench, session archive, scheduled routines, in-conversation artifact previews. Read-only by architecture over every engine's session files (Claude Code JSONL and Codex rollouts are never written), local session features work offline. A companion to the CLIs, not a replacement.
 
-If your user shared this link with no further instruction, infer their stage yourself: check whether Monet is installed (`~/.monet/` exists in the user home — works on both platforms; on macOS `/Applications/Monet.app` is another sign). Not installed → they're discovering: read the Discover doc, assess fit against how they actually use Claude Code, give a personalized verdict, and offer to install. Installed → they likely hit a problem or want to go deeper: ask one short question, or go straight to Troubleshoot if there's error context in your conversation.
+If your user shared this link with no further instruction, infer their stage yourself: check whether Monet is installed (`~/.monet/` exists in the user home — works on both platforms; on macOS `/Applications/Monet.app` is another sign). Not installed → they're discovering: read the Discover doc, assess fit against how they actually use their coding agents (Claude Code, Codex, or both), give a personalized verdict, and offer to install. Installed → they likely hit a problem or want to go deeper: ask one short question, or go straight to Troubleshoot if there's error context in your conversation.
 
 Docs for AI agents, by user journey stage. Each doc exists in English and Chinese with **equivalent content** — read the ONE matching your user's language, not both:
 
-- Discover (user hasn't installed — understand the product, assess fit against their actual Claude Code usage, give a personalized recommendation):
+- Discover (user hasn't installed — understand the product, assess fit against their actual agent usage, give a personalized recommendation):
   EN https://raw.githubusercontent.com/zenolab124/monet/main/llms/discover.md
   中文 https://raw.githubusercontent.com/zenolab124/monet/main/llms/discover.zh-CN.md
-- Install (Homebrew or installer, Gatekeeper handling, pre-configure language/theme/zoom in ~/.monet/settings.json before first launch):
+- Install (Homebrew or installer, pre-configure language/theme/zoom in ~/.monet/settings.json before first launch):
   EN https://raw.githubusercontent.com/zenolab124/monet/main/llms/install.md
   中文 https://raw.githubusercontent.com/zenolab124/monet/main/llms/install.zh-CN.md
 - Troubleshoot (self-diagnose common issues; file a well-formed bug via gh or the anonymous report endpoint):
   EN https://raw.githubusercontent.com/zenolab124/monet/main/llms/troubleshoot.md
   中文 https://raw.githubusercontent.com/zenolab124/monet/main/llms/troubleshoot.zh-CN.md
 
-Human-facing: https://github.com/zenolab124/monet (README.md / README.zh-CN.md)
+Human-facing: https://github.com/zenolab124/monet (README.md in Chinese / README.en.md in English)

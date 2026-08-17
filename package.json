@@ -2,7 +2,7 @@
   "name": "monet-tauri",
   "version": "1.0.4",
   "private": true,
-  "description": "Monet — Mission Control for Claude Code",
+  "description": "Monet — Multi-engine mission control for coding agents (Claude Code and Codex today)",
   "type": "module",
   "repository": {
     "type": "git",
