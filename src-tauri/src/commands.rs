@@ -159,8 +159,18 @@ pub fn check_system_permissions() -> serde_json::Value {
         "accessibility": crate::tcc::check_accessibility(),
         "screenCapture": crate::tcc::check_screen_capture(),
         "fullDiskAccess": crate::tcc::check_full_disk_access(),
-        "localNetwork": probe_local_network(),
+        // 本地网络没有静默查询 API。这里只返回本进程缓存，避免打开设置页时
+        // 未经用户操作就触发系统授权提示；显式检测走下方独立 command。
+        "localNetwork": crate::tcc::cached_local_network(),
     })
+}
+
+/// 用户明确点击“重新检测”后执行一次快速本地网络探测。
+#[tauri::command]
+pub async fn check_local_network_permission() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| crate::tcc::check_local_network().to_string())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 主动触发系统授权弹窗（仅用户点击驱动），返回请求后的最新状态。
@@ -197,17 +207,13 @@ pub async fn request_system_permission(kind: String) -> Result<String, String> {
                 Ok(crate::tcc::prompt_accessibility().to_string())
             }
             "localNetwork" => {
-                Ok(probe_local_network().to_string())
+                Ok(crate::tcc::request_local_network().to_string())
             }
             _ => Err(format!("unsupported permission kind: {}", kind)),
         }
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-fn probe_local_network() -> &'static str {
-    crate::tcc::check_local_network()
 }
 
 /// 打开系统设置对应隐私面板（白名单锚点）

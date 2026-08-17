@@ -10,5 +10,7 @@
 	<string>Monet Routine Runner</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Scheduled routines use Apple Events to control System Events for automation tasks.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Scheduled routines use the local network to connect to devices and development services selected by the user.</string>
 </dict>
 </plist>

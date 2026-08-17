@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
 import { useNotifications } from '@/composables/useNotifications'
 
-type Status = 'granted' | 'denied' | 'undetermined' | 'targetNotRunning' | 'unknown'
+type Status = 'granted' | 'denied' | 'undetermined' | 'targetNotRunning' | 'unverified' | 'unknown'
 
 interface PermRow {
   key: string
@@ -43,13 +43,14 @@ const runnerResult = ref<{ checkedAt: string; permissions: Record<string, Status
 const checking = ref(false)
 const runnerChecking = ref(false)
 const requesting = ref<string | null>(null)
+const slowRequest = ref<string | null>(null)
 
 function appStatus(key: string): Status {
-  return appPerms.value[key] ?? 'unknown'
+  return appPerms.value[key] ?? (key === 'localNetwork' ? 'unverified' : 'unknown')
 }
 
 function runnerStatus(key: string): Status {
-  return runnerResult.value?.permissions[key] ?? 'unknown'
+  return runnerResult.value?.permissions[key] ?? (key === 'localNetwork' ? 'unverified' : 'unknown')
 }
 
 const STATUS_DOT: Record<Status, string> = {
@@ -57,16 +58,20 @@ const STATUS_DOT: Record<Status, string> = {
   denied: 'bg-red-500',
   undetermined: 'bg-amber-500',
   targetNotRunning: 'bg-muted-foreground/50',
+  unverified: 'bg-amber-500',
   unknown: 'bg-muted-foreground/50',
 }
 
-async function refresh() {
+async function refresh(probeLocalNetwork = false) {
   checking.value = true
   try {
     const [perms, notif] = await Promise.all([
       invoke<Record<string, Status>>('check_system_permissions'),
       isPermissionGranted(),
     ])
+    if (probeLocalNetwork) {
+      perms.localNetwork = await invoke<Status>('check_local_network_permission')
+    }
     appPerms.value = { ...perms, notifications: notif ? 'granted' : 'undetermined' }
   } catch (e) {
     notifyTransient(t('common.loadFailed'), String(e))
@@ -75,8 +80,39 @@ async function refresh() {
   }
 }
 
+function startSlowRequest(key: string): ReturnType<typeof setTimeout> {
+  return setTimeout(() => {
+    slowRequest.value = key
+  }, 1200)
+}
+
+function reportLocalNetworkResult(status: Status) {
+  if (status === 'granted') {
+    notifyTransient(t('settings.permCheck.localNetworkGranted'))
+  } else if (status === 'denied') {
+    notifyTransient(
+      t('settings.permCheck.localNetworkDenied'),
+      t('settings.permCheck.localNetworkDeniedHint'),
+    )
+  } else {
+    notifyTransient(
+      t('settings.permCheck.localNetworkUnknown'),
+      t('settings.permCheck.localNetworkUnknownHint'),
+    )
+  }
+}
+
 async function requestApp(row: PermRow) {
+  if (row.key === 'localNetwork' && appStatus(row.key) === 'denied') {
+    notifyTransient(
+      t('settings.permCheck.localNetworkDenied'),
+      t('settings.permCheck.localNetworkDeniedHint'),
+    )
+    openPanel(row.panel)
+    return
+  }
   requesting.value = row.key
+  const slowTimer = row.key === 'localNetwork' ? startSlowRequest(row.key) : null
   try {
     if (row.key === 'notifications') {
       const r = await requestPermission()
@@ -84,6 +120,7 @@ async function requestApp(row: PermRow) {
     } else {
       const status = await invoke<Status>('request_system_permission', { kind: row.key })
       appPerms.value = { ...appPerms.value, [row.key]: status }
+      if (row.key === 'localNetwork') reportLocalNetworkResult(status)
       // 屏幕录制授权写入后，本进程要重启才能读到新状态
       if (row.key === 'screenCapture' && status !== 'granted') {
         notifyTransient(t('settings.permCheck.screenRestartHint'))
@@ -92,16 +129,28 @@ async function requestApp(row: PermRow) {
   } catch (e) {
     notifyTransient(t('settings.permCheck.requestFailed'), String(e))
   } finally {
+    if (slowTimer) clearTimeout(slowTimer)
+    slowRequest.value = null
     requesting.value = null
   }
 }
 
 // runner 行的授权请求：经 launchd 以 prompt 模式跑一次，系统弹窗归因给 runner
 async function requestRunner(row: PermRow) {
+  if (row.key === 'localNetwork' && runnerStatus(row.key) === 'denied') {
+    notifyTransient(
+      t('settings.permCheck.localNetworkDenied'),
+      t('settings.permCheck.localNetworkDeniedHint'),
+    )
+    openPanel(row.panel)
+    return
+  }
   requesting.value = `runner:${row.key}`
+  const slowTimer = row.key === 'localNetwork' ? startSlowRequest(`runner:${row.key}`) : null
   try {
     const before = runnerStatus(row.key)
     runnerResult.value = await invoke('run_runner_health_check', { promptKind: row.key })
+    if (row.key === 'localNetwork') reportLocalNetworkResult(runnerStatus(row.key))
     // denied 记录系统不再弹窗，且 runner 是路径型记录无法程序化重置，
     // 只能引导用户去系统设置删除旧条目后重试
     if (runnerStatus(row.key) === 'denied' && before === 'denied') {
@@ -110,6 +159,8 @@ async function requestRunner(row: PermRow) {
   } catch (e) {
     notifyTransient(t('settings.permCheck.requestFailed'), String(e))
   } finally {
+    if (slowTimer) clearTimeout(slowTimer)
+    slowRequest.value = null
     requesting.value = null
   }
 }
@@ -136,11 +187,13 @@ function formatTime(iso: string): string {
 
 // 用户去系统设置改完权限切回来时自动重新检测
 function onWindowFocus() {
-  if (!checking.value) refresh()
+  if (!checking.value && !requesting.value) {
+    refresh(appStatus('localNetwork') !== 'unverified')
+  }
 }
 
 onMounted(async () => {
-  refresh()
+  refresh(false)
   window.addEventListener('focus', onWindowFocus)
   try {
     runnerResult.value = await invoke('get_runner_health_snapshot')
@@ -166,7 +219,11 @@ onUnmounted(() => {
             <div class="text-xs font-semibold">{{ t('settings.permCheck.appGroup') }}</div>
           </div>
         </div>
-        <button class="perm-btn" :disabled="checking" @click="refresh">
+        <button
+          class="perm-btn"
+          :disabled="checking"
+          @click="refresh(appStatus('localNetwork') !== 'unverified')"
+        >
           <span :class="checking ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-renew'" class="w-3 h-3" />
           {{ t('settings.permCheck.refresh') }}
         </button>
@@ -180,6 +237,9 @@ onUnmounted(() => {
         <div class="flex-1 min-w-0">
           <div class="text-xs">{{ t(`settings.permCheck.rows.${row.key}`) }}</div>
           <div class="text-[11px] text-muted-foreground truncate">{{ t(`settings.permCheck.rows.${row.key}Desc`) }}</div>
+          <div v-if="slowRequest === row.key" class="permission-request-hint">
+            {{ t('settings.permCheck.localNetworkWaitingHint') }}
+          </div>
         </div>
         <span class="flex items-center gap-1.5 text-[11px] text-muted-foreground shrink-0">
           <i class="inline-block w-1.5 h-1.5 rounded-full" :class="STATUS_DOT[appStatus(row.key)]" />
@@ -192,7 +252,11 @@ onUnmounted(() => {
           @click="requestApp(row)"
         >
           <span v-if="requesting === row.key" class="i-carbon-circle-dash animate-spin w-3 h-3" />
-          {{ t('settings.permCheck.request') }}
+          {{ requesting === row.key && row.key === 'localNetwork'
+            ? t('settings.permCheck.waitingForPermission')
+            : row.key === 'localNetwork'
+              ? t('settings.permCheck.testAndRequest')
+              : t('settings.permCheck.request') }}
         </button>
         <button v-if="row.panel && appStatus(row.key) !== 'granted'" class="perm-btn" @click="openPanel(row.panel)">
           {{ t('settings.permCheck.openSettings') }}
@@ -233,6 +297,9 @@ onUnmounted(() => {
           <div v-if="row.key === 'automationSystemEvents'" class="text-[11px] text-muted-foreground truncate">
             {{ t('settings.permCheck.rows.automationSystemEventsDesc') }}
           </div>
+          <div v-if="slowRequest === `runner:${row.key}`" class="permission-request-hint">
+            {{ t('settings.permCheck.localNetworkWaitingHint') }}
+          </div>
         </div>
         <span class="flex items-center gap-1.5 text-[11px] text-muted-foreground shrink-0">
           <i class="inline-block w-1.5 h-1.5 rounded-full" :class="STATUS_DOT[runnerStatus(row.key)]" />
@@ -245,7 +312,11 @@ onUnmounted(() => {
           @click="requestRunner(row)"
         >
           <span v-if="requesting === `runner:${row.key}`" class="i-carbon-circle-dash animate-spin w-3 h-3" />
-          {{ t('settings.permCheck.request') }}
+          {{ requesting === `runner:${row.key}` && row.key === 'localNetwork'
+            ? t('settings.permCheck.waitingForPermission')
+            : row.key === 'localNetwork'
+              ? t('settings.permCheck.testAndRequest')
+              : t('settings.permCheck.request') }}
         </button>
         <button v-if="row.panel && runnerStatus(row.key) !== 'granted'" class="perm-btn" @click="openPanel(row.panel)">
           {{ t('settings.permCheck.openSettings') }}
@@ -319,6 +390,13 @@ onUnmounted(() => {
   color: var(--muted-foreground);
   font-size: 11px;
   line-height: 1.55;
+}
+.permission-request-hint {
+  margin-top: 3px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
 }
 .permissions-card-hint { margin-top: 3px; }
 .permissions-card-description {

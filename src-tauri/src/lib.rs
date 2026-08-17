@@ -240,6 +240,7 @@ pub fn run() {
             commands::resume_in_terminal,
             commands::run_slash_in_terminal,
             commands::check_system_permissions,
+            commands::check_local_network_permission,
             commands::request_system_permission,
             commands::open_privacy_settings,
             commands::run_runner_health_check,

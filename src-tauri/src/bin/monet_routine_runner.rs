@@ -289,6 +289,7 @@ fn refresh_wake_schedule() {
 }
 
 fn run_health_check(prompt: Option<&str>) {
+    let mut local_network_result = None;
     // 预热 System Events：open 走 LaunchServices 不需要自动化权限，
     // 避免 AE 查询因目标未运行返回 procNotFound
     #[cfg(target_os = "macos")]
@@ -315,13 +316,16 @@ fn run_health_check(prompt: Option<&str>) {
                 let _ = tcc::request_screen_capture();
             }
             Some("localNetwork") => {
-                let _ = tcc::check_local_network();
+                // 保持进程与 NWConnection 存活，避免系统提示尚未完成时瞬态
+                // health-check 已退出；授权后连接会自动从 waiting 恢复。
+                local_network_result = Some(tcc::request_local_network());
             }
             _ => {}
         }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = prompt;
+    let local_network = local_network_result.unwrap_or_else(tcc::cached_local_network);
     let result = serde_json::json!({
         "checkedAt": Utc::now().to_rfc3339(),
         "permissions": {
@@ -329,7 +333,7 @@ fn run_health_check(prompt: Option<&str>) {
             "accessibility": tcc::check_accessibility(),
             "screenCapture": tcc::check_screen_capture(),
             "fullDiskAccess": tcc::check_full_disk_access(),
-            "localNetwork": tcc::check_local_network(),
+            "localNetwork": local_network,
         },
     });
     // 结果路径与主 App 读取侧硬编码一致（launchd 语境无 MONET_DATA_DIR）

@@ -16,11 +16,12 @@ mod native {
         pub fn monet_ax_prompt() -> i32;
         pub fn monet_screen_preflight() -> i32;
         pub fn monet_screen_request() -> i32;
-        /// Network.framework TCP 探测：0=可达 1=静默失败 -1=错误
+        /// Network.framework UDP 探测：0=可用 1=权限阻止 2=其他网络问题 -1=错误
         pub fn monet_nw_probe(
             host: *const std::os::raw::c_char,
             port: *const std::os::raw::c_char,
             timeout_ms: i32,
+            wait_for_grant: bool,
         ) -> i32;
     }
 }
@@ -69,92 +70,100 @@ pub fn prompt_accessibility() -> &'static str {
 }
 
 #[cfg(target_os = "macos")]
-fn is_private_v4(ip: &str) -> bool {
-    let mut it = ip.split('.');
-    let (Some(a), Some(b)) = (it.next(), it.next()) else {
-        return false;
-    };
-    let (Ok(a), Ok(b)) = (a.parse::<u8>(), b.parse::<u8>()) else {
-        return false;
-    };
-    // 只认 RFC1918，排除 TUN 常用的 198.18/100.64 等运营商/测试段
-    a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168)
+fn parse_default_gateway(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != "default" {
+            return None;
+        }
+        let gateway = fields.next()?;
+        let _flags = fields.next()?;
+        let interface = fields.next()?;
+        if interface == "lo0" || interface.starts_with("utun") {
+            return None;
+        }
+        let address = gateway.split('%').next().unwrap_or(gateway);
+        address
+            .parse::<std::net::IpAddr>()
+            .ok()
+            .map(|_| gateway.to_string())
+    })
 }
 
-/// 局域网探测目标：取物理网卡的默认网关。它必然在局域网内且必然存在，
-/// 不依赖用户配置了什么设备。
-///
-/// 不能用 `route -n get default`：开着 VPN/TUN 时默认路由指向 utunN，
-/// 那条路由没有 gateway 字段，取到的是空值——而"有 TUN"恰恰是本检测最需要
-/// 生效的场景。改从完整路由表里挑第一条网关为 RFC1918 地址的默认路由。
+/// 从完整路由表中选物理接口默认网关，避开 VPN/TUN 默认路由。先尝试 IPv4，
+/// 再回退 IPv6；不把“局域网”等同于 RFC1918，兼容企业网和 IPv6-only 网络。
 #[cfg(target_os = "macos")]
 fn default_gateway() -> Option<String> {
-    let out = std::process::Command::new("/usr/sbin/netstat")
-        .args(["-rn", "-f", "inet"])
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| l.split_whitespace().next() == Some("default"))
-        .filter_map(|l| l.split_whitespace().nth(1))
-        .find(|gw| is_private_v4(gw))
-        .map(|s| s.to_string())
+    for family in ["inet", "inet6"] {
+        let Ok(output) = std::process::Command::new("/usr/sbin/netstat")
+            .args(["-rn", "-f", family])
+            .output()
+        else {
+            continue;
+        };
+        if let Some(gateway) = parse_default_gateway(&String::from_utf8_lossy(&output.stdout)) {
+            return Some(gateway);
+        }
+    }
+    None
 }
 
-/// BSD socket 对照组。收到 RST（ConnectionRefused/Reset）同样算通——
-/// 对端明确拒绝说明包已出网，正是我们要的「链路可达」信号。
 #[cfg(target_os = "macos")]
-fn bsd_reachable(host: &str, port: u16, timeout: std::time::Duration) -> bool {
-    use std::io::ErrorKind;
-    use std::net::{SocketAddr, TcpStream};
-    let Ok(addr) = format!("{}:{}", host, port).parse::<SocketAddr>() else {
-        return false;
-    };
-    match TcpStream::connect_timeout(&addr, timeout) {
-        Ok(_) => true,
-        Err(e) => matches!(
-            e.kind(),
-            ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset
-        ),
+use std::sync::atomic::{AtomicI32, Ordering};
+
+#[cfg(target_os = "macos")]
+static LAST_LOCAL_NETWORK_STATUS: AtomicI32 = AtomicI32::new(-2);
+
+#[cfg(target_os = "macos")]
+fn local_network_status(code: i32) -> &'static str {
+    match code {
+        0 => "granted",
+        1 => "denied",
+        2 => "unknown",
+        _ => "unknown",
     }
 }
 
-/// 本地网络权限：Apple 不提供查询 API，用双路对照推断。
-///
-/// 旧实现用 UDP 组播（mDNS）+ `send_to` 成败判定，三重不可靠：
-/// ① 走 BSD socket，而本地网络隐私只管辖 Network.framework，测的是永远不出问题的路；
-/// ② 用组播推断单播 TCP，两者判定路径不同；
-/// ③ `send_to` 成败受组播路由状态影响（有 TUN 时尤其不稳），与权限无强相关。
-/// 实测同一时刻它两个方向都会错：主进程报 granted，子进程跑同样逻辑报 denied。
-///
-/// 现在改为对同一目标跑两条路径，用对照消除网络噪声：
-///   NW 通                → granted
-///   NW 不通 + BSD 通     → denied（链路本身没问题，只有受管路径被挡 = 权限）
-///   两条都不通           → unknown（网络/目标问题，无法判定权限）
 #[cfg(target_os = "macos")]
-pub fn check_local_network() -> &'static str {
-    const PORT: u16 = 80;
-    const TIMEOUT_MS: i32 = 1500;
+fn probe_local_network(wait_for_grant: bool, timeout_ms: i32) -> &'static str {
+    // UDP connect 不发送数据，端口只用于构造 endpoint。
+    const DISCARD_PORT: &str = "9";
 
     let Some(gw) = default_gateway() else {
         return "unknown";
     };
     let (Ok(host_c), Ok(port_c)) = (
         std::ffi::CString::new(gw.as_str()),
-        std::ffi::CString::new(PORT.to_string()),
+        std::ffi::CString::new(DISCARD_PORT),
     ) else {
         return "unknown";
     };
 
-    let nw_ok = unsafe { native::monet_nw_probe(host_c.as_ptr(), port_c.as_ptr(), TIMEOUT_MS) } == 0;
-    if nw_ok {
-        return "granted";
-    }
-    let bsd_ok = bsd_reachable(&gw, PORT, std::time::Duration::from_millis(TIMEOUT_MS as u64));
-    if bsd_ok {
-        "denied"
-    } else {
-        "unknown"
+    let code = unsafe {
+        native::monet_nw_probe(host_c.as_ptr(), port_c.as_ptr(), timeout_ms, wait_for_grant)
+    };
+    LAST_LOCAL_NETWORK_STATUS.store(code, Ordering::Relaxed);
+    local_network_status(code)
+}
+
+/// 用户明确触发的快速检测。首次运行可能触发系统本地网络提示。
+#[cfg(target_os = "macos")]
+pub fn check_local_network() -> &'static str {
+    probe_local_network(false, 2_000)
+}
+
+/// 用户点击“检测并授权”后调用。保持连接存活，等待系统授权结果。
+#[cfg(target_os = "macos")]
+pub fn request_local_network() -> &'static str {
+    probe_local_network(true, 30_000)
+}
+
+/// 只读本进程本次运行中最近一次探测结果，不触发系统提示。
+#[cfg(target_os = "macos")]
+pub fn cached_local_network() -> &'static str {
+    match LAST_LOCAL_NETWORK_STATUS.load(Ordering::Relaxed) {
+        -2 => "unverified",
+        code => local_network_status(code),
     }
 }
 
@@ -219,6 +228,44 @@ pub fn check_local_network() -> &'static str {
 }
 
 #[cfg(not(target_os = "macos"))]
+pub fn request_local_network() -> &'static str {
+    "unknown"
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn cached_local_network() -> &'static str {
+    "unknown"
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn check_full_disk_access() -> &'static str {
     "unknown"
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::parse_default_gateway;
+
+    #[test]
+    fn chooses_physical_ipv4_gateway_after_tunnel_default() {
+        let routes = "\
+Destination Gateway Flags Netif\n\
+default link#26 UCSg utun7\n\
+default 203.0.113.1 UGScIg en0\n";
+        assert_eq!(
+            parse_default_gateway(routes).as_deref(),
+            Some("203.0.113.1")
+        );
+    }
+
+    #[test]
+    fn accepts_scoped_ipv6_gateway() {
+        let routes = "\
+Destination Gateway Flags Netif\n\
+default fe80::1%en7 UGcIg en7\n";
+        assert_eq!(
+            parse_default_gateway(routes).as_deref(),
+            Some("fe80::1%en7")
+        );
+    }
 }
