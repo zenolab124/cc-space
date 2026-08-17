@@ -1760,7 +1760,10 @@ pub fn save_channel(
             .is_some_and(|token| !token.is_empty());
         let claude_bearer_without_token = extension.claude.as_ref().is_some_and(|connection| {
             connection.auth_mode.as_deref() == Some("bearer")
-                && connection.auth_token.as_deref().is_none_or(str::is_empty)
+                && connection
+                    .auth_token
+                    .as_deref()
+                    .map_or(true, str::is_empty)
                 && !shared_has_token
         });
         if supports_claude && claude_bearer_without_token {
@@ -1768,7 +1771,10 @@ pub fn save_channel(
         }
         let codex_bearer_without_token = extension.codex.as_ref().is_some_and(|connection| {
             connection.auth_mode == "bearer"
-                && connection.auth_token.as_deref().is_none_or(str::is_empty)
+                && connection
+                    .auth_token
+                    .as_deref()
+                    .map_or(true, str::is_empty)
                 && !shared_has_token
         });
         if supports_codex && codex_bearer_without_token {
