@@ -244,7 +244,7 @@ pub fn run() {
             commands::request_system_permission,
             commands::list_app_copies,
             commands::move_app_copy_to_trash,
-            commands::reset_local_network_permission,
+            commands::reset_runner_permission_records,
             commands::open_privacy_settings,
             commands::run_runner_health_check,
             commands::get_runner_health_snapshot,

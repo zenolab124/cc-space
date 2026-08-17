@@ -13,7 +13,7 @@ mod native {
         pub fn monet_ax_prompt() -> i32;
         pub fn monet_screen_preflight() -> i32;
         pub fn monet_screen_request() -> i32;
-        /// Network.framework TCP 探测：0=可用 1=权限阻止 2=其他网络问题 -1=错误
+        /// Network.framework UDP 路径探测：0=可用 1=权限阻止 2=其他网络问题 -1=错误
         pub fn monet_nw_probe(
             host: *const std::os::raw::c_char,
             port: *const std::os::raw::c_char,
@@ -105,79 +105,6 @@ fn default_gateway() -> Option<String> {
     None
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalNetworkTarget {
-    pub host: String,
-    pub port: String,
-}
-
-fn is_local_host(host: &str) -> bool {
-    if let Ok(address) = host.parse::<std::net::IpAddr>() {
-        return match address {
-            std::net::IpAddr::V4(address) => {
-                address.is_private() || address.is_loopback() || address.is_link_local()
-            }
-            std::net::IpAddr::V6(address) => {
-                let first = address.segments()[0];
-                address.is_loopback()
-                    || first & 0xfe00 == 0xfc00
-                    || first & 0xffc0 == 0xfe80
-            }
-        };
-    }
-
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    host == "localhost" || host.ends_with(".local") || !host.contains('.')
-}
-
-fn local_network_target_from_url(raw: &str) -> Option<LocalNetworkTarget> {
-    let url = reqwest::Url::parse(raw).ok()?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return None;
-    }
-    let host = url.host_str()?;
-    if !is_local_host(host) {
-        return None;
-    }
-    Some(LocalNetworkTarget {
-        host: host.to_string(),
-        port: url.port_or_known_default()?.to_string(),
-    })
-}
-
-fn local_network_target_from_value(root: &serde_json::Value) -> Option<LocalNetworkTarget> {
-    const POINTERS: &[&str] = &[
-        "/_ccSpace/connection/baseUrl",
-        "/_ccSpace/claude/baseUrl",
-        "/_ccSpace/codex/baseUrl",
-        "/env/ANTHROPIC_BASE_URL",
-        "/env/OPENAI_BASE_URL",
-    ];
-    POINTERS.iter().find_map(|pointer| {
-        root.pointer(pointer)
-            .and_then(serde_json::Value::as_str)
-            .and_then(local_network_target_from_url)
-    })
-}
-
-/// 从渠道配置中寻找真实会访问的局域网目标，避免用无关的
-/// 固定地址产生假阴性。找不到时由调用方回退到物理网关。
-pub fn discover_local_network_target(data_dir: &std::path::Path) -> Option<LocalNetworkTarget> {
-    let mut paths = std::fs::read_dir(data_dir.join("channels"))
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-        .collect::<Vec<_>>();
-    paths.sort();
-
-    paths.into_iter().find_map(|path| {
-        let text = std::fs::read_to_string(path).ok()?;
-        let value = serde_json::from_str(&text).ok()?;
-        local_network_target_from_value(&value)
-    })
-}
-
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -196,24 +123,20 @@ fn local_network_status(code: i32) -> &'static str {
 
 #[cfg(target_os = "macos")]
 fn probe_local_network(
-    data_dir: &std::path::Path,
+    _data_dir: &std::path::Path,
     wait_for_grant: bool,
     timeout_ms: i32,
 ) -> &'static str {
     const DISCARD_PORT: &str = "9";
 
-    let target = discover_local_network_target(data_dir).or_else(|| {
-        default_gateway().map(|host| LocalNetworkTarget {
-            host,
-            port: DISCARD_PORT.to_string(),
-        })
-    });
-    let Some(target) = target else {
+    // 权限探针必须只测一个确定属于当前物理链路的地址。渠道目标可能离线、
+    // 位于 VPN 后方或只是 loopback，把它用于权限判断会制造假拒绝。
+    let Some(host) = default_gateway() else {
         return "unknown";
     };
     let (Ok(host_c), Ok(port_c)) = (
-        std::ffi::CString::new(target.host.as_str()),
-        std::ffi::CString::new(target.port.as_str()),
+        std::ffi::CString::new(host.as_str()),
+        std::ffi::CString::new(DISCARD_PORT),
     ) else {
         return "unknown";
     };
@@ -323,10 +246,7 @@ pub fn check_full_disk_access() -> &'static str {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{
-        discover_local_network_target, local_network_target_from_url, parse_default_gateway,
-        LocalNetworkTarget,
-    };
+    use super::parse_default_gateway;
 
     #[test]
     fn chooses_physical_ipv4_gateway_after_tunnel_default() {
@@ -351,44 +271,4 @@ default fe80::1%en7 UGcIg en7\n";
         );
     }
 
-    #[test]
-    fn recognizes_local_channel_urls() {
-        assert_eq!(
-            local_network_target_from_url("http://10.23.45.67:8080/v1"),
-            Some(LocalNetworkTarget {
-                host: "10.23.45.67".into(),
-                port: "8080".into(),
-            })
-        );
-        assert_eq!(
-            local_network_target_from_url("https://gateway.local/api"),
-            Some(LocalNetworkTarget {
-                host: "gateway.local".into(),
-                port: "443".into(),
-            })
-        );
-        assert_eq!(local_network_target_from_url("https://example.com"), None);
-    }
-
-    #[test]
-    fn discovers_target_from_channel_directory() {
-        let dir =
-            std::env::temp_dir().join(format!("monet-local-network-test-{}", std::process::id()));
-        let channels = dir.join("channels");
-        std::fs::create_dir_all(&channels).unwrap();
-        std::fs::write(
-            channels.join("local.json"),
-            r#"{"_ccSpace":{"connection":{"baseUrl":"http://localhost:11434/v1"}}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            discover_local_network_target(&dir),
-            Some(LocalNetworkTarget {
-                host: "localhost".into(),
-                port: "11434".into(),
-            })
-        );
-        let _ = std::fs::remove_dir_all(dir);
-    }
 }

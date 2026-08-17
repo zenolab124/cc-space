@@ -353,25 +353,52 @@ pub fn move_app_copy_to_trash(app: tauri::AppHandle, path: String) -> Result<Str
     }
 }
 
-/// 用户确认后清除当前 Bundle ID 的本地网络决策。调用方随后
-/// 重启应用，下次真实探测会让 macOS 重新建立权限记录。
+/// 清理 Runner 可由 tccutil 管理的旧授权记录。Local Network 不属于 TCC，
+/// macOS 没有对应 reset API；新版 launchd job 会把它归因到主 App。
 #[tauri::command]
-pub fn reset_local_network_permission(app: tauri::AppHandle) -> Result<(), String> {
+pub fn reset_runner_permission_records() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("/usr/bin/tccutil")
-            .args(["reset", "LocalNetwork", &app.config().identifier])
-            .status()
-            .map_err(|_| "LOCAL_NETWORK_RESET_FAILED".to_string())?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| "LOCAL_NETWORK_RESET_FAILED".to_string())
+        let runner = crate::scheduler::runner_binary_path();
+        let helper = runner
+            .ancestors()
+            .find(|path| path.extension().is_some_and(|ext| ext == "app"))
+            .ok_or_else(|| "RUNNER_HELPER_UNAVAILABLE".to_string())?;
+        let runner_identifier = bundle_identifier(helper)
+            .ok_or_else(|| "RUNNER_HELPER_UNAVAILABLE".to_string())?;
+
+        // 先让 LaunchServices 认识嵌套 Helper，tccutil 才能按 Bundle ID 精确清理，
+        // 不会误伤其他应用的同类权限。
+        let register = std::process::Command::new(
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+        )
+        .args(["-f", helper.to_string_lossy().as_ref()])
+        .status()
+        .map_err(|_| "RUNNER_HELPER_REGISTER_FAILED".to_string())?;
+        if !register.success() {
+            return Err("RUNNER_HELPER_REGISTER_FAILED".to_string());
+        }
+
+        for service in [
+            "AppleEvents",
+            "Accessibility",
+            "ScreenCapture",
+            "SystemPolicyAllFiles",
+        ] {
+            let status = std::process::Command::new("/usr/bin/tccutil")
+                .args(["reset", service, &runner_identifier])
+                .status()
+                .map_err(|_| "RUNNER_PERMISSION_RESET_FAILED".to_string())?;
+            if !status.success() {
+                return Err("RUNNER_PERMISSION_RESET_FAILED".to_string());
+            }
+        }
+        let _ = std::fs::remove_file(runner_health_result_path());
+        Ok(())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = app;
-        Err("LOCAL_NETWORK_RESET_UNSUPPORTED".to_string())
+        Err("RUNNER_PERMISSION_RESET_UNSUPPORTED".to_string())
     }
 }
 
@@ -402,11 +429,13 @@ pub fn open_privacy_settings(panel: String) -> Result<(), String> {
 /// launchd 启动才是真实语境——主 app 直接 spawn 的话归因会挂到主 app 头上
 #[tauri::command]
 pub async fn run_runner_health_check(
+    app: tauri::AppHandle,
     prompt_kind: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if cfg!(not(target_os = "macos")) {
         return Err("macOS only".to_string());
     }
+    let app_identifier = app.config().identifier.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::routines::ensure_scheduler_environment()?;
         // dev 门控使 install 短路：健康检查是显式触发的瞬态 job（/tmp plist，
@@ -447,6 +476,8 @@ pub async fn run_runner_health_check(
 <plist version="1.0">
 <dict>
 	<key>Label</key><string>{}</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array><string>{}</string></array>
 	<key>ProgramArguments</key>
 	<array>
 		<string>{}</string>
@@ -457,6 +488,7 @@ pub async fn run_runner_health_check(
 </plist>
 "#,
             label,
+            app_identifier,
             runner.display(),
             prompt_args
         );

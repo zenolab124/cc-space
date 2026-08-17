@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
 import { useNotifications } from '@/composables/useNotifications'
+import { useConfirm } from '@/composables/useConfirm'
 import LocalNetworkRecovery from './LocalNetworkRecovery.vue'
 
 type Status = 'granted' | 'denied' | 'undetermined' | 'targetNotRunning' | 'unverified' | 'unknown'
@@ -19,6 +20,7 @@ interface PermRow {
 
 const { t } = useI18n()
 const { notifyTransient } = useNotifications()
+const { confirm } = useConfirm()
 
 // 主应用账本：前台会话、工作台任务、终端恢复的权限归因都挂在主 app 上
 const appRows: PermRow[] = [
@@ -45,6 +47,8 @@ const checking = ref(false)
 const runnerChecking = ref(false)
 const requesting = ref<string | null>(null)
 const slowRequest = ref<string | null>(null)
+const runnerRepairing = ref(false)
+const runnerNeedsRepair = computed(() => runnerRows.some(row => runnerStatus(row.key) === 'denied'))
 
 function appStatus(key: string): Status {
   return appPerms.value[key] ?? (key === 'localNetwork' ? 'unverified' : 'unknown')
@@ -152,8 +156,8 @@ async function requestRunner(row: PermRow) {
     if (wasLocalNetworkDenied) setTimeout(() => openPanel(row.panel), 450)
     runnerResult.value = await request
     if (row.key === 'localNetwork') reportLocalNetworkResult(runnerStatus(row.key))
-    // denied 记录系统不再弹窗，且 runner 是路径型记录无法程序化重置，
-    // 只能引导用户去系统设置删除旧条目后重试
+    // Helper App 的权限可按稳定 Bundle ID 精确重置。若旧记录仍拒绝，提示用户
+    // 先用卡片顶部的“重建授权”，避免继续修改已失效的路径记录。
     if (runnerStatus(row.key) === 'denied' && before === 'denied') {
       notifyTransient(t('settings.permCheck.stillDenied'), t('settings.permCheck.stillDeniedHint'))
     }
@@ -163,6 +167,24 @@ async function requestRunner(row: PermRow) {
     if (slowTimer) clearTimeout(slowTimer)
     slowRequest.value = null
     requesting.value = null
+  }
+}
+
+async function repairRunnerPermissions() {
+  const approved = await confirm(
+    t('settings.permCheck.runnerRepairConfirm'),
+    t('settings.permCheck.runnerRepair'),
+  )
+  if (!approved) return
+  runnerRepairing.value = true
+  try {
+    await invoke('reset_runner_permission_records')
+    runnerResult.value = null
+    notifyTransient(t('settings.permCheck.runnerRepairDone'), t('settings.permCheck.runnerRepairDoneHint'))
+  } catch (cause) {
+    notifyTransient(t('settings.permCheck.runnerRepairFailed'), String(cause))
+  } finally {
+    runnerRepairing.value = false
   }
 }
 
@@ -284,10 +306,21 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-        <button class="perm-btn shrink-0" :disabled="runnerChecking" @click="runRunnerCheck">
-          <span :class="runnerChecking ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-play'" class="w-3 h-3" />
-          {{ runnerChecking ? t('settings.permCheck.checking') : t('settings.permCheck.runCheck') }}
-        </button>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            v-if="runnerNeedsRepair"
+            class="perm-btn"
+            :disabled="runnerRepairing || runnerChecking"
+            @click="repairRunnerPermissions"
+          >
+            <span :class="runnerRepairing ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-reset'" class="w-3 h-3" />
+            {{ runnerRepairing ? t('settings.permCheck.runnerRepairing') : t('settings.permCheck.runnerRepair') }}
+          </button>
+          <button class="perm-btn" :disabled="runnerChecking || runnerRepairing" @click="runRunnerCheck">
+            <span :class="runnerChecking ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-play'" class="w-3 h-3" />
+            {{ runnerChecking ? t('settings.permCheck.checking') : t('settings.permCheck.runCheck') }}
+          </button>
+        </div>
       </div>
       <p class="permissions-card-description">
         {{ t('settings.permCheck.runnerGroupDesc') }}

@@ -1,9 +1,9 @@
 // 本地网络权限探测（Network.framework）。
 //
-// macOS 没有通用的权限查询 API。Apple 推荐对真实局域网地址建立 NWConnection：
+// macOS 没有通用的权限查询 API。Apple 推荐对局域网地址建立 NWConnection：
 // 权限被阻止时连接进入 waiting，currentPath.unsatisfiedReason 为
-// nw_path_unsatisfied_reason_local_network_denied。TCP 连接被对端拒绝同样说明
-// 本地网络路径已经通过，只是目标端口没有服务。
+// nw_path_unsatisfied_reason_local_network_denied。这里使用 UDP connect，只建立
+// 本地路径、不发送数据，也不依赖目标端口有服务，避免把目标离线误判成权限拒绝。
 //
 // 返回值：0=路径可用，1=本地网络权限阻止，2=其他网络原因/超时，-1=内部错误。
 // wait_for_grant=true 时，遇到 localNetworkDenied 不立即结束：连接保持存活，
@@ -11,7 +11,6 @@
 
 #include <Network/Network.h>
 #include <dispatch/dispatch.h>
-#include <errno.h>
 #include <stdbool.h>
 
 static bool monet_path_is_local_network_denied(nw_connection_t connection) {
@@ -19,14 +18,6 @@ static bool monet_path_is_local_network_denied(nw_connection_t connection) {
     if (!path) return false;
     return nw_path_get_unsatisfied_reason(path) ==
            nw_path_unsatisfied_reason_local_network_denied;
-}
-
-static bool monet_error_proves_path_allowed(nw_error_t error) {
-    if (!error || nw_error_get_error_domain(error) != nw_error_domain_posix) {
-        return false;
-    }
-    int code = nw_error_get_error_code(error);
-    return code == ECONNREFUSED || code == ECONNRESET;
 }
 
 int monet_nw_probe(const char *host,
@@ -38,8 +29,9 @@ int monet_nw_probe(const char *host,
     nw_endpoint_t endpoint = nw_endpoint_create_host(host, port);
     if (!endpoint) return -1;
 
-    // Apple TN3179 建议用 TCP NWConnection 探测 TCP 局域网目标。
-    nw_parameters_t parameters = nw_parameters_create_secure_tcp(
+    // Apple TN3179 推荐用 UDP connect 触发本地网络权限；Network.framework
+    // 的 connection ready 只表示路径已建立，不会向 discard 端口发送数据。
+    nw_parameters_t parameters = nw_parameters_create_secure_udp(
         NW_PARAMETERS_DISABLE_PROTOCOL,
         NW_PARAMETERS_DEFAULT_CONFIGURATION);
     if (!parameters) return -1;
@@ -92,10 +84,10 @@ int monet_nw_probe(const char *host,
             }
 
             if (state == nw_connection_state_failed) {
+                (void)error;
                 if (monet_path_is_local_network_denied(connection)) {
                     result = 1;
-                } else if (saw_local_network_denied ||
-                           monet_error_proves_path_allowed(error)) {
+                } else if (saw_local_network_denied) {
                     result = 0;
                 } else {
                     result = 2;

@@ -194,6 +194,8 @@ pub fn sync_scheduler() {
     let routines_snapshot: Vec<RoutineDefinition> = with_routines(|routines| routines.clone());
     if let Err(e) = scheduler::sync_all(&routines_snapshot, &runner_path) {
         log::warn!("routine scheduler sync (external change): {}", e);
+    } else {
+        scheduler::cleanup_legacy_runner_binary();
     }
 }
 

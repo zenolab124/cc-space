@@ -61,7 +61,29 @@ pub fn sync_all(routines: &[RoutineDefinition], runner_path: &Path) -> Result<()
 }
 
 pub fn runner_binary_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let bundled = bundled_runner_path();
+        if bundled.exists() {
+            return bundled;
+        }
+    }
+    legacy_runner_binary_path()
+}
+
+fn legacy_runner_binary_path() -> PathBuf {
     config::data_dir().join("bin").join(runner_bin_name())
+}
+
+/// 新版从签名的 Helper App 内运行。所有 launchd plist 完成迁移后再移除旧裸
+/// runner；它是应用生成的可执行文件，不包含用户数据。
+pub fn cleanup_legacy_runner_binary() {
+    let legacy = legacy_runner_binary_path();
+    if runner_binary_path() != legacy && legacy.exists() {
+        if let Err(error) = std::fs::remove_file(&legacy) {
+            log::warn!("failed to remove legacy routine runner: {}", error);
+        }
+    }
 }
 
 pub fn installed_runner_supports_environment_snapshot() -> bool {
@@ -212,6 +234,14 @@ pub fn prepare_runner_binary() -> Result<PreparedRunnerInstall, String> {
 
 pub fn disable_runner() -> Result<(), String> {
     let path = runner_binary_path();
+    // Helper 位于签名 App bundle 内，不能在运行时修改，否则会破坏主应用签名。
+    #[cfg(target_os = "macos")]
+    if path
+        .ancestors()
+        .any(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
+    {
+        return Ok(());
+    }
     if !path.exists() {
         return Ok(());
     }
@@ -302,6 +332,15 @@ fn is_codesigned(_path: &Path) -> bool {
 pub fn bundled_runner_path() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
+            #[cfg(target_os = "macos")]
+            if let Some(contents) = dir.parent() {
+                let helper = contents
+                    .join("Helpers/MonetRoutineRunner.app/Contents/MacOS")
+                    .join(runner_bin_name());
+                if helper.exists() {
+                    return helper;
+                }
+            }
             let candidate = dir.join(runner_bin_name());
             if candidate.exists() {
                 return candidate;
@@ -517,6 +556,10 @@ mod platform {
 <dict>
 	<key>Label</key>
 	<string>{label}</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>io.github.zenolab124.monet</string>
+	</array>
 	<key>ProgramArguments</key>
 	<array>
 		<string>{runner}</string>

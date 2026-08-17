@@ -36,3 +36,5 @@ plutil -replace CFBundleVersion -string "$VERSION" "$HELPER/Contents/Info.plist"
 rm -f "$APP/Contents/MacOS/schema-probe"
 
 echo "✓ MonetTray.app v$VERSION bundled at $HELPER"
+
+bash "$DIR/scripts/bundle-runner.sh"

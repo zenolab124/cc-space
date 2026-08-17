@@ -220,6 +220,14 @@ if [ -d "$TRAY_APP" ]; then
     codesign "${CODESIGN_ARGS[@]}" \
         --identifier "io.github.zenolab124.monet.tray" "$TRAY_APP"
 fi
+# Routine Runner 也必须是完整签名的 Helper App。旧版只有裸二进制，TCC 以
+# 路径记账；签名身份切换后设置开关仍指向旧 code requirement，造成假授权。
+RUNNER_APP="$APP_BUNDLE/Contents/Helpers/MonetRoutineRunner.app"
+if [ -d "$RUNNER_APP" ]; then
+    codesign "${CODESIGN_ARGS[@]}" \
+        --entitlements ../src-tauri/runner-entitlements.plist \
+        --identifier "io.github.zenolab124.monet.monet-routine-runner" "$RUNNER_APP"
+fi
 codesign "${CODESIGN_ARGS[@]}" \
     --entitlements "$MAIN_ENTITLEMENTS" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"

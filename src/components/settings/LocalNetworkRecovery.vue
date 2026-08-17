@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { relaunch } from '@tauri-apps/plugin-process'
 import { useI18n } from 'vue-i18n'
 import { useConfirm } from '@/composables/useConfirm'
 import { useNotifications } from '@/composables/useNotifications'
@@ -17,7 +16,6 @@ const { notifyTransient } = useNotifications()
 const copies = ref<AppCopy[]>([])
 const loading = ref(false)
 const movingPath = ref<string | null>(null)
-const resetting = ref(false)
 const showRecovery = computed(() => props.status === 'denied' || copies.value.length > 1)
 
 async function loadCopies() {
@@ -62,25 +60,6 @@ async function moveToTrash(copy: AppCopy) {
     notifyTransient(t('settings.permCheck.recoveryRemoveFailed'), detail)
   } finally {
     movingPath.value = null
-  }
-}
-
-async function resetAndRestart() {
-  const approved = await confirm(
-    t('settings.permCheck.recoveryResetConfirm'),
-    t('settings.permCheck.recoveryReset'),
-  )
-  if (!approved) return
-  resetting.value = true
-  try {
-    await invoke('reset_local_network_permission')
-    await relaunch()
-  } catch {
-    resetting.value = false
-    notifyTransient(
-      t('settings.permCheck.recoveryResetFailed'),
-      t('settings.permCheck.recoveryResetFailedHint'),
-    )
   }
 }
 
@@ -136,16 +115,6 @@ onMounted(loadCopies)
       <button type="button" class="perm-btn" @click="emit('request')">
         <span class="i-carbon-network-3 h-3 w-3" />
         {{ t('settings.permCheck.testAndRequest') }}
-      </button>
-      <button
-        v-if="status === 'denied'"
-        type="button"
-        class="perm-btn perm-btn--primary"
-        :disabled="resetting"
-        @click="resetAndRestart"
-      >
-        <span :class="resetting ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-restart'" class="h-3 w-3" />
-        {{ resetting ? t('settings.permCheck.recoveryResetting') : t('settings.permCheck.recoveryReset') }}
       </button>
     </div>
   </section>
@@ -208,7 +177,6 @@ onMounted(loadCopies)
 }
 .perm-btn:hover:not(:disabled) { background: var(--muted); }
 .perm-btn:disabled { opacity: 0.5; }
-.perm-btn--primary { border-color: var(--primary); color: var(--primary-foreground); background: var(--primary); }
 .perm-btn--danger { color: var(--destructive); }
 @media (max-width: 680px) {
   .local-network-recovery__header { flex-wrap: wrap; }

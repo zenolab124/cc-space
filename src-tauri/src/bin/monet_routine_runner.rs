@@ -325,7 +325,10 @@ fn run_health_check(prompt: Option<&str>) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = prompt;
-    let local_network = local_network_result.unwrap_or_else(tcc::cached_local_network);
+    // health-check 每次都是全新进程，读取进程内缓存永远只会得到 unverified。
+    // 未显式 prompt 时也要执行一次真实、无数据发送的权限探测。
+    let local_network = local_network_result
+        .unwrap_or_else(|| tcc::check_local_network(&data_dir()));
     let result = serde_json::json!({
         "checkedAt": Utc::now().to_rfc3339(),
         "permissions": {
