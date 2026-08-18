@@ -21,6 +21,29 @@ describe('unified session surface architecture', () => {
     expect(capsule).toContain('type="checkbox"')
   })
 
+  it('refreshes the standard-session model catalog from the active engine without changing the selection', () => {
+    const capsule = source('../../src/components/topbar/RunConfigCapsule.vue')
+    const nativeController = source('../../src/components/SessionDetail.vue')
+    const nativeToolbar = source('../../src/components/topbar/SessionTopBar.vue')
+    const standardController = source('../../src/components/engine/EngineSessionDetail.vue')
+    const channels = source('../../src/composables/useChannels.ts')
+
+    expect(capsule).toContain('modelRefreshable?: boolean')
+    expect(capsule).toContain('modelsRefreshing?: boolean')
+    expect(capsule).toContain("@click.stop=\"emit('refreshModels')\"")
+    expect(standardController).toContain('async function refreshRuntimeModels()')
+    expect(standardController).toContain('const loadedModels = await listModels(target.engine)')
+    expect(standardController).toContain('models.value = loadedModels')
+    expect(standardController).toContain('model-refreshable')
+    expect(standardController).toContain('@refresh-models="refreshRuntimeModels"')
+    expect(standardController).not.toContain('selectedModel.value = loadedModels')
+    expect(channels).toContain('async function syncChannelModels(')
+    expect(channels).toContain('会话侧刷新不改写渠道配置')
+    expect(nativeToolbar).toContain("@refresh-models=\"emit('refreshModels')\"")
+    expect(nativeController).toContain("syncChannelModels(channelId, 'claude-code')")
+    expect(nativeController).toContain('@refresh-models="onRefreshModels"')
+  })
+
   it('keeps page-level entry points independent of engine controllers', () => {
     const workbench = source('../../src/components/workbench/WorkbenchColumn.vue')
     const archive = source('../../src/views/SessionsView.vue')

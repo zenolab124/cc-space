@@ -49,6 +49,10 @@ const props = defineProps<{
   selectedFastMode: boolean | null
   /** 快速模式不可用并自动恢复标准速度后的提示。 */
   fastModeNotice?: string | null
+  /** 当前渠道可从上游同步模型目录。 */
+  modelRefreshable?: boolean
+  /** 上游模型目录正在同步。 */
+  modelsRefreshing?: boolean
   /** 渠道选择(null = 跟随应用默认;'official' = 强制官方;其他 = 渠道 id) */
   selectedChannelId: string | null
   /** 解析后的最终注入渠道 id(null = 官方):终端恢复带渠道用 */
@@ -77,6 +81,7 @@ const emit = defineEmits<{
   (e: 'chromeChange', chrome: boolean): void
   (e: 'extraArgsChange', extraArgs: string): void
   (e: 'permissionModeChange', mode: PermissionMode | null): void
+  (e: 'refreshModels'): void
   (e: 'reload'): void
   (e: 'deleted'): void
 }>()
@@ -238,7 +243,10 @@ function onPermissionModeChange(mode: PermissionMode | null) {
         :run-config="runConfig"
         :cwd="cwd"
         :fast-mode-notice="fastModeNotice"
+        :model-refreshable="modelRefreshable"
+        :models-refreshing="modelsRefreshing"
         :narrow="containerWidth < 280"
+        @refresh-models="emit('refreshModels')"
         @model-change="onModelChange"
         @effort-change="onEffortChange"
         @fast-mode-change="(v: boolean) => emit('fastModeChange', v)"

@@ -729,6 +729,7 @@ async function onStop() {
 // --- 会话级设置(模型 / 努力等级 / 渠道) ---
 const { settings, setModel, setEffort, setFastMode, setChannel, setChrome, setExtraArgs, setPermissionMode: persistPermissionMode } = useSessionSettings(effectiveSessionId)
 const fastModeNotice = ref<string | null>(null)
+const modelsRefreshing = ref(false)
 let unlistenFastModeStatus: (() => void) | null = null
 
 listen<{ session_id: string; active: boolean }>('fast-mode-status', event => {
@@ -737,7 +738,10 @@ listen<{ session_id: string; active: boolean }>('fast-mode-status', event => {
   fastModeNotice.value = event.payload.active ? null : t('topbar.fastModeFallback')
 }).then(unlisten => { unlistenFastModeStatus = unlisten })
 
-watch(effectiveSessionId, () => { fastModeNotice.value = null })
+watch(effectiveSessionId, () => {
+  fastModeNotice.value = null
+  modelsRefreshing.value = false
+})
 onUnmounted(() => unlistenFastModeStatus?.())
 
 // 运行配置同源解析：CLI/项目值只供 display，Monet 显式意图才进入 launch
@@ -771,7 +775,26 @@ refreshChannels()
 const resolvedChannelId = computed(() => runConfig.value.channelId)
 
 // --- 等级徽章:流式轮次真实模型伪装的角色(当前解析渠道映射反查) ---
-const { channels: channelList } = useChannels()
+const { channels: channelList, syncChannelModels } = useChannels()
+const modelRefreshable = computed(() => !!resolvedChannelId.value)
+
+async function onRefreshModels() {
+  const channelId = resolvedChannelId.value
+  if (!channelId || modelsRefreshing.value) return
+  const sessionId = effectiveSessionId.value
+  modelsRefreshing.value = true
+  try {
+    const result = await syncChannelModels(channelId, 'claude-code')
+    if (effectiveSessionId.value !== sessionId) return
+    if (!result?.online || result.models.length === 0) {
+      notifyTransient(t('topbar.modelRefreshFailed'), t('topbar.modelRefreshUnavailable'))
+      return
+    }
+    notifyTransient(t('topbar.modelRefreshSuccess', { count: result.models.length }))
+  } finally {
+    if (effectiveSessionId.value === sessionId) modelsRefreshing.value = false
+  }
+}
 const activeModelEnv = computed(() => {
   const id = resolvedChannelId.value
   return id ? channelList.value.find(c => c.id === id)?.modelEnv : undefined
@@ -3167,6 +3190,8 @@ async function onReload() {
       :selected-effort="settings.effort"
       :selected-fast-mode="settings.fastMode"
       :fast-mode-notice="fastModeNotice"
+      :model-refreshable="modelRefreshable"
+      :models-refreshing="modelsRefreshing"
       :selected-channel-id="settings.channelId"
       :resolved-channel-id="resolvedChannelId"
       :run-config="runConfig"
@@ -3177,6 +3202,7 @@ async function onReload() {
       @model-change="onModelChange"
       @effort-change="onEffortChange"
       @fast-mode-change="onFastModeChange"
+      @refresh-models="onRefreshModels"
       @channel-change="onChannelChange"
       @chrome-change="onChromeChange"
       @extra-args-change="onExtraArgsChange"

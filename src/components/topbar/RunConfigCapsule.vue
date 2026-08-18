@@ -35,6 +35,10 @@ const props = defineProps<{
   engineConfig?: EngineCapsuleConfig
   /** 快速模式被供应商自动降级后的非阻断提示。 */
   fastModeNotice?: string | null
+  /** 当前模型目录支持从上游重新同步。 */
+  modelRefreshable?: boolean
+  /** 上游模型目录正在同步。 */
+  modelsRefreshing?: boolean
   /** 设置页的默认智能增强配置；仍复用会话三段式交互，但不显示高级参数。 */
   defaultConfig?: {
     engineId: 'claude-code' | 'codex'
@@ -55,6 +59,7 @@ const emit = defineEmits<{
   (e: 'channelChange', channelId: string | null): void
   (e: 'chromeChange', chrome: boolean): void
   (e: 'extraArgsChange', extraArgs: string): void
+  (e: 'refreshModels'): void
 }>()
 
 const { t } = useI18n()
@@ -592,6 +597,18 @@ function openSettings() {
       <div v-if="visibleCols.includes('model')" class="rc-col rc-model-col">
         <div class="rc-head">
           <span class="rc-label">{{ $t('topbar.modelLabel') }}</span>
+          <button
+            v-if="modelRefreshable"
+            type="button"
+            class="rc-model-refresh"
+            :disabled="modelsRefreshing"
+            :title="$t(modelsRefreshing ? 'topbar.modelRefreshing' : 'topbar.modelRefresh')"
+            :aria-label="$t(modelsRefreshing ? 'topbar.modelRefreshing' : 'topbar.modelRefresh')"
+            @mousedown.prevent
+            @click.stop="emit('refreshModels')"
+          >
+            <span class="i-carbon-renew" :class="{ 'animate-spin': modelsRefreshing }" aria-hidden="true" />
+          </button>
           <span class="rc-src">{{ engineConfig ? engineModelSrcLabel : standaloneMode ? $t('topbar.srcApp') : advisorLocked ? $t('topbar.srcAdvisor') : srcLabel(runConfig?.display.modelSource) }}</span>
           <button v-if="modelOverridden" class="rc-reset" @click="emit('modelChange', null)">{{ $t('topbar.resetInherit') }}</button>
         </div>
@@ -771,6 +788,16 @@ function openSettings() {
 .rc-label { font-size: 11px; color: var(--muted-foreground); font-weight: 500; }
 .rc-src { font-size: 9px; color: var(--muted-foreground); opacity: .7; margin-left: auto; }
 .rc-reset { font-size: 9px; color: var(--primary); cursor: pointer; }
+.rc-model-refresh {
+  width: 20px; height: 20px; margin: -4px 0 -4px -2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px; color: var(--muted-foreground); cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.rc-model-refresh:hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+.rc-model-refresh:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.rc-model-refresh:disabled { opacity: .5; cursor: wait; }
+.rc-model-refresh span { width: 12px; height: 12px; }
 .rc-list { display: flex; flex-direction: column; }
 .rc-model-search {
   min-height: 26px; margin-bottom: 5px; padding: 0 6px;

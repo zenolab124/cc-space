@@ -43,6 +43,7 @@ import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
+import { useNotifications } from '@/composables/useNotifications'
 import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
 import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
@@ -51,7 +52,7 @@ import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState, useToolDisplayMode } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
 import { rebindDraftChannel, sameRuntimeChannel, type DraftChannelReplacement } from '@/engines/draftChannel'
-import { channelSupportsEngine, engineChannelBinding, engineChannelFromProvider, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels, type SessionEngineId } from '@/composables/useChannels'
+import { channelModelCatalogSyncable, channelSupportsEngine, engineChannelBinding, engineChannelFromProvider, engineProviderIdFromSource, OFFICIAL_CHANNEL_ID, refreshChannels, useChannels, type SessionEngineId } from '@/composables/useChannels'
 import { resolveTool } from '@/components/blocks/tools'
 import { groupConversationRecords } from '@/engines/conversationGroups'
 import { isRenderableEngineSegment } from '@/engines/processGroups'
@@ -103,6 +104,7 @@ const snapshot = ref<RuntimeSnapshot | null>(null)
 const visualActiveTurnId = ref<string | null>(null)
 const runtimeId = ref<unknown>(null)
 const models = ref<ModelDescriptor[]>([])
+const modelsRefreshing = ref(false)
 const actions = ref<SessionActions | null>(null)
 const selectedModel = ref<string | null>(null)
 const selectedEffort = ref<string | null>(null)
@@ -146,7 +148,8 @@ const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
 const { confirm, confirmMulti } = useConfirm()
-const { channels, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts } = useChannels()
+const { notifyTransient } = useNotifications()
+const { channels, defaultSessionChannels, defaultSessionModels, defaultSessionEfforts, syncChannelModels } = useChannels()
 const toolFoldState = provideToolFoldState()
 const { toolDisplayModeRevision } = useToolDisplayMode()
 provide(TOOL_FOLD_INTERACTION, stopTimelineFollow)
@@ -1053,6 +1056,41 @@ async function loadRuntimeConfiguration() {
   }
 }
 
+async function refreshRuntimeModels() {
+  const target = reference.value
+  if (!target || modelsRefreshing.value) return
+  const generation = sessionGeneration
+  const sessionId = props.session.id
+  modelsRefreshing.value = true
+  try {
+    const channel = effectiveChannel.value
+    const shouldSyncChannel = !!channel && channelModelCatalogSyncable(channel, sessionEngineId.value)
+    const loadedModels = await listModels(target.engine)
+    const channelResult = shouldSyncChannel ? await syncChannelModels(channel.id, 'codex') : null
+    if (!isCurrentTarget(target, generation) || props.session.id !== sessionId) return
+    if (shouldSyncChannel && (!channelResult?.online || channelResult.models.length === 0)) {
+      notifyTransient(t('topbar.modelRefreshFailed'), t('topbar.modelRefreshUnavailable'))
+      return
+    }
+    if (loadedModels.length === 0 && !channelResult?.models.length) {
+      notifyTransient(t('topbar.modelRefreshFailed'), t('topbar.modelRefreshEmpty'))
+      return
+    }
+    models.value = loadedModels
+    const visibleModels = channelResult?.models
+      ?? loadedModels.filter(model => !model.hidden).map(model => model.model)
+    notifyTransient(t('topbar.modelRefreshSuccess', { count: new Set(visibleModels).size }))
+  } catch (cause) {
+    if (isCurrentTarget(target, generation) && props.session.id === sessionId) {
+      notifyTransient(t('topbar.modelRefreshFailed'), causeMessage(cause))
+    }
+  } finally {
+    if (isCurrentTarget(target, generation) && props.session.id === sessionId) {
+      modelsRefreshing.value = false
+    }
+  }
+}
+
 type AttachOutcome = 'attached' | 'writer-conflict' | 'failed'
 
 async function rebindCurrentDraftChannel(): Promise<boolean> {
@@ -1742,6 +1780,7 @@ watch(() => props.session.id, async () => {
   try {
     resetSessionBanner()
     fastModeNotice.value = null
+    modelsRefreshing.value = false
     records.value = []
     liveRecords.value = []
     clearedRecordIds.value = new Set()
@@ -1911,7 +1950,10 @@ onUnmounted(() => {
             v-if="interactive"
             :engine-config="capsuleConfig"
             :fast-mode-notice="fastModeNotice"
+            model-refreshable
+            :models-refreshing="modelsRefreshing"
             :narrow="containerWidth < 280"
+            @refresh-models="refreshRuntimeModels"
             @model-change="onEngineModelChange"
             @effort-change="onEngineEffortChange"
             @fast-mode-change="onEngineFastModeChange"

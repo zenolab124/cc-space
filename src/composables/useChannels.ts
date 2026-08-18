@@ -86,6 +86,13 @@ export function channelSupportsEngine(channel: ChannelInfo, engineId: string): b
   return channel.engineSupport.includes(engineId)
 }
 
+/** 会话模型菜单能否直接向该渠道请求模型目录；引擎差异只在渠道适配层判断。 */
+export function channelModelCatalogSyncable(channel: ChannelInfo, engineId: string): boolean {
+  if (engineId === 'claude-code') return channelSupportsEngine(channel, engineId)
+  if (engineId === 'codex') return channel.codex?.mode === 'managed'
+  return false
+}
+
 export function engineChannelBinding(
   channel: ChannelInfo | null | undefined,
   engineId: string,
@@ -126,6 +133,8 @@ export function engineChannelFromProvider(
 }
 
 const channels = ref<ChannelInfo[]>([])
+/** 会话内主动同步的上游模型目录；覆盖磁盘快照，应用重启后自然失效。 */
+const syncedModelCatalogs = new Map<string, string[]>()
 const defaultSessionChannels = ref<Record<SessionEngineId, string | null>>({
   'claude-code': null,
   codex: null,
@@ -145,7 +154,10 @@ const defaultAgentEffort = computed(() => defaultAgentEfforts.value[defaultAgent
 export async function refreshChannels(): Promise<void> {
   try {
     const r = await invoke<ChannelListResult>('list_channels')
-    channels.value = r.channels
+    channels.value = r.channels.map(channel => {
+      const syncedModels = syncedModelCatalogs.get(channel.id)
+      return syncedModels ? { ...channel, availableModels: syncedModels } : channel
+    })
     defaultSessionChannels.value = {
       'claude-code': r.defaultSessionChannels?.['claude-code']
         ?? r.defaultSessionChannel
@@ -419,7 +431,11 @@ export interface ProbeDraft {
   adapter: 'claude-code' | 'codex' | 'openai-chat'
 }
 
-async function probeChannel(id: string, draft?: ProbeDraft): Promise<ProbeResult | null> {
+async function probeChannel(
+  id: string,
+  draft?: ProbeDraft,
+  savedAdapter?: ProbeDraft['adapter'],
+): Promise<ProbeResult | null> {
   activeProbeCounts.set(id, (activeProbeCounts.get(id) ?? 0) + 1)
   probing.value = { ...probing.value, [id]: true }
   try {
@@ -428,7 +444,7 @@ async function probeChannel(id: string, draft?: ProbeDraft): Promise<ProbeResult
       baseUrl: draft?.baseUrl ?? null,
       token: draft?.token ?? null,
       protocol: null,
-      adapter: draft?.adapter ?? null,
+      adapter: draft?.adapter ?? savedAdapter ?? null,
     })
     probeResults.value = { ...probeResults.value, [id]: result }
     return result
@@ -440,6 +456,24 @@ async function probeChannel(id: string, draft?: ProbeDraft): Promise<ProbeResult
     else activeProbeCounts.delete(id)
     probing.value = { ...probing.value, [id]: remaining > 0 }
   }
+}
+
+/**
+ * 从已保存渠道同步上游模型目录，仅覆盖本次应用会话的模型快照。
+ * 会话侧刷新不改写渠道配置，避免一次查看动作产生持久化副作用。
+ */
+async function syncChannelModels(
+  id: string,
+  adapter: ProbeDraft['adapter'],
+): Promise<ProbeResult | null> {
+  const result = await probeChannel(id, undefined, adapter)
+  if (!result?.online || result.models.length === 0) return result
+  const models = [...new Set(result.models.map(model => model.trim()).filter(Boolean))]
+  syncedModelCatalogs.set(id, models)
+  channels.value = channels.value.map(channel =>
+    channel.id === id ? { ...channel, availableModels: models } : channel,
+  )
+  return { ...result, models }
 }
 
 async function probeAllChannels(): Promise<void> {
@@ -502,6 +536,7 @@ export function useChannels() {
     setAgentFeatureModel,
     revealChannelsDir,
     probeChannel,
+    syncChannelModels,
     probeAllChannels,
     revealedTokens,
     revealToken,
