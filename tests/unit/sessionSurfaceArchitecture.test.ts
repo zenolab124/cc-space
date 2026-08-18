@@ -210,15 +210,25 @@ describe('unified session surface architecture', () => {
     }
   })
 
-  it('defers Codex attachment until send and forks only after an explicit conflict choice', () => {
+  it('releases an owned Codex writer before channel reattachment and forks only after an external conflict choice', () => {
     const controller = source('../../src/components/engine/EngineSessionDetail.vue')
+    const client = source('../../src/engines/client.ts')
     const mounted = controller.slice(
       controller.indexOf('onMounted(async () =>'),
       controller.indexOf('onUnmounted(() =>'),
     )
+    const closePosition = controller.indexOf('await closeSession(reference.value)')
+    const attachPosition = controller.indexOf('const attached = await attachSession(reference.value')
 
     expect(mounted).toContain('loadRuntimeConfiguration()')
     expect(mounted).not.toContain('ensureAttached()')
+    expect(client).toContain("return invoke('engine_close_session', { session })")
+    expect(closePosition).toBeGreaterThan(-1)
+    expect(closePosition).toBeLessThan(attachPosition)
+    expect(controller).toContain("runtimeId.value = event.payload.phase === 'detached' ? null : event.payload.runtimeId")
+    expect(controller).toContain('runtimeActive.value || visualActiveTurnId.value !== null || sending.value')
+    expect(controller).toContain('const queueForNextTurn = isBusy.value')
+    expect(controller).toContain('visualActiveTurnId.value = turn.reference.nativeTurnId')
     expect(controller).toContain("type AttachOutcome = 'attached' | 'writer-conflict' | 'failed'")
     expect(controller).toContain("const choice = await confirmMulti(t('engine.codex.writerConflictMessage')")
     expect(controller).toContain("if (choice === 'retry') continue")

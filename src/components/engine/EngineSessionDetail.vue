@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { relativeTime, type SessionSummary } from '@/types'
 import type { ConversationRecord, InteractionRequest, ModelDescriptor, RuntimeEventEnvelope, RuntimeInputItem, RuntimeSnapshot, SessionActions, SessionRef } from '@/engines/types'
-import { attachSession, createSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurnWithInput } from '@/engines/client'
+import { attachSession, closeSession, createSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurnWithInput } from '@/engines/client'
 import type { SourceChangeEnvelope } from '@/engines/events'
 import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
@@ -644,7 +644,7 @@ const runtimeUnavailableReason = computed(() => {
   return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
 })
 const runtimeActive = computed(() => snapshot.value?.phase === 'running' || snapshot.value?.phase === 'awaitingInteraction')
-const isBusy = computed(() => runtimeActive.value || sending.value)
+const isBusy = computed(() => runtimeActive.value || visualActiveTurnId.value !== null || sending.value)
 const activeTurnId = computed(() => snapshot.value?.activeTurnId ?? null)
 const canSendWhileBusy = computed(() => canSend.value)
 const composerQueueItems = computed<ComposerQueueItem[]>(() => queuedInputs.value.map(item => ({
@@ -1210,6 +1210,14 @@ async function ensureAttached(): Promise<AttachOutcome> {
       || !sameRuntimeChannel(attachedChannel.value ?? null, selectedChannel.value)
       || attachedCapabilityFingerprint.value !== capabilityFingerprint
     ) {
+      if (runtimeId.value) {
+        // thread/resume 不会替换当前 writer。切换渠道或会话能力前先释放 Monet
+        // 自己的订阅，否则 Codex 会把旧挂载误报成“其他客户端占用”。
+        await closeSession(reference.value)
+        runtimeId.value = null
+        runtimeProviderId.value = null
+        snapshot.value = null
+      }
       const attached = await attachSession(reference.value, {
         ...(selectedChannel.value ? { channelId: selectedChannel.value } : {}),
         ...(selectedModel.value ? { model: selectedModel.value } : {}),
@@ -1442,6 +1450,11 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
       optimisticId,
       turn.reference.nativeTurnId,
     )
+    // turn/start 的响应与 turnStarted 事件经两条异步通道返回；响应先到时也要
+    // 立即占住本地 busy 状态，避免事件抵达前重挂载或启动第二个 turn。
+    if (!completedTurnIds.has(turn.reference.nativeTurnId)) {
+      visualActiveTurnId.value = turn.reference.nativeTurnId
+    }
     return true
   } catch (cause) {
     liveRecords.value = liveRecords.value.filter(record => record.id !== optimisticId)
@@ -1456,7 +1469,7 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
 }
 
 async function consumeQueuedInput() {
-  if (runtimeActive.value || sending.value || preparingInput.value || queuedInputs.value.length === 0) return
+  if (isBusy.value || preparingInput.value || queuedInputs.value.length === 0) return
   const next = queuedInputs.value.shift()!
   const sent = await submitRuntimeInput(next, false)
   if (!sent) queuedInputs.value.unshift(next)
@@ -1504,7 +1517,7 @@ async function send() {
       explicitSkill = { name: parsed.cmd.name, path: parsed.cmd.path }
     }
   }
-  const queueForNextTurn = runtimeActive.value
+  const queueForNextTurn = isBusy.value
   let consumeAfterPreparation = false
   preparingInput.value = true
   try {
@@ -1525,7 +1538,7 @@ async function send() {
       resetComposerField()
       imageInput.clearImages()
       queuedInputs.value.push(queuedItem)
-      consumeAfterPreparation = !runtimeActive.value
+      consumeAfterPreparation = !isBusy.value
       return
     }
 
@@ -1879,7 +1892,7 @@ onMounted(async () => {
   unlistenSnapshot = await listen<RuntimeSnapshot>('engine-runtime-snapshot', event => {
     if (ownsSession(event.payload.session)) {
       snapshot.value = event.payload
-      runtimeId.value = event.payload.runtimeId
+      runtimeId.value = event.payload.phase === 'detached' ? null : event.payload.runtimeId
       visualActiveTurnId.value = syncRuntimeVisualActivity(
         visualActiveTurnId.value,
         event.payload,

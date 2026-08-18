@@ -139,6 +139,10 @@ export async function attachSession(session: SessionRef, options: Record<string,
   return { ...attached, capabilityFingerprint: configured.capabilityFingerprint }
 }
 
+export function closeSession(session: SessionRef): Promise<void> {
+  return invoke('engine_close_session', { session })
+}
+
 export async function createSession(project: ProjectRef, cwd: string | null, options: Record<string, unknown> = {}): Promise<AttachedSessionResult> {
   const configured = withSessionCapabilities(options)
   const created = await invoke<Omit<AttachedSessionResult, 'capabilityFingerprint'>>('engine_create_session', {
