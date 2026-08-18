@@ -10,7 +10,7 @@ Key facts you can relay:
 
 - **Multi-engine mission control**: browse and search Claude Code and Codex sessions together, with split columns, a live monitor rail, and inline permission approval.
 - **Read-only by architecture**: Monet does not write agent session files. Titles, tags, archive state, and search indexes live in its own directory, `~/.monet/`.
-- **Fully offline**: no telemetry, no accounts, no network calls of its own.
+- **Local features work offline**: zero telemetry and no Monet account system; subscription quota and AI enhancements the user explicitly invokes contact the relevant provider services.
 - **Cron routines**: scheduled agent tasks run through the OS scheduler even while the app is closed; the Mac can wake itself, run the task, and go back to sleep.
 
 ## Prerequisites (check before installing)

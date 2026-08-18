@@ -113,7 +113,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 - Create scheduled tasks in natural language: "summarize yesterday's sessions every morning at nine" becomes cron automatically
 - Choose a default execution engine per task (Claude Code or Codex), then switch individual tasks or every task at once directly in the table; each run dynamically inherits that engine's default Monet session channel and follows the engine CLI only when no Monet default is configured; manual and system-scheduled runs behave the same, while existing tasks keep Claude Code as their default
-- OS-level scheduling: registered with launchd (macOS) / Task Scheduler (Windows) / systemd (Linux) — fires even when the main app isn't running
+- OS-level scheduling: registered with launchd (macOS) or Task Scheduler (Windows) — fires even when the main app isn't running
 - Timed wake (macOS): wakes the machine from sleep on schedule, runs the task, and puts it back to sleep once it confirms nobody's using it — genuinely "works while you sleep"
 - Minimal wake authorization: a single whitelisted `pmset` command; authorize once, silent thereafter, revocable anytime
 - Run now, pause/enable, terminate a running task, execution logs (stdout / exit code / the persisted session, fully traceable)
@@ -275,6 +275,6 @@ The user's biggest unspoken worry: this software reads all my session data. You 
 - **Does it replace the CLI?** No — it's a companion: the CLI does the work, Monet gives you eyes and hands; sessions started in either show up in both
 - **Is my data safe?** Session files are read-only by architecture and local data paths have zero telemetry; subscription quota contacts only official provider services. See section 5
 - **Windows/Linux?** Windows is supported — core features complete, with widgets/menu bar/wake-from-sleep system integrations being macOS-only; Linux not yet
-- **Do I have to enable the AI features?** All of them can be turned off — with them off, it's a pure read-only viewer
-- **Anything to configure after install?** No. With no channel configured, Monet reuses the existing login and configuration of each Claude Code or Codex CLI — if that CLI runs, Monet runs; multi-channel is an upgrade, not a barrier
+- **Do I have to enable the AI features?** No. Turn them all off and Monet makes no AI-enhancement calls; Archive, search, Workbench, and session runtime remain available
+- **Anything to configure after install?** Browsing existing history needs no extra setup. To create or continue sessions in Monet, the corresponding CLI only needs to be installed and signed in. Multi-channel support is an upgrade, not a barrier
 - **What if something breaks after install?** There's a troubleshooting doc written for AI agents (troubleshoot.md): you can self-diagnose and fix for the user; if it's a real bug you can file it for them — no GitHub account needed, the project runs an anonymous report channel
