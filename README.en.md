@@ -41,47 +41,44 @@
 </p>
 
 <p align="center">
-  <img src=".github/assets/workbench-hero.webp" alt="Monet workbench — multi-column sessions, session monitor, inline HTML rendering, and live background agents" width="920">
+  <img src=".github/assets/workbench-hero.webp" alt="Monet race workbench — four agents creating in parallel with live result comparison" width="920">
 </p>
 
 ## What is Monet?
 
-Every conversation you have with a coding agent is scattered across terminal windows — close one and it's gone, run several and you can't keep up, start a long task and all you can do is wait.
+Your conversations with coding agents are scattered across terminals, projects, and session histories — reviewing means digging, parallel work means switching windows, and long-running jobs keep pulling you back to check progress.
 
 Monet gathers Claude Code, Codex, and future engines onto one wall: every agent session browsable, searchable, and commandable in parallel. The agent does the work; Monet gives you eyes and hands.
 
 ## Why Monet?
 
-**However many engines, one wall.** Claude Code and Codex are just the start: one archive, one search, one workbench wall, every agent session wearing its engine badge. Race mode pits engines against the same prompt; scheduled routines run on whichever agent you assign — choosing an engine becomes as natural as choosing a model. The engine layer was built to seat more, and a new engine joining changes none of your habits.
+**However many engines, one wall.** Claude Code and Codex share one Archive, one search, and one Workbench, with an engine badge on every session. Race mode pits engines against the same prompt, while scheduled routines can run on whichever engine you choose — selecting an engine feels as natural as selecting a model.
 
-**Command your agents like a trader watches the market.** Unlimited parallel session columns spread out horizontally; the monitor rail shows every session's status, output, and token spend at a glance. Approve permissions, answer questions, retry failures — one click on the card. You stop being the person alt-tabbing between terminals and become the one at the command desk.
+**Command your agents like a trader watches the market.** Unlimited parallel session columns spread out horizontally; the monitor rail puts status, output, and token usage at a glance. Approve permissions, answer questions, and retry failures directly from the cards.
 
-**A home for multi-channel players.** Official subscription, third-party APIs, self-hosted proxies, local models — each session on its own channel, hot-switchable mid-conversation: a strong model for the hard turn, a cheap channel for the chores. "Follow CLI" and "Official Direct" stand side by side, and the settings page shows exactly where your CLI config points.
+**A home for multi-channel players.** Official subscriptions, third-party APIs, self-hosted proxies, local models — each session can use its own channel and switch mid-conversation. Put a strong model on the hard problems and a cheaper channel on routine work, with connections and models always visible.
 
-**Your data stays yours.** Engine transcripts are read-only by architecture: Claude Code JSONL and Codex session files are never written. Codex runtime operations use the local official App Server when its CLI is installed, without rewriting rollouts. Zero telemetry and no Monet account system; titles, tags, stars, and soft-delete markers live separately in `~/.monet/`, so uninstalling leaves original sessions untouched.
-
-**It works while you sleep.** Scheduled tasks run through the OS scheduler even with Monet closed; your Mac can wake itself on time, run the task, and go back to sleep. System notifications call you back whenever needed — you can walk away, the work doesn't stop.
+**Your data stays yours.** Claude Code JSONL and Codex rollouts are read-only by architecture, while Monet's titles, tags, stars, and other metadata live separately in `~/.monet/`. Local session features work offline, with zero telemetry and no Monet account system; only subscription quota and AI enhancements you explicitly use contact the relevant provider services.
 
 ## Features
 
 ### Multi-engine system — Claude Code and Codex together
 
-- Archive, search, Workbench, and notifications can hold Claude Code and Codex sessions at the same time, with engine badges and filters throughout
-- Codex reads existing history directly from its local session files; when the CLI is installed, the local `codex app-server` adds create/resume, streaming, sending while a turn is running, interruption, command/file/permission approvals, and dynamic model/effort discovery
-- Engine Center reports installation, authentication, version, capabilities, and diagnostics independently; one broken engine does not block another
-- The internal Engine Adapter contract unifies identity, history sources, timelines, runtimes, capabilities, and optional facets, so another engine needs no new top-level IPC or shared storage schema
-- Claude Code keeps its mature native Workbench, channels, Workshop, and automation features; every other surface is capability-driven and hides actions that cannot succeed
+- Claude Code and Codex projects, sessions, and timelines enter the same Archive, search, Workbench, and notifications, with filters by engine
+- You can browse existing history without the corresponding CLI; install and sign in to the CLI to create, resume, and keep running sessions in Monet
+- Both engines share a familiar session shell and input experience, while the interface only shows actions the current engine actually supports
+- Engine Center reports installation, authentication, version, capabilities, and diagnostics independently; one broken engine does not block another, and future engines can join through the same contract
 
 ### Workbench — parallel agent command
 
 - No cap on column count; when the screen runs out, scroll horizontally — wheel input glides like a native trackpad
 - Monitor rail overviews every session: live status, tail output, token usage; approve/retry/answer right on the card
 - Permission requests as GUI cards: dangerous commands flagged in red, AI annotates the risk in plain language; `Enter` to allow, `Esc` to deny
-- **Race mode**: broadcast one question to different models/channels, compare answers and cost side by side
+- **Race mode**: broadcast one question to different engines, models, or channels, then compare answers and cost side by side
 - **Panorama export**: capture the entire workbench wall as one image — share or archive the battle at a glance
 
 <p align="center">
-  <img src=".github/assets/race-mode.webp" alt="Race mode — one question broadcast to four models, thinking and answers compared side by side" width="920">
+  <img src=".github/assets/workbench-columns.webp" alt="Monet multi-column Workbench — session monitoring, parallel columns, inline HTML rendering, and live background tasks" width="920">
 </p>
 
 ### Session running — the CLI session, now in a GUI
@@ -177,21 +174,13 @@ pnpm install
 pnpm tauri dev
 ```
 
-### Release Build (with widget + signing)
+### Local Build
 
 ```bash
-pnpm release
+pnpm tauri build
 ```
 
-This runs `tauri build`, compiles the macOS widget extension, embeds it into the app bundle, signs everything, and creates a `.dmg`.
-
-To set up a local signing identity (recommended — keeps TCC permissions stable across rebuilds):
-
-```bash
-scripts/setup-signing.sh
-```
-
-Without it, the build falls back to ad-hoc signing — functional, but TCC permissions reset on each rebuild and widgets may not register.
+This builds the frontend, MCP binary, and main Tauri application. For official distribution packages, use the [Releases](../../releases) page.
 
 ## Data & Privacy
 
@@ -204,20 +193,18 @@ Without it, the build falls back to ad-hoc signing — functional, but TCC permi
 
 Local session features work offline, with zero telemetry and no Monet account system. Subscription quota contacts only the official Claude/Codex services and reuses the official clients' existing sign-in state; Monet never proactively refreshes or writes OAuth credentials. Credential discipline: API tokens never enter command-line arguments, and temporary files are deleted right after use.
 
-On upgrade, legacy `metadata.json` is migrated idempotently to the engine-scoped `metadata-v2.json`; the old file is never deleted or overwritten. Search cache is rebuilt under `search/v2/`, partitioned by engine and project. Rolling back leaves the original Claude data usable, and upgrading again does not overwrite newer state.
-
 ## FAQ
 
 > Something broken? Skip the docs — hand this to your AI: `Read https://raw.githubusercontent.com/zenolab124/monet/main/llms.txt and help me troubleshoot Monet`. It can self-diagnose common issues and, if it's a real bug, file a report with diagnostics attached (no GitHub account needed).
 
-**Does Monet replace the Claude Code CLI?**
-No — it's a companion. The CLI does the work; Monet gives you eyes and hands. Sessions started in either show up in both.
+**Does Monet replace the Claude Code or Codex CLI?**
+No — it is a companion to those CLIs. The agents do the work; Monet gives you eyes and hands. Sessions started from a terminal or from Monet can be viewed together.
 
 **Is my session data safe?**
-Read-only by architecture, verifiable in the open source. Delete Monet and your Claude Code data is untouched.
+Original session files are read-only by architecture, verifiable in the open source. Delete Monet and your Claude Code and Codex session data remain untouched.
 
 **Anything to configure after install?**
-No. If the CLI runs, Monet runs; multi-channel and AI value-add are optional upgrades.
+Browsing existing history needs no extra setup. To create or continue sessions in Monet, the corresponding CLI only needs to be installed and signed in. Multi-channel support and AI enhancements are optional.
 
 **Gatekeeper warning on first launch?**
 There shouldn't be one — stable releases are notarized by Apple and open right away. If you are still blocked, you are running an early un-notarized build: grab the latest release, or grant a one-time exception under System Settings → Privacy & Security → **Open Anyway**.
@@ -226,7 +213,7 @@ There shouldn't be one — stable releases are notarized by Apple and open right
 Windows is supported (core features complete, minus macOS system integrations); Linux has no near-term plans.
 
 **Which agents are supported?**
-Claude Code and Codex are supported today. Monet is an engine system rather than two platform-specific branches; another production adapter implements only its protocol and capability declaration. See the [Engine Adapter guide](ENGINE_ADAPTERS.md).
+Claude Code and Codex are supported today, with future engines able to join through the same contract. Developers can read the [Engine Adapter guide](ENGINE_ADAPTERS.md).
 
 ## Tech Stack
 
