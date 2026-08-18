@@ -179,18 +179,10 @@ function createCaptureSurface(source: HTMLElement, width: number, height: number
   }
 }
 
-async function renderPanorama(): Promise<Blob> {
-  const root = document.querySelector<HTMLElement>('[data-workbench-capture-root]')
-  const scroller = document.querySelector<HTMLElement>('[data-workbench-panorama]')
-  if (!root || !scroller) throw new Error(i18n.global.t('workbench.capture.unavailable'))
-
-  const rootRect = root.getBoundingClientRect()
-  const layout = calculatePanoramaLayout(
-    rootRect.width,
-    rootRect.height,
-    scroller.clientWidth,
-    scroller.scrollWidth,
-  )
+async function renderExpandedSurface(
+  root: HTMLElement,
+  layout: ReturnType<typeof calculatePanoramaLayout>,
+): Promise<HTMLCanvasElement> {
   const surface = createCaptureSurface(root, layout.width, layout.height)
 
   try {
@@ -198,7 +190,7 @@ async function renderPanorama(): Promise<Blob> {
     await nextFrame()
     await nextFrame()
 
-    const canvas = await html2canvas(surface.root, {
+    return await html2canvas(surface.root, {
       width: layout.width,
       height: layout.height,
       scale: layout.pixelRatio,
@@ -214,10 +206,24 @@ async function renderPanorama(): Promise<Blob> {
       windowWidth: layout.width,
       windowHeight: layout.height,
     })
-    return await canvasToBlob(canvas)
   } finally {
     surface.dispose()
   }
+}
+
+async function renderPanorama(): Promise<Blob> {
+  const root = document.querySelector<HTMLElement>('[data-workbench-capture-root]')
+  const scroller = document.querySelector<HTMLElement>('[data-workbench-panorama]')
+  if (!root || !scroller) throw new Error(i18n.global.t('workbench.capture.unavailable'))
+
+  const rootRect = root.getBoundingClientRect()
+  const layout = calculatePanoramaLayout(
+    rootRect.width,
+    rootRect.height,
+    scroller.clientWidth,
+    scroller.scrollWidth,
+  )
+  return await canvasToBlob(await renderExpandedSurface(root, layout))
 }
 
 interface NativeCaptureTile {
@@ -252,6 +258,11 @@ async function renderNativePanorama(): Promise<Blob> {
   const originalScrollLeft = scroller.scrollLeft
   const tiles: NativeCaptureTile[] = []
   const atmosphere = document.body
+
+  // 原生 tile 只覆盖横向滚动的列区。先以全景宽度重排并渲染完整外壳，
+  // 让标题栏与底部输入区自然延伸到最终宽度；随后再用 WebKit tile
+  // 覆盖列区，保留 iframe 等原生渲染内容。
+  const expandedSurface = await renderExpandedSurface(root, layout)
 
   root.classList.add('workbench-native-capture-active')
   atmosphere.classList.add('workbench-native-atmosphere-active')
@@ -288,22 +299,17 @@ async function renderNativePanorama(): Promise<Blob> {
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
 
-  const first = tiles[0].image
-  context.drawImage(first, 0, 0, rootRect.width * outputScale, rootRect.height * outputScale)
-  const extraWidth = layout.width - rootRect.width
-  if (extraWidth > 0) {
-    context.drawImage(
-      first,
-      first.naturalWidth - nativeScale,
-      0,
-      nativeScale,
-      first.naturalHeight,
-      rootRect.width * outputScale,
-      0,
-      extraWidth * outputScale,
-      rootRect.height * outputScale,
-    )
-  }
+  context.drawImage(
+    expandedSurface,
+    0,
+    0,
+    expandedSurface.width,
+    expandedSurface.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  )
 
   for (const tile of tiles) {
     context.drawImage(
