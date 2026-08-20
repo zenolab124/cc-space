@@ -24,10 +24,20 @@ Monet 是免费开源的桌面应用，把 Claude Code、Codex 等编码 Agent �
 **首选——Homebrew（macOS）：**
 
 ```bash
-brew install --cask zenolab124/tap/monet
+brew install --cask monet
 ```
 
-完整名称会让 Homebrew 6 只信任 Monet 这一项，无需另外执行 `brew trust`。
+Monet 已收录进 Homebrew 官方 Cask，无需额外添加 tap 或执行 `brew trust`。
+
+如果机器上曾通过旧版 `zenolab124/tap` 安装，按以下顺序迁移到官方 cask：
+
+```bash
+brew uninstall --cask monet
+brew untap zenolab124/tap
+brew install --cask monet
+```
+
+普通卸载只移除 app 和 Homebrew 安装记录，不会删除 `~/.monet/` 中的设置与数据。
 
 **备选——直接下载：** 从 `https://github.com/zenolab124/monet/releases/latest` 获取最新安装包（macOS 用 `.dmg`，Windows 用 NSIS `.exe`），macOS 挂载后把 `Monet.app` 拖入 `/Applications`。
 

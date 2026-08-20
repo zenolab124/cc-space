@@ -24,10 +24,20 @@ Key facts you can relay:
 **Preferred — Homebrew:**
 
 ```bash
-brew install --cask zenolab124/tap/monet
+brew install --cask monet
 ```
 
-The fully qualified name makes Homebrew 6 trust only the Monet cask, so no separate `brew trust` command is needed.
+Monet is available from the official Homebrew Cask repository, with no extra tap or `brew trust` step required.
+
+If the machine previously installed Monet from the legacy `zenolab124/tap`, migrate to the official cask in this order:
+
+```bash
+brew uninstall --cask monet
+brew untap zenolab124/tap
+brew install --cask monet
+```
+
+A regular uninstall removes only the app and Homebrew installation record; settings and data under `~/.monet/` remain intact.
 
 **Fallback — direct download:** fetch the latest installer from `https://github.com/zenolab124/monet/releases/latest` (`.dmg` for macOS, NSIS `.exe` for Windows); on macOS mount it and copy `Monet.app` into `/Applications`.
 

@@ -143,10 +143,20 @@ Monet 把 Claude Code、Codex 等引擎收进一面墙：所有 Agent 会话可�
 **Homebrew**（macOS）：
 
 ```bash
-brew install --cask zenolab124/tap/monet
+brew install --cask monet
 ```
 
-完整名称会让 Homebrew 6 只信任 Monet 这一项，无需另外执行 `brew trust`。
+Monet 已收录进 Homebrew 官方 Cask，无需额外添加 tap 或执行 `brew trust`。
+
+从旧版 `zenolab124/tap` 迁移：
+
+```bash
+brew uninstall --cask monet
+brew untap zenolab124/tap
+brew install --cask monet
+```
+
+普通卸载只移除 app 和 Homebrew 安装记录，不会删除 `~/.monet/` 中的设置与数据。
 
 或从 [Releases](../../releases) 下载：macOS `.dmg` / Windows 安装包。
 
