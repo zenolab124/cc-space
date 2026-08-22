@@ -68,10 +68,11 @@ describe('artifact preview security boundary', () => {
     expect(card).toContain('@wheel.prevent.stop')
   })
 
-  it('canonicalizes both roots and files before containment checks', () => {
+  it('allows artifact previews outside the workspace after canonicalization', () => {
     expect(backend).toContain('let root = root')
     expect(backend).toContain('.canonicalize()')
-    expect(backend).toContain('if !candidate.starts_with(&root)')
+    expect(backend).toContain('let resolved = resolve_local_file(Path::new(&root), Path::new(&path))?')
+    expect(backend).not.toContain('read_artifact_preview(root: String, path: String) -> Result<ArtifactPreview, String> {\n    let resolved = resolve_workspace_file')
   })
 
   it('opens Markdown file links only through the workspace-bound command', () => {
