@@ -116,7 +116,7 @@ async function openMarkdownLink(href: string) {
     const path = normalizeLocalFileLink(href)
     const root = sessionFileRoot?.value
     if (!path || !root) throw new Error(t('artifactPreview.fileLinkUnavailable'))
-    await invoke('open_workspace_file', { root, path })
+    await invoke('open_local_file', { root, path })
   } catch (cause) {
     notifyTransient(t('common.openFailed'), String(cause))
   }

@@ -85,17 +85,6 @@ fn resolve_local_file(root: &Path, requested: &Path) -> Result<PathBuf, String> 
     Ok(candidate)
 }
 
-fn resolve_workspace_file(root: &Path, requested: &Path) -> Result<PathBuf, String> {
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|error| format!("无法访问会话工作目录: {error}"))?;
-    let candidate = resolve_local_file(&canonical_root, requested)?;
-    if !candidate.starts_with(&canonical_root) {
-        return Err("文件不在当前会话工作目录内".to_string());
-    }
-    Ok(candidate)
-}
-
 fn validate_image_bytes(media_type: &str, bytes: &[u8]) -> bool {
     match media_type {
         "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -149,14 +138,14 @@ pub fn read_artifact_preview(root: String, path: String) -> Result<ArtifactPrevi
 }
 
 #[tauri::command]
-pub fn open_workspace_file(root: String, path: String) -> Result<(), String> {
-    let resolved = resolve_workspace_file(Path::new(&root), Path::new(&path))?;
+pub fn open_local_file(root: String, path: String) -> Result<(), String> {
+    let resolved = resolve_local_file(Path::new(&root), Path::new(&path))?;
     crate::file_opener::open_path(&resolved, false)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{read_artifact_preview, resolve_local_file, resolve_workspace_file};
+    use super::{read_artifact_preview, resolve_local_file};
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -188,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn previews_paths_outside_workspace() {
+    fn resolves_paths_outside_workspace() {
         let root = fixture_root("root");
         let outside = fixture_root("outside");
         fs::create_dir_all(&root).unwrap();
@@ -198,14 +187,18 @@ mod tests {
 
         let resolved = resolve_local_file(&root, &outside_file).unwrap();
         assert_eq!(resolved, outside_file.canonicalize().unwrap());
+
+        let relative_outside_file = Path::new("..")
+            .join(outside.file_name().unwrap())
+            .join("demo.html");
+        let resolved = resolve_local_file(&root, &relative_outside_file).unwrap();
+        assert_eq!(resolved, outside_file.canonicalize().unwrap());
+
         assert!(read_artifact_preview(
             root.to_string_lossy().into_owned(),
             outside_file.to_string_lossy().into_owned(),
         )
         .is_ok());
-
-        let error = resolve_workspace_file(&root, &outside_file).unwrap_err();
-        assert!(error.contains("不在当前会话工作目录内"));
 
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
@@ -213,7 +206,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn previews_symlinks_that_escape_workspace() {
+    fn resolves_symlinks_that_escape_workspace() {
         use std::os::unix::fs::symlink;
 
         let root = fixture_root("symlink-root");
@@ -225,9 +218,6 @@ mod tests {
 
         let resolved = resolve_local_file(&root, Path::new("demo.html")).unwrap();
         assert_eq!(resolved, outside.join("demo.html").canonicalize().unwrap());
-
-        let error = resolve_workspace_file(&root, Path::new("demo.html")).unwrap_err();
-        assert!(error.contains("不在当前会话工作目录内"));
 
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();

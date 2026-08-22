@@ -8,7 +8,7 @@ const scrollCoordinator = readFileSync('src/lib/scrollGestureCoordinator.ts', 'u
 const backend = readFileSync('src-tauri/src/artifact_preview.rs', 'utf8')
 const blockText = readFileSync('src/components/blocks/BlockText.vue', 'utf8')
 
-describe('artifact preview security boundary', () => {
+describe('artifact previews and local file links', () => {
   it('keeps scripts inert until the user enables them inside an opaque iframe', () => {
     expect(card).toContain('sandbox="allow-scripts"')
     expect(card).not.toContain('allow-same-origin')
@@ -72,12 +72,12 @@ describe('artifact preview security boundary', () => {
     expect(backend).toContain('let root = root')
     expect(backend).toContain('.canonicalize()')
     expect(backend).toContain('let resolved = resolve_local_file(Path::new(&root), Path::new(&path))?')
-    expect(backend).not.toContain('read_artifact_preview(root: String, path: String) -> Result<ArtifactPreview, String> {\n    let resolved = resolve_workspace_file')
+    expect(backend).not.toContain('candidate.starts_with(&canonical_root)')
   })
 
-  it('opens Markdown file links only through the workspace-bound command', () => {
-    expect(blockText).toContain("invoke('open_workspace_file', { root, path })")
-    expect(backend).toContain('pub fn open_workspace_file(root: String, path: String)')
-    expect(backend).toContain('resolve_workspace_file(Path::new(&root), Path::new(&path))?')
+  it('opens Markdown file links outside the workspace after canonicalization', () => {
+    expect(blockText).toContain("invoke('open_local_file', { root, path })")
+    expect(backend).toContain('pub fn open_local_file(root: String, path: String)')
+    expect(backend).toContain('if !candidate.is_file()')
   })
 })
