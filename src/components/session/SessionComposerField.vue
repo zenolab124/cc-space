@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -22,12 +22,23 @@ const emit = defineEmits<{
 }>()
 
 const element = ref<HTMLTextAreaElement>()
+let widthObserver: ResizeObserver | null = null
+let resizeFrame = 0
+let observedWidth = 0
 
 function resize() {
   const textarea = element.value
   if (!textarea) return
   textarea.style.height = 'auto'
   textarea.style.height = `${Math.min(textarea.scrollHeight, props.maxHeight)}px`
+}
+
+function scheduleResize() {
+  if (resizeFrame) cancelAnimationFrame(resizeFrame)
+  resizeFrame = requestAnimationFrame(() => {
+    resizeFrame = 0
+    resize()
+  })
 }
 
 function resetHeight() {
@@ -40,8 +51,25 @@ function onInput(event: Event) {
   emit('input', event)
 }
 
-watch(() => props.modelValue, () => nextTick(resize))
-onMounted(resize)
+watch(() => props.modelValue, () => nextTick(scheduleResize))
+onMounted(() => {
+  const textarea = element.value
+  if (!textarea) return
+  observedWidth = textarea.getBoundingClientRect().width
+  resize()
+  widthObserver = new ResizeObserver(([entry]) => {
+    const width = entry?.contentRect.width ?? 0
+    if (width <= 0 || Math.abs(width - observedWidth) < 0.5) return
+    observedWidth = width
+    scheduleResize()
+  })
+  widthObserver.observe(textarea)
+})
+onUnmounted(() => {
+  widthObserver?.disconnect()
+  widthObserver = null
+  if (resizeFrame) cancelAnimationFrame(resizeFrame)
+})
 
 defineExpose({ element, resize, resetHeight })
 </script>
