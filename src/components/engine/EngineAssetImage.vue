@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { resolveAsset } from '@/engines/client'
 import type { ToolResultAttachment } from '@/engines/types'
+import { errorMessage } from '@/utils/errorMessage'
 
 const props = withDefaults(defineProps<{
   attachment: ToolResultAttachment
@@ -31,6 +32,7 @@ function createAssetUrl(result: { mediaType: string; bytes: number[] }): string 
 async function loadAsset() {
   if (assetUrl.value || loadingAsset.value) return
   loadingAsset.value = true
+  assetError.value = null
   try {
     const result = await resolveAsset(
       props.attachment.asset.session,
@@ -41,7 +43,7 @@ async function loadAsset() {
     if (disposed) URL.revokeObjectURL(url)
     else assetUrl.value = url
   } catch (error) {
-    assetError.value = String(error)
+    assetError.value = errorMessage(error, t('common.unknownError'))
   } finally {
     loadingAsset.value = false
   }
@@ -55,6 +57,7 @@ async function openLightbox() {
   lightboxOpen.value = true
   if (fullAssetUrl.value || loadingFullAsset.value) return
   loadingFullAsset.value = true
+  assetError.value = null
   try {
     const result = await resolveAsset(
       props.attachment.asset.session,
@@ -64,7 +67,7 @@ async function openLightbox() {
     if (disposed || !lightboxOpen.value) URL.revokeObjectURL(url)
     else fullAssetUrl.value = url
   } catch (error) {
-    assetError.value = String(error)
+    assetError.value = errorMessage(error, t('common.unknownError'))
   } finally {
     loadingFullAsset.value = false
   }

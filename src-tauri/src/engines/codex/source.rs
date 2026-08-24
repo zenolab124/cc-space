@@ -669,7 +669,14 @@ impl SessionSource for CodexSource {
                             return decode_data_url_asset(url);
                         }
                         if let Some((item_id, input_index)) = &mcp_result {
-                            if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
+                            let matches_item =
+                                item.get("id").and_then(Value::as_str) == Some(item_id.as_str());
+                            let matches_call = item
+                                .get("callId")
+                                .or_else(|| item.get("call_id"))
+                                .and_then(Value::as_str)
+                                == Some(item_id.as_str());
+                            if (!matches_item && !matches_call)
                                 || item.get("type").and_then(Value::as_str) != Some("mcpToolCall")
                             {
                                 continue;
@@ -889,7 +896,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 if let Some(result) = item.get("result").filter(|result| !result.is_null()) {
                     let (content, attachments) = split_mcp_result_content(
                         session,
-                        &id,
+                        &call_id,
                         result.get("content").unwrap_or(&Value::Null),
                     );
                     segments.push(Segment::ToolResult {
@@ -2041,6 +2048,7 @@ mod tests {
             &session,
             &json!({
                 "id": "exec-image-1",
+                "callId": "call-image-1",
                 "type": "mcpToolCall",
                 "tool": "js",
                 "status": "completed",
@@ -2060,12 +2068,12 @@ mod tests {
         assert!(matches!(
             segments.as_slice(),
             [Segment::ToolCall { id, .. }, Segment::ToolResult { content, attachments, .. }]
-                if id == "exec-image-1"
+                if id == "call-image-1"
                     && content.as_array().is_some_and(|items| items.len() == 1)
                     && !content.to_string().contains("aW1hZ2U=")
                     && attachments.len() == 1
                     && attachments[0].media_type == "image/jpeg"
-                    && attachments[0].asset.native_id == "exec-image-1:mcp-result:1"
+                    && attachments[0].asset.native_id == "call-image-1:mcp-result:1"
         ));
 
         let asset = decode_mcp_result_image(&json!({
