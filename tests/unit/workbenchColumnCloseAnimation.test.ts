@@ -10,21 +10,21 @@ describe('workbench column animation', () => {
   it('keeps state removal atomic while animating the rendered column out', () => {
     const workbench = source('../../src/composables/useWorkbench.ts')
     const columns = source('../../src/components/workbench/WorkbenchColumns.vue')
-    const reclaim = workbench.slice(
-      workbench.indexOf('function reclaimColumnWidth'),
+    const remove = workbench.slice(
+      workbench.indexOf('function removeColumnAt'),
       workbench.indexOf('/** 收起列回左列'),
     )
 
-    expect(reclaim).toContain('tab.columns.splice(removedIndex, 1)')
-    expect(reclaim).toContain('tab.columnSizes.splice(removedIndex, 1)')
-    expect(reclaim).not.toContain('setTimeout')
-    expect(reclaim).not.toContain('suppressColumnTransition.value')
+    expect(remove).toContain('tab.columns.splice(removedIndex, 1)')
+    expect(remove).toContain('removeColumnWidth(tab.columnSizes, removedIndex)')
+    expect(remove).not.toContain('setTimeout')
+    expect(remove).not.toContain('suppressColumnTransition.value')
     expect(columns).toContain('name="workbench-column"')
     expect(columns).toContain('@after-leave="onColumnAfterLeave"')
     expect(columns).toContain('.workbench-column-leave-to')
   })
 
-  it('animates proportional expansion and respects reduced motion', () => {
+  it('animates column width changes and respects reduced motion', () => {
     const columns = source('../../src/components/workbench/WorkbenchColumns.vue')
     const sortable = source('../../src/components/workbench/SortableColumn.vue')
 

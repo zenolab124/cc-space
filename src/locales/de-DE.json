@@ -619,7 +619,7 @@
     "zoomLevel": "Zoom-Stufe",
     "zoomLevelHint": "Globale Oberflächengröße anpassen (70% – 150%)",
     "minColumnWidth": "Minimale Spaltenbreite",
-    "minColumnWidthHint": "Minimale Breite pro Werkbank-Spalte. Halten Sie Shift gedrückt, während Sie einen Trenner ziehen, um anzupassen.",
+    "minColumnWidthHint": "Minimal zulässige Breite für jede Werkbank-Spalte.",
     "routineWake": "Geplantes Aufwachen",
     "routineWakeHint": "Umgang mit Routinen, wenn der Laptop im Ruhezustand ist",
     "routineWakePassive": "Passiv — ausführen, wenn der Computer von selbst aufwacht",

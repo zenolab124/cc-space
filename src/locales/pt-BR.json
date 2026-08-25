@@ -619,7 +619,7 @@
     "zoomLevel": "Nível de zoom",
     "zoomLevelHint": "Ajustar escala global da interface (70% – 150%)",
     "minColumnWidth": "Largura mínima da coluna",
-    "minColumnWidthHint": "Largura mínima por coluna da bancada. Segure Shift enquanto arrasta um divisor para ajustar.",
+    "minColumnWidthHint": "Largura mínima permitida para cada coluna da bancada.",
     "routineWake": "Ativação agendada",
     "routineWakeHint": "Como lidar com tarefas agendadas quando o notebook está em suspensão",
     "routineWakePassive": "Passivo — executar quando o computador acordar naturalmente",

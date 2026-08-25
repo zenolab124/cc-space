@@ -619,7 +619,7 @@
     "zoomLevel": "ズームレベル",
     "zoomLevelHint": "グローバル UI サイズを調整（70% ～ 150%）",
     "minColumnWidth": "最小列幅",
-    "minColumnWidthHint": "ワークベンチの各列の最小幅。Shift を押しながら仕切りをドラッグして調整も可能です。",
+    "minColumnWidthHint": "ワークベンチの各列で許可される最小幅。",
     "routineWake": "定時ウェイクアップ",
     "routineWakeHint": "ノート PC がスリープ中の定時タスクの処理方法",
     "routineWakePassive": "パッシブ — コンピュータが自然に復帰した後すぐ実行",

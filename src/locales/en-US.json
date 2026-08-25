@@ -733,7 +733,7 @@
     "zoomLevel": "Zoom Level",
     "zoomLevelHint": "Adjust global UI scale (70% – 150%)",
     "minColumnWidth": "Min Column Width",
-    "minColumnWidthHint": "Minimum width per workbench column. Hold Shift while dragging a divider to adjust.",
+    "minColumnWidthHint": "Minimum width allowed for each workbench column.",
     "routineWake": "Scheduled Wake",
     "routineWakeHint": "How to handle routines when the laptop is asleep",
     "routineWakePassive": "Passive — run when the computer naturally wakes up",

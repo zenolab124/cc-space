@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { fillColumnWidthsProportionally } from '../../src/utils/workbenchColumnLayout'
+import {
+  insertColumnWidth,
+  removeColumnWidth,
+  resizeColumnWidth,
+} from '../../src/utils/workbenchColumnLayout'
 
 describe('workbench column layout', () => {
-  it('fills available width using the existing column proportions', () => {
-    expect(fillColumnWidthsProportionally([400, 600], 1500)).toEqual([600, 900])
+  it('adds a new column without changing existing widths', () => {
+    expect(insertColumnWidth([420, 560], 1, 360)).toEqual([420, 360, 560])
   })
 
-  it('assigns rounding remainder without leaving a trailing gap', () => {
-    const result = fillColumnWidthsProportionally([361, 360, 360], 1400)
-
-    expect(result.reduce((sum, width) => sum + width, 0)).toBe(1400)
-    expect(Math.max(...result) - Math.min(...result)).toBeLessThanOrEqual(2)
+  it('removes only the target column width', () => {
+    expect(removeColumnWidth([420, 360, 560], 1)).toEqual([420, 560])
   })
 
-  it('preserves every remaining width while horizontal overflow remains', () => {
-    expect(fillColumnWidthsProportionally([520, 480, 460], 1000)).toEqual([520, 480, 460])
+  it('resizes only the target column and respects the minimum', () => {
+    expect(resizeColumnWidth([420, 560], 0, 620, 360)).toEqual([620, 560])
+    expect(resizeColumnWidth([420, 560], 1, 120, 360)).toEqual([420, 360])
   })
 })

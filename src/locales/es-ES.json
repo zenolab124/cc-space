@@ -619,7 +619,7 @@
     "zoomLevel": "Escala de la interfaz",
     "zoomLevelHint": "Ajustar la escala global de la interfaz (70% – 150%)",
     "minColumnWidth": "Ancho mínimo de columna",
-    "minColumnWidthHint": "Ancho mínimo por columna del banco de trabajo. Mantén Shift mientras arrastras un divisor para ajustar.",
+    "minColumnWidthHint": "Ancho mínimo permitido para cada columna del banco de trabajo.",
     "routineWake": "Activación programada",
     "routineWakeHint": "Cómo manejar las tareas programadas cuando el portátil está en reposo",
     "routineWakePassive": "Pasivo — ejecutar cuando el equipo despierte naturalmente",

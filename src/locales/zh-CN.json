@@ -733,7 +733,7 @@
     "zoomLevel": "界面缩放",
     "zoomLevelHint": "调整全局界面大小（70% ~ 150%）",
     "minColumnWidth": "工作台最小列宽",
-    "minColumnWidthHint": "工作台每列的最小宽度，也可按住 Shift 拖动分隔线调整",
+    "minColumnWidthHint": "工作台每列允许的最小宽度",
     "routineWake": "定时唤醒",
     "routineWakeHint": "笔记本休眠时如何处理定时任务",
     "routineWakePassive": "被动 — 等电脑自然唤醒后立即执行",

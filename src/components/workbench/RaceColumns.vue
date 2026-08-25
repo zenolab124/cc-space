@@ -12,7 +12,7 @@ import WorkbenchColumnView from './WorkbenchColumn.vue'
 import { shouldSubmitComposer } from '@/components/session/composerAction'
 
 const { activeTab, minColumnWidth, suppressColumnTransition } = useWorkbench()
-const { dragging, shiftDragging, onDividerMouseDown } = useColumnResize()
+const { dragging, onDividerMouseDown } = useColumnResize()
 const { t } = useI18n()
 const { projects } = useProjects()
 const { confirm } = useConfirm()
@@ -173,10 +173,9 @@ function onInputKeydown(e: KeyboardEvent) {
             @select-race-engine="selectRaceEngine"
           />
 
-          <!-- 列右边缘 resize 手柄(与普通多列同款,Shift 调全局最小列宽) -->
+          <!-- 列右边缘 resize 手柄：只调整当前列宽。 -->
           <div
             class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-30"
-            :class="{ 'divider-shift': shiftDragging }"
             @mousedown="onDividerMouseDown($event, i)"
           />
 
@@ -344,9 +343,6 @@ function onInputKeydown(e: KeyboardEvent) {
 }
 .no-transition {
   transition: none !important;
-}
-.divider-shift {
-  background: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .race-hud {

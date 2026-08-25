@@ -619,7 +619,7 @@
     "zoomLevel": "Niveau de zoom",
     "zoomLevelHint": "Ajuster l'échelle globale de l'interface (70 % – 150 %)",
     "minColumnWidth": "Largeur minimale de colonne",
-    "minColumnWidthHint": "Largeur minimale par colonne de l'atelier. Maintenez Maj en faisant glisser un séparateur pour ajuster.",
+    "minColumnWidthHint": "Largeur minimale autorisée pour chaque colonne de l'atelier.",
     "routineWake": "Réveil programmé",
     "routineWakeHint": "Gestion des tâches planifiées quand le portable est en veille",
     "routineWakePassive": "Passif — exécuter au réveil naturel de l'ordinateur",

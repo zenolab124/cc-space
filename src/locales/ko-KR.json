@@ -619,7 +619,7 @@
     "zoomLevel": "화면 배율",
     "zoomLevelHint": "전역 UI 크기 조정(70% ~ 150%)",
     "minColumnWidth": "워크벤치 최소 열 너비",
-    "minColumnWidthHint": "워크벤치 열의 최소 너비입니다. Shift를 누른 채 구분선을 드래그하여 조정할 수도 있습니다.",
+    "minColumnWidthHint": "각 워크벤치 열에 허용되는 최소 너비입니다.",
     "routineWake": "예약 깨우기",
     "routineWakeHint": "노트북이 잠자기 모드일 때 예약 작업 처리 방식",
     "routineWakePassive": "수동 — 컴퓨터가 자연스럽게 깨어난 후 즉시 실행",

@@ -619,7 +619,7 @@
     "zoomLevel": "Thu phóng giao diện",
     "zoomLevelHint": "Điều chỉnh kích thước giao diện toàn cục (70% ~ 150%)",
     "minColumnWidth": "Chiều rộng cột tối thiểu",
-    "minColumnWidthHint": "Chiều rộng tối thiểu mỗi cột bàn làm việc. Giữ Shift khi kéo thanh phân cách để điều chỉnh.",
+    "minColumnWidthHint": "Chiều rộng tối thiểu được phép cho mỗi cột bàn làm việc.",
     "routineWake": "Đánh thức định kỳ",
     "routineWakeHint": "Xử lý tác vụ định kỳ thế nào khi laptop đang ngủ",
     "routineWakePassive": "Bị động — chạy khi máy tính tự thức dậy",

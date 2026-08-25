@@ -125,7 +125,7 @@ onUnmounted(() => {
   zoneResizeObserver = null
 })
 
-const { dragging, shiftDragging, onDividerMouseDown } = useColumnResize()
+const { dragging, onDividerMouseDown } = useColumnResize()
 
 // --- 幂等展开的滚动聚焦(FR-003:点击已展开卡 → 聚焦该列) ---
 
@@ -210,7 +210,6 @@ watch(focusColumnRequest, async (req) => {
             <div
               v-if="activeTab.columns.length > 1"
               class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20"
-              :class="{ 'divider-shift': shiftDragging }"
               @pointerdown.stop
               @mousedown="onDividerMouseDown($event, i)"
             />
@@ -226,9 +225,6 @@ watch(focusColumnRequest, async (req) => {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
   border-radius: 6px;
-}
-.divider-shift {
-  background: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 .workbench-column-enter-active {
   pointer-events: none;

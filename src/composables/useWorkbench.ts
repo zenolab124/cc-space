@@ -3,7 +3,11 @@ import { invoke } from '@tauri-apps/api/core'
 import i18n from '../locales'
 import { evictSessionTransients } from './useStreaming'
 import { useRunners } from './useRunners'
-import { fillColumnWidthsProportionally } from '@/utils/workbenchColumnLayout'
+import {
+  insertColumnWidth,
+  removeColumnWidth,
+  resizeColumnWidth,
+} from '@/utils/workbenchColumnLayout'
 import { readMigratedStorage } from '../utils/storageMigrate'
 import { resolveSessionRef } from '@/engines/directory'
 import type { ProjectRef, SessionRef } from '@/engines/types'
@@ -123,31 +127,8 @@ export function setRightZoneWidth(w: number) {
   rightZoneWidth.value = w
 }
 
-// 列宽自动放大只跟随窗口变大,不跟随容器变宽:
-// 监控栏折叠等侧栏开合同样会让容器变宽,若据此放大并落盘列宽,
-// 栏展开回来时没有对称的缩回逻辑,列区从此永久溢出。
-// 侧栏开合只改变可视视口,持久化列宽保持不变。
-let lastWindowWidth = window.innerWidth
-window.addEventListener('resize', () => {
-  const w = window.innerWidth
-  if (w > lastWindowWidth) nextTick(redistributeOnGrow)
-  lastWindowWidth = w
-})
-
 function containerFreeWidth(n: number): number {
   return rightZoneWidth.value - COLUMN_GAP * Math.max(0, n - 1) - COLUMN_GAP * 2
-}
-
-/** 窗口变大时,按比例放大各列填满(仅当前全部列已 fit 时触发) */
-function redistributeOnGrow() {
-  for (const tab of state.value.tabs) {
-    if (tab.columns.length === 0) continue
-    const free = containerFreeWidth(tab.columns.length)
-    const total = tab.columnSizes.reduce((s, w) => s + w, 0)
-    if (total <= 0 || total > free) continue
-    const scale = free / total
-    tab.columnSizes = tab.columnSizes.map(w => Math.max(minColumnWidth.value, Math.round(w * scale)))
-  }
 }
 
 let idCounter = 0
@@ -160,6 +141,11 @@ function equalSizes(n: number): number[] {
   const free = containerFreeWidth(n)
   const w = Math.max(minColumnWidth.value, Math.round(free / n))
   return Array(n).fill(w)
+}
+
+/** 新列使用稳定阅读宽度；降低最小宽度不会让后续新列过窄。 */
+function defaultColumnWidth(): number {
+  return Math.max(DEFAULT_MIN_COLUMN_WIDTH, minColumnWidth.value)
 }
 
 function createTabObject(seq: number): WorkbenchTab {
@@ -503,7 +489,11 @@ function addRaceLane(tabId: string, forkedSessionId: string) {
     sessionId: forkedSessionId,
     label: i18n.global.t('workbench.race.laneLabel', { n: tab.race.lanes.length + 1 }),
   })
-  tab.columnSizes = equalSizes(tab.columns.length)
+  tab.columnSizes = insertColumnWidth(
+    tab.columnSizes,
+    tab.columns.length - 1,
+    defaultColumnWidth(),
+  )
 }
 
 /**
@@ -555,10 +545,10 @@ function removeRaceLane(tabId: string, sessionId: string) {
   if (si >= 0) tab.sessionIds.splice(si, 1)
   const ci = tab.columns.findIndex(c => c.sessionId === sessionId)
   if (ci >= 0) {
-    // 同步原子移除,理由同 reclaimColumnWidth:延迟 splice 会持久化非法中间态
+    // 同步原子移除，避免持久化 columns / columnSizes 数量不一致的中间态。
     suppressColumnTransition.value = true
     tab.columns.splice(ci, 1)
-    tab.columnSizes = equalSizes(tab.columns.length)
+    tab.columnSizes = removeColumnWidth(tab.columnSizes, ci)
     nextTick(() => { suppressColumnTransition.value = false })
   }
   if (tab.race.lanes.length <= 1) {
@@ -773,7 +763,7 @@ function expandSession(tabId: string, sessionId: string, atIndex?: number): Expa
   }
   const idx = atIndex === undefined ? tab.columns.length : Math.max(0, Math.min(atIndex, tab.columns.length))
   tab.columns.splice(idx, 0, column)
-  tab.columnSizes = equalSizes(tab.columns.length)
+  tab.columnSizes = insertColumnWidth(tab.columnSizes, idx, defaultColumnWidth())
   requestFocusColumn(sessionId)
   return { collapsedSessionIds: [], focusedExisting: false }
 }
@@ -781,25 +771,16 @@ function expandSession(tabId: string, sessionId: string, atIndex?: number): Expa
 const suppressColumnTransition = ref(false)
 
 /**
- * 移除列并智能回收宽度（同步原子）:
+ * 移除列但保留其他列宽（同步原子）:
  * 状态变更必须一步完成——deep watch 随时可能落盘,任何"先改一半、
  * setTimeout 里补另一半"的写法都会让非法中间态(列引用已不在
  * sessionIds 的会话)被持久化,启动校验随即判损坏整体重置。
  */
-function reclaimColumnWidth(tab: WorkbenchTab, removedIndex: number) {
+function removeColumnAt(tab: WorkbenchTab, removedIndex: number) {
   if (removedIndex < 0 || removedIndex >= tab.columns.length) return
 
   tab.columns.splice(removedIndex, 1)
-  tab.columnSizes.splice(removedIndex, 1)
-
-  if (tab.columnSizes.length > 0) {
-    const totalAfter = tab.columnSizes.reduce((s, w) => s + w, 0)
-    const freeAfter = containerFreeWidth(tab.columnSizes.length)
-    if (totalAfter < freeAfter) {
-      tab.columnSizes = fillColumnWidthsProportionally(tab.columnSizes, freeAfter)
-    }
-  }
-
+  tab.columnSizes = removeColumnWidth(tab.columnSizes, removedIndex)
 }
 
 /** 收起列回左列(仍激活,「收起非退出」) */
@@ -808,7 +789,7 @@ function collapseColumn(tabId: string, sessionId: string) {
   if (!tab) return
   const idx = tab.columns.findIndex(c => c.sessionId === sessionId)
   if (idx < 0) return
-  reclaimColumnWidth(tab, idx)
+  removeColumnAt(tab, idx)
 }
 
 /** 退出工作台(左列 × / 列头 ×):从归属 tab 移除,展开列一并收回 */
@@ -818,7 +799,7 @@ function detachSessionFromTabs(sessionId: string) {
     if (i >= 0) {
       tab.sessionIds.splice(i, 1)
       const ci = tab.columns.findIndex(c => c.sessionId === sessionId)
-      if (ci >= 0) reclaimColumnWidth(tab, ci)
+      if (ci >= 0) removeColumnAt(tab, ci)
     }
   }
 }
@@ -843,28 +824,17 @@ function reorderColumns(tabId: string, fromIndex: number, toIndex: number) {
 
 /**
  * 拖动第 index 条分隔线(像素宽度模型):
- * - 最后一列:独立调整宽度(无右邻,拉宽触发滚动)
- * - 中间列:有余量时此消彼长;右列顶到 minColumnWidth.value 后独立拉宽
+ * 每条分隔线都只调整目标列宽；右侧列整体平移，工作台总宽随之变化。
  */
 function updateColumnSize(tabId: string, index: number, desiredLeftWidth: number) {
   const tab = state.value.tabs.find(t => t.id === tabId)
   if (!tab) return
-  const sizes = tab.columnSizes
-  if (index < 0 || index >= sizes.length) return
-  const left = Math.max(minColumnWidth.value, Math.round(desiredLeftWidth))
-  if (index === sizes.length - 1) {
-    sizes[index] = left
-    return
-  }
-  const combined = sizes[index] + sizes[index + 1]
-  const rightFromZeroSum = combined - left
-  if (rightFromZeroSum >= minColumnWidth.value) {
-    sizes[index] = left
-    sizes[index + 1] = rightFromZeroSum
-  } else {
-    sizes[index] = left
-    sizes[index + 1] = minColumnWidth.value
-  }
+  tab.columnSizes = resizeColumnWidth(
+    tab.columnSizes,
+    index,
+    desiredLeftWidth,
+    minColumnWidth.value,
+  )
 }
 
 /** 会话离开工作台后,若不再被任何 tab 持有则关闭进程(断 Remote Control),
