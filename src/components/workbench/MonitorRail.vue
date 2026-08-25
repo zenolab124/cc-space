@@ -6,21 +6,26 @@ import { useWorkbench } from '@/composables/useWorkbench'
 import { useProjects } from '@/composables/useProjects'
 import { useUiState } from '@/composables/useUiState'
 import { useNotifications } from '@/composables/useNotifications'
+import type { WorkbenchTab } from '@/composables/useWorkbench'
 import { fileName } from '@/utils/path'
 import MonitorCard from './MonitorCard.vue'
 import type { Project } from '@/types'
 
 const { t } = useI18n()
-const { activeTab, createPendingTask } = useWorkbench()
+const props = defineProps<{
+  tab: WorkbenchTab
+}>()
+
+const { createPendingTask } = useWorkbench()
 const { projects } = useProjects()
 const { switchSection } = useUiState()
 const { notifyTransient } = useNotifications()
 
-const expandedSet = computed(() => new Set(activeTab.value.columns.map(c => c.sessionId)))
+const expandedSet = computed(() => new Set(props.tab.columns.map(c => c.sessionId)))
 
 const hint = computed(() => {
-  const n = activeTab.value.sessionIds.length
-  const m = activeTab.value.columns.length
+  const n = props.tab.sessionIds.length
+  const m = props.tab.columns.length
   return n === 0 ? null : t('workbench.rail.hint', { n, m })
 })
 
@@ -163,15 +168,16 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
       class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2 px-2 -mx-2 py-2 -my-2"
     >
       <MonitorCard
-        v-for="sid in activeTab.sessionIds"
+        v-for="sid in tab.sessionIds"
         :key="sid"
         class="shrink-0"
         :session-id="sid"
+        :tab-id="tab.id"
         :expanded="expandedSet.has(sid)"
       />
 
       <div
-        v-if="activeTab.sessionIds.length === 0"
+        v-if="tab.sessionIds.length === 0"
         key="empty-state"
         class="px-2 py-6 text-center text-xs text-muted-foreground leading-relaxed"
       >

@@ -13,9 +13,14 @@ import { sessionUiId, usesNativeSessionSurface } from '@/engines/integration'
 import { engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
 import SortableColumn from './SortableColumn.vue'
+import type { WorkbenchTab } from '@/composables/useWorkbench'
+
+const props = defineProps<{
+  tab: WorkbenchTab
+}>()
+const tabRef = computed(() => props.tab)
 
 const {
-  activeTab,
   expandSession,
   reorderColumns,
   focusColumnRequest,
@@ -100,7 +105,7 @@ async function onStartRace(sessionId: string) {
 }
 
 const containerRef = ref<HTMLElement>()
-const { isDropTarget } = useDroppable({ id: computed(() => 'col-zone:' + activeTab.value.id), element: containerRef })
+const { isDropTarget } = useDroppable({ id: computed(() => 'col-zone:' + props.tab.id), element: containerRef })
 
 let zoneResizeObserver: ResizeObserver | null = null
 
@@ -125,16 +130,16 @@ onUnmounted(() => {
   zoneResizeObserver = null
 })
 
-const { dragging, onDividerMouseDown } = useColumnResize()
+const { dragging, onDividerMouseDown } = useColumnResize(tabRef)
 
 // --- 幂等展开的滚动聚焦(FR-003:点击已展开卡 → 聚焦该列) ---
 
 const flashIndex = ref(-1)
 const leavingColumnCount = ref(0)
-const renderedColumnCount = computed(() => activeTab.value.columns.length + leavingColumnCount.value)
+const renderedColumnCount = computed(() => props.tab.columns.length + leavingColumnCount.value)
 
 watch(
-  () => activeTab.value.columns.length,
+  () => props.tab.columns.length,
   (count, previousCount) => {
     if (count < previousCount) leavingColumnCount.value += previousCount - count
   },
@@ -162,7 +167,7 @@ function onColumnAfterEnter(element: Element) {
 
 watch(focusColumnRequest, async (req) => {
   if (!req) return
-  const idx = activeTab.value.columns.findIndex(c => c.sessionId === req.sessionId)
+  const idx = props.tab.columns.findIndex(c => c.sessionId === req.sessionId)
   if (idx < 0) return
   await nextTick()
   scrollColumnIntoView(req.sessionId)
@@ -195,20 +200,20 @@ watch(focusColumnRequest, async (req) => {
         @after-leave="onColumnAfterLeave"
       >
         <SortableColumn
-          v-for="(col, i) in activeTab.columns"
+          v-for="(col, i) in tab.columns"
           :key="col.id"
           :data-workbench-session-id="col.sessionId"
-          :tab-id="activeTab.id"
+          :tab-id="tab.id"
           :index="i"
-          :flex="activeTab.columnSizes[i]"
+          :flex="tab.columnSizes[i]"
           :fill="renderedColumnCount === 1"
           :resizing="dragging || suppressColumnTransition"
         >
           <template #default="{ isDragging: colDragging, handleRef }">
-            <WorkbenchColumnView :column="col" :tab-id="activeTab.id" :index="i" :dragging="colDragging" :handle-ref="handleRef" @start-race="onStartRace(col.sessionId)" />
+            <WorkbenchColumnView :column="col" :tab-id="tab.id" :index="i" :dragging="colDragging" :handle-ref="handleRef" @start-race="onStartRace(col.sessionId)" />
             <!-- 列右边缘 resize 手柄（绝对定位，不参与 flex 布局） -->
             <div
-              v-if="activeTab.columns.length > 1"
+              v-if="tab.columns.length > 1"
               class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20"
               @pointerdown.stop
               @mousedown="onDividerMouseDown($event, i)"

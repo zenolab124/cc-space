@@ -10,9 +10,15 @@ import { useConfirm } from '@/composables/useConfirm'
 import { shortModel, formatTokens, type TokenUsage, type SessionSummary } from '@/types'
 import WorkbenchColumnView from './WorkbenchColumn.vue'
 import { shouldSubmitComposer } from '@/components/session/composerAction'
+import type { WorkbenchTab } from '@/composables/useWorkbench'
 
-const { activeTab, minColumnWidth, suppressColumnTransition } = useWorkbench()
-const { dragging, onDividerMouseDown } = useColumnResize()
+const props = defineProps<{
+  tab: WorkbenchTab
+}>()
+const tabRef = computed(() => props.tab)
+
+const { minColumnWidth, suppressColumnTransition } = useWorkbench()
+const { dragging, onDividerMouseDown } = useColumnResize(tabRef)
 const { t } = useI18n()
 const { projects } = useProjects()
 const { confirm } = useConfirm()
@@ -24,7 +30,7 @@ async function onResetRace() {
   await resetAllLanes()
 }
 
-const race = computed(() => activeTab.value.race!)
+const race = computed(() => props.tab.race!)
 
 const {
   inputText,
@@ -42,7 +48,7 @@ const {
   forkNewLane,
   resetAllLanes,
   switchLaneEngine,
-} = useRaceInput(activeTab)
+} = useRaceInput(tabRef)
 
 const containerRef = ref<HTMLElement>()
 const showHud = ref(false)
@@ -150,20 +156,20 @@ function onInputKeydown(e: KeyboardEvent) {
       <!-- 赛道区(横向滚动) -->
       <div ref="containerRef" data-workbench-panorama class="flex-1 min-w-0 overflow-x-auto flex flex-row p-2.5 gap-2.5">
         <div
-          v-for="(col, i) in activeTab.columns"
+          v-for="(col, i) in tab.columns"
           :key="col.id"
           class="h-full relative shrink-0 race-col"
           data-workbench-column
           :data-workbench-session-id="col.sessionId"
           :class="{ 'no-transition': dragging || suppressColumnTransition }"
           :style="{
-            width: `${activeTab.columnSizes[i] ?? minColumnWidth}px`,
-            flex: `${activeTab.columnSizes[i] ?? minColumnWidth} 0 auto`,
+            width: `${tab.columnSizes[i] ?? minColumnWidth}px`,
+            flex: `${tab.columnSizes[i] ?? minColumnWidth} 0 auto`,
           }"
         >
           <WorkbenchColumnView
             :column="col"
-            :tab-id="activeTab.id"
+            :tab-id="tab.id"
             :index="i"
             :mutation-disabled="broadcasting || raceMutationLoading"
             :engine-switch-available="canSwitchRaceEngine"

@@ -1,17 +1,17 @@
-import { ref } from 'vue'
-import { useWorkbench } from './useWorkbench'
+import { ref, type Ref } from 'vue'
+import { useWorkbench, type WorkbenchTab } from './useWorkbench'
 
 /**
  * 列右缘分隔线拖拽(普通多列与赛马共用):
  * 像素级调整目标列宽度，其他列保持不变。
  */
-export function useColumnResize() {
-  const { activeTab, updateColumnSize } = useWorkbench()
+export function useColumnResize(tabRef: Readonly<Ref<WorkbenchTab>>) {
+  const { updateColumnSize } = useWorkbench()
   const dragging = ref(false)
 
   function onDividerMouseDown(e: MouseEvent, index: number) {
     e.preventDefault()
-    const tab = activeTab.value
+    const tab = tabRef.value
     const columnElement = (e.currentTarget as HTMLElement | null)?.closest<HTMLElement>('[data-workbench-column]')
     const renderedColumns = columnElement?.parentElement
       ? Array.from(columnElement.parentElement.children)

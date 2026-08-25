@@ -25,13 +25,14 @@ const { getMeta } = useSessionMeta()
  */
 const props = defineProps<{
   sessionId: string
+  tabId: string
   expanded: boolean
 }>()
 
 const sid = computed(() => props.sessionId)
 
 const { projects } = useProjects()
-const { activeTab, expandSession, removeSession, flashSessionId, pendingTaskCwd, draftCwd, engineDraft } = useWorkbench()
+const { expandSession, removeSession, flashSessionId, pendingTaskCwd, draftCwd, engineDraft } = useWorkbench()
 const { retrySession } = useStreaming()
 const { respondRequest } = usePermissionRequests()
 const { notifyTransient, sessionTitle, dismissError } = useNotifications()
@@ -150,7 +151,7 @@ const tokenText = computed(() => {
 
 /** 点击卡片:未展开→展开;已展开→右区滚动聚焦(幂等) */
 function onCardClick() {
-  const result = expandSession(activeTab.value.id, props.sessionId)
+  const result = expandSession(props.tabId, props.sessionId)
   if (result.collapsedSessionIds.length > 0) {
     notifyTransient(t('workbench.monitor.collapsed', { names: result.collapsedSessionIds.map(sessionTitle).join('、') }))
   }
