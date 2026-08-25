@@ -673,10 +673,7 @@ mod tests {
         assert_eq!(receiver.recv().unwrap().unwrap(), r#"{"ok":true}"#);
     }
 
-    #[test]
-    fn production_limit_has_headroom_for_large_thread_resume_frames() {
-        assert!(MAX_PROTOCOL_LINE_BYTES >= 128 * 1024 * 1024);
-    }
+    const _: () = assert!(MAX_PROTOCOL_LINE_BYTES >= 128 * 1024 * 1024);
 
     #[test]
     fn outgoing_messages_omit_json_rpc_header() {
