@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { diffLines, type Change } from 'diff'
 import type { FileEntry, LedgerOp } from '@/composables/useFileLedger'
+import TextDiffViewer from '@/components/diff/TextDiffViewer.vue'
 
 /** 单文件操作时间线(PRD v2.6.0 FR-003):Edit 懒 diff、Write 摘要、跳转工具卡 */
 const props = defineProps<{
@@ -14,44 +14,8 @@ const emit = defineEmits<{
   locate: [toolUseId: string]
 }>()
 
-const DIFF_FOLD_LINES = 50
 const WRITE_PREVIEW_LINES = 200
-
-interface DiffRow { kind: 'add' | 'del' | 'ctx'; text: string }
-
-// diff 懒计算 + 按锚点缓存(面板关闭即弃);已渲染项不因实时追加重算
-const diffCache = new Map<string, DiffRow[]>()
-const expandedDiffs = ref(new Set<string>())
 const expandedPreviews = ref(new Set<string>())
-
-function diffOf(op: LedgerOp): DiffRow[] {
-  const key = op.anchorId
-  const hit = diffCache.get(key)
-  if (hit) return hit
-  const rows: DiffRow[] = []
-  try {
-    const changes: Change[] = diffLines(op.oldString ?? '', op.newString ?? '')
-    for (const c of changes) {
-      const kind: DiffRow['kind'] = c.added ? 'add' : c.removed ? 'del' : 'ctx'
-      for (const line of c.value.replace(/\n$/, '').split('\n')) rows.push({ kind, text: line })
-    }
-  } catch {
-    rows.push({ kind: 'ctx', text: '(diff unavailable)' })
-  }
-  diffCache.set(key, rows)
-  return rows
-}
-
-function visibleRows(op: LedgerOp): DiffRow[] {
-  const rows = diffOf(op)
-  if (rows.length <= DIFF_FOLD_LINES || expandedDiffs.value.has(op.anchorId)) return rows
-  return rows.slice(0, DIFF_FOLD_LINES)
-}
-
-function foldedCount(op: LedgerOp): number {
-  const rows = diffOf(op)
-  return rows.length > DIFF_FOLD_LINES && !expandedDiffs.value.has(op.anchorId) ? rows.length : 0
-}
 
 function previewLines(op: LedgerOp): string[] {
   return (op.content ?? '').split('\n').slice(0, WRITE_PREVIEW_LINES)
@@ -94,20 +58,12 @@ const ops = computed(() => props.entry.ops)
         </div>
 
         <!-- Edit: 行级 diff -->
-        <div v-if="op.tool === 'Edit'" class="rounded border border-border bg-card overflow-hidden font-mono text-[10.5px] leading-[1.5]">
-          <div
-            v-for="(row, i) in visibleRows(op)" :key="i"
-            class="px-2 whitespace-pre overflow-hidden text-ellipsis"
-            :class="row.kind === 'add' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-              : row.kind === 'del' ? 'bg-destructive/10 text-destructive'
-              : 'text-muted-foreground'"
-          >{{ (row.kind === 'add' ? '+ ' : row.kind === 'del' ? '- ' : '  ') + row.text }}</div>
-          <button
-            v-if="foldedCount(op)"
-            class="w-full text-center text-[10px] text-claude py-0.5 border-t border-dashed border-border hover:bg-muted/50"
-            @click="expandedDiffs.add(op.anchorId)"
-          >{{ $t('fileLedger.expandAll', { n: foldedCount(op) }) }} ▾</button>
-        </div>
+        <TextDiffViewer
+          v-if="op.tool === 'Edit'"
+          :old-text="op.oldString"
+          :new-text="op.newString"
+          compact
+        />
 
         <!-- Write: 摘要 + 可展开预览 -->
         <div v-else-if="op.tool === 'Write'" class="rounded border border-border bg-card px-2 py-1.5 text-[10.5px]">

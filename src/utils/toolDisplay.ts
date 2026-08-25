@@ -1,4 +1,5 @@
 import type { ContentBlock } from '@/types'
+import { calculateTextDiffStats } from '@/utils/textDiff'
 
 export type ToolUseBlock = Extract<ContentBlock, { type: 'tool_use' }>
 
@@ -110,7 +111,19 @@ export function toolSummary(tool: ToolUseBlock): string {
   ].find(value => typeof value === 'string' && value.trim().length > 0)
 
   if (typeof candidate !== 'string') return tool.name
-  return candidate.replace(/\s+/g, ' ').trim()
+  const summary = candidate.replace(/\s+/g, ' ').trim()
+  const stats = editDiffStatsLabel(tool)
+  return stats ? `${summary} · ${stats}` : summary
+}
+
+function editDiffStatsLabel(tool: ToolUseBlock): string {
+  if (tool.name.toLowerCase() !== 'edit') return ''
+  const oldText = typeof tool.input.old_string === 'string' ? tool.input.old_string : ''
+  const newText = typeof tool.input.new_string === 'string' ? tool.input.new_string : ''
+  const unifiedDiff = typeof tool.input.unified_diff === 'string' ? tool.input.unified_diff : ''
+  if (!oldText && !newText && !unifiedDiff) return ''
+  const stats = calculateTextDiffStats({ oldText, newText, unifiedDiff })
+  return `+${stats.additions} −${stats.deletions}`
 }
 
 export function isOrchestrationTool(tool: ToolUseBlock): boolean {
@@ -166,6 +179,8 @@ function toolProcessDetail(tool: ToolUseBlock, kind: ToolActionKind): string {
   let detail = ''
   if (kind === 'read' || kind === 'change') {
     detail = lastPathPart(firstString(input.file_path, input.notebook_path, input.path))
+    const stats = editDiffStatsLabel(tool)
+    if (detail && stats) detail = `${detail} · ${stats}`
   } else if (kind === 'run') {
     detail = firstString(input.description, input.command)
   } else if (kind === 'search') {

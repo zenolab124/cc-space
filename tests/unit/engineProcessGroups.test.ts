@@ -122,7 +122,7 @@ describe('engine process groups', () => {
         type: 'tool_use',
         id: 'change-1:0',
         name: 'Edit',
-        input: { file_path: 'src/App.vue', change_kind: 'update', new_string: '+line' },
+        input: { file_path: 'src/App.vue', change_kind: 'update', unified_diff: '+line' },
       }),
       expect.objectContaining({
         type: 'tool_use',

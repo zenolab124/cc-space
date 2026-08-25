@@ -1680,6 +1680,11 @@
       "exited": "Exited"
     }
   },
+  "diff": {
+    "expandAll": "Expand all context",
+    "collapseContext": "Collapse unchanged context",
+    "hiddenContext": "{count} unchanged lines hidden"
+  },
   "fileLedger": {
     "title": "File Ledger",
     "summary": "{total} files · {modified} modified, {read} read",

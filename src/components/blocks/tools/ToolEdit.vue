@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import { fileName } from '@/utils/path'
+import TextDiffViewer from '@/components/diff/TextDiffViewer.vue'
+import { calculateTextDiffStats } from '@/utils/textDiff'
 
 const props = defineProps<{
   input: Record<string, unknown>
@@ -25,6 +27,18 @@ const newString = computed(() => {
   return typeof v === 'string' ? v : ''
 })
 
+const unifiedDiff = computed(() => {
+  const v = props.input.unified_diff
+  return typeof v === 'string' ? v : ''
+})
+
+const diffStats = computed(() => calculateTextDiffStats({
+  oldText: oldString.value,
+  newText: newString.value,
+  unifiedDiff: unifiedDiff.value,
+}))
+const hasDiff = computed(() => !!(oldString.value || newString.value || unifiedDiff.value))
+
 const replaceAll = computed(() => props.input.replace_all === true)
 
 const expanded = ref(false)
@@ -45,6 +59,10 @@ const inLedger = computed(() => hasLedgerAnchor(props.toolUseId))
       <span class="i-carbon-edit w-3.5 h-3.5 shrink-0" />
       <span class="text-foreground font-medium">Edit</span>
       <span v-if="filePath" class="font-mono text-muted-foreground truncate" :title="filePath">{{ displayName }}</span>
+      <span v-if="hasDiff" class="ml-1 flex items-center gap-1 text-2xs tabular-nums shrink-0">
+        <span class="text-primary">+{{ diffStats.additions }}</span>
+        <span class="text-destructive">−{{ diffStats.deletions }}</span>
+      </span>
       <span v-if="replaceAll" class="ml-1 px-1.5 py-0.5 rounded border border-accent/50 text-accent text-2xs shrink-0">{{ $t('block.toolEdit.replaceAll') }}</span>
       <button
         v-if="inLedger"
@@ -55,9 +73,12 @@ const inLedger = computed(() => hasLedgerAnchor(props.toolUseId))
         <span class="i-carbon-catalog w-3.5 h-3.5" />
       </button>
     </div>
-    <div v-if="expanded && (oldString || newString)" class="mt-2 grid grid-cols-2 gap-1.5">
-      <pre v-if="oldString" class="rounded bg-destructive/10 border border-destructive/20 px-2 py-1 text-destructive whitespace-pre-wrap break-all font-mono overflow-auto max-h-48">- {{ oldString }}</pre>
-      <pre v-if="newString" class="rounded bg-primary/10 border border-primary/20 px-2 py-1 text-primary whitespace-pre-wrap break-all font-mono overflow-auto max-h-48">+ {{ newString }}</pre>
-    </div>
+    <TextDiffViewer
+      v-if="expanded && hasDiff"
+      class="mt-2"
+      :old-text="oldString"
+      :new-text="newString"
+      :unified-diff="unifiedDiff"
+    />
   </div>
 </template>

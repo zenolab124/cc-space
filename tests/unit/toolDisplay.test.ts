@@ -114,6 +114,17 @@ describe('tool display projection', () => {
     expect(block.input).toEqual({ command: 'pnpm test', description: 'Run focused tests' })
   })
 
+  it('adds edit line statistics to collapsed summaries', () => {
+    const block = tool('edit-1', 'Edit', {
+      file_path: '/workspace/src/App.vue',
+      old_string: 'old line\n',
+      new_string: 'new line\nadded\n',
+    })
+
+    expect(toolSummary(block)).toBe('/workspace/src/App.vue · +2 −1')
+    expect(summarizeToolProcess([block])[0].detail).toBe('App.vue · +2 −1')
+  })
+
   it('summarizes a process by useful actions and representative details', () => {
     const blocks = [
       tool('a', 'Read', { file_path: '/workspace/src/App.vue' }),

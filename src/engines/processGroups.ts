@@ -233,7 +233,7 @@ export function projectEngineProcessEntries(
           input: {
             file_path: change.path,
             change_kind: change.kind,
-            ...(change.diff ? { new_string: change.diff } : {}),
+            ...(change.diff ? { unified_diff: change.diff } : {}),
           },
         })
         states.set(id, visualState(segment.status))

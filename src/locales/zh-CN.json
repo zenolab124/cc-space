@@ -1680,6 +1680,11 @@
       "exited": "已退出"
     }
   },
+  "diff": {
+    "expandAll": "展开全部上下文",
+    "collapseContext": "折叠未修改上下文",
+    "hiddenContext": "隐藏了 {count} 行未修改内容"
+  },
   "fileLedger": {
     "title": "文件账本",
     "summary": "{total} 个文件 · {modified} 改 {read} 读",
