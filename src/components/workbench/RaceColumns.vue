@@ -18,7 +18,7 @@ const props = defineProps<{
 const tabRef = computed(() => props.tab)
 
 const { minColumnWidth, suppressColumnTransition } = useWorkbench()
-const { dragging, onDividerMouseDown } = useColumnResize(tabRef)
+const { dragging, shiftDragging, onDividerMouseDown } = useColumnResize(tabRef)
 const { t } = useI18n()
 const { projects } = useProjects()
 const { confirm } = useConfirm()
@@ -179,9 +179,10 @@ function onInputKeydown(e: KeyboardEvent) {
             @select-race-engine="selectRaceEngine"
           />
 
-          <!-- 列右边缘 resize 手柄：只调整当前列宽。 -->
+          <!-- 列右边缘 resize 手柄：普通拖拽调当前列，Shift 拖拽统一调全部列。 -->
           <div
             class="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-30"
+            :class="{ 'divider-shift': shiftDragging }"
             @mousedown="onDividerMouseDown($event, i)"
           />
 
@@ -349,6 +350,9 @@ function onInputKeydown(e: KeyboardEvent) {
 }
 .no-transition {
   transition: none !important;
+}
+.divider-shift {
+  background: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .race-hud {

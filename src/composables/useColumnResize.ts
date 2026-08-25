@@ -3,11 +3,12 @@ import { useWorkbench, type WorkbenchTab } from './useWorkbench'
 
 /**
  * 列右缘分隔线拖拽(普通多列与赛马共用):
- * 像素级调整目标列宽度，其他列保持不变。
+ * 普通拖拽只调整目标列宽；按住 Shift 时统一调整全部列宽。
  */
 export function useColumnResize(tabRef: Readonly<Ref<WorkbenchTab>>) {
-  const { updateColumnSize } = useWorkbench()
+  const { updateColumnSize, setMinColumnWidth, minColumnWidth } = useWorkbench()
   const dragging = ref(false)
+  const shiftDragging = ref(false)
 
   function onDividerMouseDown(e: MouseEvent, index: number) {
     e.preventDefault()
@@ -26,20 +27,40 @@ export function useColumnResize(tabRef: Readonly<Ref<WorkbenchTab>>) {
     }
 
     dragging.value = true
+    const isShift = e.shiftKey
+    shiftDragging.value = isShift
     const startX = e.clientX
-    const startWidth = tab.columnSizes[index]
-    const onMouseMove = (ev: MouseEvent) => {
-      const delta = ev.clientX - startX
-      updateColumnSize(tab.id, index, startWidth + delta)
+
+    if (isShift) {
+      const startMin = minColumnWidth.value
+      const onMouseMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX
+        setMinColumnWidth(startMin + delta)
+        tab.columnSizes = tab.columnSizes.map(() => minColumnWidth.value)
+      }
+      const onMouseUp = () => {
+        dragging.value = false
+        shiftDragging.value = false
+        document.removeEventListener('mousemove', onMouseMove)
+        document.removeEventListener('mouseup', onMouseUp)
+      }
+      document.addEventListener('mousemove', onMouseMove)
+      document.addEventListener('mouseup', onMouseUp)
+    } else {
+      const startWidth = tab.columnSizes[index]
+      const onMouseMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX
+        updateColumnSize(tab.id, index, startWidth + delta)
+      }
+      const onMouseUp = () => {
+        dragging.value = false
+        document.removeEventListener('mousemove', onMouseMove)
+        document.removeEventListener('mouseup', onMouseUp)
+      }
+      document.addEventListener('mousemove', onMouseMove)
+      document.addEventListener('mouseup', onMouseUp)
     }
-    const onMouseUp = () => {
-      dragging.value = false
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
   }
 
-  return { dragging, onDividerMouseDown }
+  return { dragging, shiftDragging, onDividerMouseDown }
 }

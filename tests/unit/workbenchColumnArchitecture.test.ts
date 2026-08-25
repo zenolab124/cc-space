@@ -26,3 +26,18 @@ describe('工作台列头收缩优先级', () => {
     expect(column).toContain('.workbench-column-close { flex: 0 0 auto; }')
   })
 })
+
+describe('工作台列宽修饰键交互', () => {
+  it('普通列与赛马列共用 Shift 批量调宽能力', () => {
+    const resize = source('../../src/composables/useColumnResize.ts')
+    const columns = source('../../src/components/workbench/WorkbenchColumns.vue')
+    const race = source('../../src/components/workbench/RaceColumns.vue')
+
+    expect(resize).toContain('const isShift = e.shiftKey')
+    expect(resize).toContain('setMinColumnWidth(startMin + delta)')
+    expect(resize).toContain('tab.columnSizes = tab.columnSizes.map(() => minColumnWidth.value)')
+    expect(resize).toContain('return { dragging, shiftDragging, onDividerMouseDown }')
+    expect(columns).toContain("{ 'divider-shift': shiftDragging }")
+    expect(race).toContain("{ 'divider-shift': shiftDragging }")
+  })
+})
