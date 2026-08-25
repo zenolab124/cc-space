@@ -11,7 +11,9 @@ use serde_json::Value;
 use crate::engines::core::{EngineError, EngineErrorKind, EngineResult};
 use crate::proc_ext::HideConsole;
 
-const MAX_PROTOCOL_LINE_BYTES: usize = 64 * 1024 * 1024;
+// legacy thread/resume 会把完整历史塞进单条 JSONL。保持读取有界，同时为
+// 含大量工具输出或图片输入的长会话留足空间。
+const MAX_PROTOCOL_LINE_BYTES: usize = 256 * 1024 * 1024;
 
 pub const CORE_CLIENT_METHODS: &[&str] = &[
     "initialize",
@@ -187,6 +189,7 @@ impl IncomingMessage {
 pub enum AppServerErrorKind {
     Spawn,
     Protocol,
+    MessageTooLarge,
     Timeout,
     Io,
     Eof,
@@ -233,6 +236,9 @@ impl std::fmt::Display for AppServerError {
         let message = match self.kind {
             AppServerErrorKind::Spawn => "Codex app-server could not be started",
             AppServerErrorKind::Protocol => "Codex app-server protocol error",
+            AppServerErrorKind::MessageTooLarge => {
+                "Codex app-server response exceeded Monet's safety limit"
+            }
             AppServerErrorKind::Timeout => "Codex app-server request timed out",
             AppServerErrorKind::Io => "Codex app-server connection was closed",
             AppServerErrorKind::Eof => "Codex app-server stopped unexpectedly",
@@ -403,8 +409,9 @@ fn forward_protocol_lines<R: BufRead>(
         }
         let newline = available.iter().position(|byte| *byte == b'\n');
         let consumed = newline.map_or(available.len(), |position| position + 1);
+        let payload_bytes = newline.unwrap_or(available.len());
         if !oversized {
-            if line.len().saturating_add(consumed) > max_line_bytes {
+            if line.len().saturating_add(payload_bytes) > max_line_bytes {
                 oversized = true;
                 line.clear();
             } else {
@@ -425,7 +432,7 @@ fn forward_protocol_lines<R: BufRead>(
 
 fn finish_protocol_line(mut line: Vec<u8>, oversized: bool) -> Result<String, AppServerErrorKind> {
     if oversized {
-        return Err(AppServerErrorKind::Protocol);
+        return Err(AppServerErrorKind::MessageTooLarge);
     }
     if line.last() == Some(&b'\n') {
         line.pop();
@@ -652,17 +659,23 @@ mod tests {
     }
 
     #[test]
-    fn protocol_reader_rejects_oversized_lines_without_unbounded_buffering() {
-        let input = b"{}\n1234567890123\n{\"ok\":true}\n";
+    fn protocol_reader_accepts_limit_and_rejects_larger_lines_without_unbounded_buffering() {
+        let input = b"{}\n123456789012\n1234567890123\n{\"ok\":true}\n";
         let (sender, receiver) = mpsc::channel();
         forward_protocol_lines(std::io::Cursor::new(input), sender, 12);
 
         assert_eq!(receiver.recv().unwrap().unwrap(), "{}");
+        assert_eq!(receiver.recv().unwrap().unwrap(), "123456789012");
         assert_eq!(
             receiver.recv().unwrap().unwrap_err(),
-            AppServerErrorKind::Protocol
+            AppServerErrorKind::MessageTooLarge
         );
         assert_eq!(receiver.recv().unwrap().unwrap(), r#"{"ok":true}"#);
+    }
+
+    #[test]
+    fn production_limit_has_headroom_for_large_thread_resume_frames() {
+        assert!(MAX_PROTOCOL_LINE_BYTES >= 128 * 1024 * 1024);
     }
 
     #[test]

@@ -16,6 +16,8 @@ struct SessionState {
     generation: u64,
     sequence: u64,
     active_turn_id: Option<String>,
+    connection_epoch: Option<u64>,
+    resume_params: Map<String, Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -37,6 +39,7 @@ pub struct CodexRuntime {
     instance: EngineInstanceId,
     supervisor: Arc<CodexSupervisor>,
     sessions: Mutex<HashMap<String, SessionState>>,
+    recovery_lock: Mutex<()>,
     streamed_items: Mutex<HashSet<String>>,
     text_phases: Mutex<HashMap<String, TextPhase>>,
     pending_interactions: Mutex<HashMap<String, PendingInteraction>>,
@@ -49,6 +52,7 @@ impl CodexRuntime {
             instance: default_instance()?,
             supervisor: Arc::clone(&supervisor),
             sessions: Mutex::new(HashMap::new()),
+            recovery_lock: Mutex::new(()),
             streamed_items: Mutex::new(HashSet::new()),
             text_phases: Mutex::new(HashMap::new()),
             pending_interactions: Mutex::new(HashMap::new()),
@@ -169,6 +173,8 @@ impl CodexRuntime {
                 generation: 1,
                 sequence: 0,
                 active_turn_id: None,
+                connection_epoch: None,
+                resume_params: resume_params_from_request(thread_id, &Map::new()),
             });
         if new_generation && state.sequence > 0 {
             state.generation += 1;
@@ -189,6 +195,8 @@ impl CodexRuntime {
         new_generation: bool,
         response: &Value,
         requested_provider: Option<&str>,
+        resume_params: Map<String, Value>,
+        connection_epoch: u64,
     ) -> EngineResult<RuntimeSession> {
         let provider = response_model_provider(response).ok_or_else(|| {
             EngineError::new(
@@ -203,10 +211,98 @@ impl CodexRuntime {
             ));
         }
         let mut runtime = self.runtime_session(thread_id, new_generation)?;
+        if let Some(state) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(thread_id)
+        {
+            state.connection_epoch = Some(connection_epoch);
+            state.resume_params = resume_params;
+        }
         runtime
             .source_meta
             .insert("modelProvider".into(), Value::String(provider.to_string()));
         Ok(runtime)
+    }
+
+    fn session_resume_snapshot(&self, thread_id: &str) -> (Option<u64>, Map<String, Value>) {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(thread_id)
+            .map(|state| (state.connection_epoch, state.resume_params.clone()))
+            .unwrap_or_else(|| (None, resume_params_from_request(thread_id, &Map::new())))
+    }
+
+    fn bind_session_epoch(&self, thread_id: &str, connection_epoch: u64) {
+        if let Some(state) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(thread_id)
+        {
+            state.connection_epoch = Some(connection_epoch);
+        }
+    }
+
+    fn clear_session_transients(&self, thread_id: &str) {
+        let item_prefix = format!("{thread_id}\u{1f}");
+        self.streamed_items
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|key| !key.starts_with(&item_prefix));
+        self.text_phases
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|key, _| !key.starts_with(&item_prefix));
+        self.pending_interactions
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|_, pending| pending.reference.session.native_id() != thread_id);
+    }
+
+    fn resume_session(&self, session: &SessionRef, force: bool) -> EngineResult<RuntimeSession> {
+        let recovery = self
+            .recovery_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let current_epoch = self.supervisor.current_connection_epoch();
+        let (bound_epoch, params) = self.session_resume_snapshot(session.native_id());
+        if !should_resume_session(bound_epoch, current_epoch, force) {
+            drop(recovery);
+            return self.runtime_session(session.native_id(), false);
+        }
+
+        let requested_provider = params
+            .get("modelProvider")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let (response, connection_epoch) = self
+            .supervisor
+            .request_with_epoch("thread/resume", Value::Object(params.clone()))?;
+        let runtime = self.runtime_session_from_response(
+            session.native_id(),
+            true,
+            &response,
+            requested_provider.as_deref(),
+            params,
+            connection_epoch,
+        )?;
+        self.clear_session_transients(session.native_id());
+        drop(recovery);
+        self.emit(session.native_id(), NormalizedRuntimeEvent::SessionAttached);
+        Ok(runtime)
+    }
+
+    fn ensure_session_loaded(&self, session: &SessionRef) -> EngineResult<()> {
+        self.supervisor.ensure_ready()?;
+        let current_epoch = self.supervisor.current_connection_epoch();
+        let (bound_epoch, _) = self.session_resume_snapshot(session.native_id());
+        if should_resume_session(bound_epoch, current_epoch, false) {
+            self.resume_session(session, false)?;
+        }
+        Ok(())
     }
 
     fn emit(&self, thread_id: &str, event: NormalizedRuntimeEvent) {
@@ -222,6 +318,8 @@ impl CodexRuntime {
                     generation: 1,
                     sequence: 0,
                     active_turn_id: None,
+                    connection_epoch: None,
+                    resume_params: resume_params_from_request(thread_id, &Map::new()),
                 });
             match &event {
                 NormalizedRuntimeEvent::TurnStarted { turn_id } => {
@@ -590,9 +688,10 @@ impl AgentRuntime for CodexRuntime {
                 .get("modelProvider")
                 .and_then(Value::as_str)
                 .map(String::from);
-            let response = self
+            let request_params = params.clone();
+            let (response, connection_epoch) = self
                 .supervisor
-                .request("thread/start", Value::Object(params))?;
+                .request_with_epoch("thread/start", Value::Object(params))?;
             let thread_id = response
                 .get("thread")
                 .and_then(|thread| string_field(thread, "id"))
@@ -607,6 +706,8 @@ impl AgentRuntime for CodexRuntime {
                 true,
                 &response,
                 requested_provider.as_deref(),
+                resume_params_from_request(&thread_id, &request_params),
+                connection_epoch,
             )?;
             self.emit(&thread_id, NormalizedRuntimeEvent::SessionAttached);
             Ok(runtime)
@@ -621,9 +722,10 @@ impl AgentRuntime for CodexRuntime {
                 .get("modelProvider")
                 .and_then(Value::as_str)
                 .map(String::from);
-            let response = self
+            let request_params = params.clone();
+            let (response, connection_epoch) = self
                 .supervisor
-                .request("thread/fork", Value::Object(params))?;
+                .request_with_epoch("thread/fork", Value::Object(params))?;
             let thread_id = response
                 .get("thread")
                 .and_then(|thread| string_field(thread, "id"))
@@ -638,6 +740,8 @@ impl AgentRuntime for CodexRuntime {
                 true,
                 &response,
                 requested_provider.as_deref(),
+                resume_params_from_request(&thread_id, &request_params),
+                connection_epoch,
             )?;
             self.emit(&thread_id, NormalizedRuntimeEvent::SessionAttached);
             Ok(runtime)
@@ -674,14 +778,17 @@ impl AgentRuntime for CodexRuntime {
                 .get("modelProvider")
                 .and_then(Value::as_str)
                 .map(String::from);
-            let response = self
+            let resume_params = resume_params_from_request(session.native_id(), &params);
+            let (response, connection_epoch) = self
                 .supervisor
-                .request("thread/resume", Value::Object(params))?;
+                .request_with_epoch("thread/resume", Value::Object(params))?;
             let runtime = self.runtime_session_from_response(
                 session.native_id(),
                 true,
                 &response,
                 requested_provider.as_deref(),
+                resume_params,
+                connection_epoch,
             )?;
             self.emit(session.native_id(), NormalizedRuntimeEvent::SessionAttached);
             Ok(runtime)
@@ -695,6 +802,7 @@ impl AgentRuntime for CodexRuntime {
     ) -> EngineFuture<'_, TurnHandle> {
         Box::pin(async move {
             self.owns_session(&session)?;
+            self.ensure_session_loaded(&session)?;
             let mut params = Map::from_iter([
                 (
                     "threadId".into(),
@@ -714,9 +822,21 @@ impl AgentRuntime for CodexRuntime {
                     "serviceTier",
                 ],
             );
-            let response = self
+            let request_params = Value::Object(params);
+            let response = match self
                 .supervisor
-                .request("turn/start", Value::Object(params))?;
+                .request_with_epoch("turn/start", request_params.clone())
+            {
+                Ok(response) => response,
+                Err(error) if error.kind == EngineErrorKind::NotFound => {
+                    self.resume_session(&session, true)?;
+                    self.supervisor
+                        .request_with_epoch("turn/start", request_params)?
+                }
+                Err(error) => return Err(error),
+            };
+            self.bind_session_epoch(session.native_id(), response.1);
+            let response = response.0;
             let turn_id = response
                 .get("turn")
                 .and_then(|turn| string_field(turn, "id"))
@@ -897,6 +1017,35 @@ fn copy_options(source: &BTreeMap<String, Value>, target: &mut Map<String, Value
             target.insert((*key).to_string(), value.clone());
         }
     }
+}
+
+fn resume_params_from_request(thread_id: &str, request: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = Map::from_iter([("threadId".into(), Value::String(thread_id.to_string()))]);
+    for key in [
+        "model",
+        "modelProvider",
+        "config",
+        "approvalPolicy",
+        "sandbox",
+        "serviceTier",
+        "cwd",
+        "baseInstructions",
+        "developerInstructions",
+        "personality",
+    ] {
+        if let Some(value) = request.get(key) {
+            params.insert(key.to_string(), value.clone());
+        }
+    }
+    params
+}
+
+fn should_resume_session(
+    bound_epoch: Option<u64>,
+    current_epoch: Option<u64>,
+    force: bool,
+) -> bool {
+    force || current_epoch.is_none() || bound_epoch != current_epoch
 }
 
 fn response_model_provider(response: &Value) -> Option<&str> {
@@ -1132,6 +1281,43 @@ mod tests {
             .as_str()
             .is_some_and(|instructions| instructions.contains("HTML")));
         assert!(!params.contains_key("ignored"));
+    }
+
+    #[test]
+    fn derives_reconnect_params_without_start_or_fork_only_fields() {
+        let request = Map::from_iter([
+            ("threadId".into(), Value::String("source-thread".into())),
+            ("model".into(), Value::String("gpt-test".into())),
+            (
+                "modelProvider".into(),
+                Value::String("provider-test".into()),
+            ),
+            ("config".into(), json!({ "model_providers": {} })),
+            (
+                "developerInstructions".into(),
+                Value::String("session capability".into()),
+            ),
+            ("cwd".into(), Value::String("/workspace".into())),
+            ("ephemeral".into(), Value::Bool(true)),
+            ("lastTurnId".into(), Value::String("turn-2".into())),
+        ]);
+        let params = resume_params_from_request("resumed-thread", &request);
+        assert_eq!(params["threadId"], "resumed-thread");
+        assert_eq!(params["modelProvider"], "provider-test");
+        assert_eq!(params["config"], json!({ "model_providers": {} }));
+        assert_eq!(params["developerInstructions"], "session capability");
+        assert_eq!(params["cwd"], "/workspace");
+        assert!(!params.contains_key("ephemeral"));
+        assert!(!params.contains_key("lastTurnId"));
+    }
+
+    #[test]
+    fn reconnects_only_when_the_server_binding_is_missing_or_changed() {
+        assert!(!should_resume_session(Some(4), Some(4), false));
+        assert!(should_resume_session(Some(4), Some(5), false));
+        assert!(should_resume_session(Some(4), None, false));
+        assert!(should_resume_session(None, Some(4), false));
+        assert!(should_resume_session(Some(4), Some(4), true));
     }
 
     #[test]

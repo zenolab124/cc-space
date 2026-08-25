@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -43,6 +43,7 @@ pub struct CodexSupervisor {
     readiness_changed: Condvar,
     readiness_sinks: Mutex<Vec<CodexReadinessSink>>,
     next_request_id: AtomicU64,
+    next_connection_epoch: AtomicU64,
 }
 
 enum ReadinessState {
@@ -57,8 +58,19 @@ enum ReadinessState {
     },
 }
 
+#[derive(Clone)]
 struct Connection {
     commands: SyncSender<ActorCommand>,
+    epoch: u64,
+    alive: Arc<AtomicBool>,
+}
+
+struct ConnectionLiveness(Arc<AtomicBool>);
+
+impl Drop for ConnectionLiveness {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 enum ActorCommand {
@@ -85,6 +97,7 @@ impl CodexSupervisor {
             readiness_changed: Condvar::new(),
             readiness_sinks: Mutex::new(Vec::new()),
             next_request_id: AtomicU64::new(10),
+            next_connection_epoch: AtomicU64::new(1),
         })
     }
 
@@ -203,6 +216,11 @@ impl CodexSupervisor {
     }
 
     pub fn request(&self, method: &str, params: Value) -> EngineResult<Value> {
+        self.request_with_epoch(method, params)
+            .map(|(response, _)| response)
+    }
+
+    pub fn request_with_epoch(&self, method: &str, params: Value) -> EngineResult<(Value, u64)> {
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         self.request_once(id, method, params.clone())
             .or_else(|error| {
@@ -215,10 +233,20 @@ impl CodexSupervisor {
             })
     }
 
+    pub fn current_connection_epoch(&self) -> Option<u64> {
+        self.connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .filter(|connection| connection.alive.load(Ordering::Acquire))
+            .map(|connection| connection.epoch)
+    }
+
     pub fn respond(&self, id: RequestId, result: Value) -> EngineResult<()> {
-        let commands = self.connection()?;
+        let connection = self.connection()?;
         let (response_tx, response_rx) = mpsc::channel();
-        commands
+        connection
+            .commands
             .send(ActorCommand::Respond {
                 id,
                 result,
@@ -241,10 +269,11 @@ impl CodexSupervisor {
         }
     }
 
-    fn request_once(&self, id: u64, method: &str, params: Value) -> EngineResult<Value> {
-        let commands = self.connection()?;
+    fn request_once(&self, id: u64, method: &str, params: Value) -> EngineResult<(Value, u64)> {
+        let connection = self.connection()?;
         let (response_tx, response_rx) = mpsc::channel();
-        commands
+        connection
+            .commands
             .send(ActorCommand::Request {
                 id,
                 method: method.to_string(),
@@ -252,9 +281,10 @@ impl CodexSupervisor {
                 response: response_tx,
             })
             .map_err(|_| unavailable("Codex app-server command channel closed"))?;
-        response_rx
+        let response = response_rx
             .recv_timeout(REQUEST_TIMEOUT)
-            .map_err(|_| unavailable("Codex app-server request timed out"))?
+            .map_err(|_| unavailable("Codex app-server request timed out"))??;
+        Ok((response, connection.epoch))
     }
 
     fn emit_readiness(&self, snapshot: CodexReadinessSnapshot) {
@@ -268,13 +298,16 @@ impl CodexSupervisor {
         }
     }
 
-    fn connection(&self) -> EngineResult<SyncSender<ActorCommand>> {
+    fn connection(&self) -> EngineResult<Connection> {
         let mut guard = self
             .connection
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if let Some(connection) = guard.as_ref() {
-            return Ok(connection.commands.clone());
+            if connection.alive.load(Ordering::Acquire) {
+                return Ok(connection.clone());
+            }
+            *guard = None;
         }
 
         let binary = crate::codex_locator::locate().map_err(|_| {
@@ -303,11 +336,19 @@ impl CodexSupervisor {
 
         let (commands, receiver) = mpsc::sync_channel(256);
         let sinks = Arc::clone(&self.sinks);
-        std::thread::spawn(move || actor_loop(client, receiver, sinks));
-        *guard = Some(Connection {
-            commands: commands.clone(),
+        let alive = Arc::new(AtomicBool::new(true));
+        let actor_alive = Arc::clone(&alive);
+        std::thread::spawn(move || {
+            let _liveness = ConnectionLiveness(actor_alive);
+            actor_loop(client, receiver, sinks);
         });
-        Ok(commands)
+        let connection = Connection {
+            commands,
+            epoch: self.next_connection_epoch.fetch_add(1, Ordering::Relaxed),
+            alive,
+        };
+        *guard = Some(connection.clone());
+        Ok(connection)
     }
 }
 
@@ -416,6 +457,16 @@ fn map_rpc_error(error: RpcError) -> EngineError {
             "Codex thread is active in another client",
         );
     }
+    if error
+        .message
+        .to_ascii_lowercase()
+        .contains("thread not found")
+    {
+        return EngineError::new(
+            EngineErrorKind::NotFound,
+            format!("Codex request failed: {}", error.message),
+        );
+    }
     EngineError::new(
         EngineErrorKind::Protocol,
         format!("Codex request failed: {}", error.message),
@@ -425,7 +476,9 @@ fn map_rpc_error(error: RpcError) -> EngineError {
 fn map_transport_error(error: AppServerError) -> EngineError {
     let kind = match error.kind() {
         AppServerErrorKind::Spawn | AppServerErrorKind::Eof => EngineErrorKind::Unavailable,
-        AppServerErrorKind::Protocol | AppServerErrorKind::Rpc => EngineErrorKind::Protocol,
+        AppServerErrorKind::Protocol
+        | AppServerErrorKind::MessageTooLarge
+        | AppServerErrorKind::Rpc => EngineErrorKind::Protocol,
         AppServerErrorKind::Timeout | AppServerErrorKind::Io => EngineErrorKind::Io,
     };
     let mut mapped = EngineError::new(kind, error.to_string());
@@ -486,6 +539,21 @@ mod tests {
         });
         assert_eq!(error.kind, EngineErrorKind::Protocol);
         assert_eq!(error.message, "Codex request failed: invalid params");
+    }
+
+    #[test]
+    fn missing_thread_rpc_error_is_structured_for_runtime_recovery() {
+        let error = map_rpc_error(RpcError {
+            code: -32000,
+            message: "thread not found: example".into(),
+            data: None,
+        });
+        assert_eq!(error.kind, EngineErrorKind::NotFound);
+        assert_eq!(
+            error.message,
+            "Codex request failed: thread not found: example"
+        );
+        assert!(!error.retryable);
     }
 
     #[test]

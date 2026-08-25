@@ -302,6 +302,10 @@ fn map_app_server_error(error: AppServerError) -> CodexError {
         AppServerErrorKind::Protocol => {
             CodexError::new("protocol", "Codex app-server returned an invalid response")
         }
+        AppServerErrorKind::MessageTooLarge => CodexError::new(
+            "protocol",
+            "Codex app-server response exceeded Monet's safety limit",
+        ),
         AppServerErrorKind::Timeout => {
             CodexError::new("timeout", "Codex quota request timed out")
         }
