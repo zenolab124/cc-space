@@ -1,7 +1,7 @@
 //! 工坊域资产扫描与管理（v2.3.0 → v2.9.0 二期扩展）。
 //!
 //! 一期（v2.3.0）：
-//! - `get_workshop_assets`：全局 + 项目级标准路径全量扫描，一次返回四类清单
+//! - `get_workshop_assets`：全局 + 项目级 + 已安装插件资产全量扫描，一次返回四类清单
 //! - `probe_mcp_server`：http/sse 类型 MCP 在线探测
 //! - `open_workshop_dir`：系统文件管理器打开类别全局目录
 //!
@@ -124,6 +124,36 @@ struct SkillFrontmatter {
 struct SkillMetadata {
     #[serde(default)]
     version: Option<serde_yaml::Value>,
+}
+
+/// Claude Code 已安装插件索引。插件发现是 Claude adapter 的私有输入，
+/// 扫描结果仍经中立 assets facet 交给共享 UI。
+#[derive(Debug, Default, Deserialize)]
+struct InstalledPluginsFile {
+    #[serde(default)]
+    plugins: HashMap<String, Vec<InstalledPluginRecord>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct InstalledPluginRecord {
+    #[serde(default, rename = "installPath")]
+    install_path: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct KnownMarketplaceRecord {
+    #[serde(default, rename = "installLocation")]
+    install_location: Option<String>,
+    #[serde(default)]
+    source: Option<KnownMarketplaceSource>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct KnownMarketplaceSource {
+    #[serde(default)]
+    path: Option<String>,
 }
 
 /// command .md frontmatter；kebab 字段必须显式 rename（serde 不支持 kebab 自动转换）
@@ -317,6 +347,7 @@ fn collect_composer_assets_from(claude_dir: &Path, cwd: &Path) -> WorkshopAssets
 /// project_cwds = 项目工作目录列表（单测注入 fixture）
 fn collect_assets(claude_dir: &Path, claude_json: &Path, project_cwds: &[String]) -> WorkshopAssets {
     let mut skills = scan_skills_dir(&claude_dir.join("skills"), GLOBAL_SOURCE, USER_SCOPE);
+    skills.extend(scan_installed_plugin_skills(claude_dir));
     let mut commands = scan_commands_dir(&claude_dir.join("commands"), GLOBAL_SOURCE, USER_SCOPE);
     let mut agents = scan_agents_dir(&claude_dir.join("agents"), GLOBAL_SOURCE);
 
@@ -438,6 +469,119 @@ fn project_source_name(cwd: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| cwd.to_string())
+}
+
+fn configured_plugin_path(raw: &str, claude_dir: &Path) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed == "~" {
+        return claude_dir.parent().map(Path::to_path_buf);
+    }
+    if let Some(relative) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        return claude_dir.parent().map(|home| home.join(relative));
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(claude_dir.join("plugins").join(path))
+    }
+}
+
+fn plugin_identity(id: &str) -> (&str, Option<&str>) {
+    id.rsplit_once('@')
+        .map_or((id, None), |(plugin, marketplace)| {
+            (plugin, Some(marketplace))
+        })
+}
+
+fn known_marketplace_roots(claude_dir: &Path) -> HashMap<String, PathBuf> {
+    let path = claude_dir.join("plugins/known_marketplaces.json");
+    let records: HashMap<String, KnownMarketplaceRecord> = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    records
+        .into_iter()
+        .filter_map(|(name, record)| {
+            let raw = record
+                .install_location
+                .or_else(|| record.source.and_then(|source| source.path))?;
+            configured_plugin_path(&raw, claude_dir).map(|path| (name, path))
+        })
+        .collect()
+}
+
+fn marketplace_plugin_roots(root: &Path, plugin: &str) -> Vec<PathBuf> {
+    let mut roots = vec![
+        root.join("plugins").join(plugin),
+        root.join("external_plugins").join(plugin),
+        root.join(plugin),
+    ];
+    if root.join(".claude-plugin/plugin.json").is_file() {
+        roots.push(root.to_path_buf());
+    }
+    roots
+}
+
+/// 只枚举 installed_plugins.json 中实际安装的插件，避免把 marketplace 里尚未安装的
+/// 可选插件误报为可用。installPath 缺失或失效时，再用 known_marketplaces 定位源码目录。
+fn scan_installed_plugin_skills(claude_dir: &Path) -> Vec<SkillAsset> {
+    let installed_path = claude_dir.join("plugins/installed_plugins.json");
+    let installed: InstalledPluginsFile = fs::read_to_string(installed_path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    if installed.plugins.is_empty() {
+        return Vec::new();
+    }
+
+    let marketplaces = known_marketplace_roots(claude_dir);
+    let mut seen_paths = HashSet::new();
+    let mut skills = Vec::new();
+
+    for (id, records) in installed.plugins {
+        let (plugin, marketplace) = plugin_identity(&id);
+        let source = format!("Plugin · {plugin}");
+        let mut found_for_plugin = false;
+
+        for record in records {
+            let scope = record.scope.as_deref().unwrap_or(USER_SCOPE);
+            let Some(root) = record
+                .install_path
+                .as_deref()
+                .and_then(|path| configured_plugin_path(path, claude_dir))
+            else {
+                continue;
+            };
+            for skill in scan_skills_dir(&root.join("skills"), &source, scope) {
+                if seen_paths.insert(skill.path.clone()) {
+                    skills.push(skill);
+                    found_for_plugin = true;
+                }
+            }
+        }
+
+        if found_for_plugin {
+            continue;
+        }
+        let Some(root) = marketplace.and_then(|name| marketplaces.get(name)) else {
+            continue;
+        };
+        for candidate in marketplace_plugin_roots(root, plugin) {
+            for skill in scan_skills_dir(&candidate.join("skills"), &source, USER_SCOPE) {
+                if seen_paths.insert(skill.path.clone()) {
+                    skills.push(skill);
+                }
+            }
+        }
+    }
+    skills
 }
 
 // ---------- 四类扫描（纯函数，目录不存在一律静默返回空） ----------
@@ -1912,6 +2056,81 @@ mod tests {
         assert!(assets.skills.iter().any(|item| item.scope == "user"));
         assert!(assets.skills.iter().any(|item| item.scope == "project"));
         assert!(!assets.skills.iter().any(|item| item.name == "foreign"));
+    }
+
+    #[test]
+    fn installed_plugin_skills_are_discovered_without_listing_uninstalled_marketplace_items() {
+        let fx = Fixture::new("plugin-skills");
+        let claude_dir = fx.root.join(".claude");
+        let installed_root = claude_dir.join("plugins/cache/catalog/review-tools/1.0.0");
+        let marketplace_root = claude_dir.join("plugins/marketplaces/catalog");
+        fx.write(
+            ".claude/plugins/cache/catalog/review-tools/1.0.0/skills/audit/SKILL.md",
+            "---\nname: audit\ndescription: Review changes\nmetadata:\n  version: 1.0\n---\n",
+        );
+        fx.write(
+            ".claude/plugins/marketplaces/catalog/plugins/fallback/skills/explain/SKILL.md",
+            "---\nname: explain\ndescription: Explain a change\n---\n",
+        );
+        fx.write(
+            ".claude/plugins/marketplaces/catalog/plugins/not-installed/skills/hidden/SKILL.md",
+            "---\nname: hidden\n---\n",
+        );
+        fx.write(
+            ".claude/plugins/known_marketplaces.json",
+            &serde_json::json!({
+                "catalog": { "installLocation": marketplace_root }
+            })
+            .to_string(),
+        );
+        fx.write(
+            ".claude/plugins/installed_plugins.json",
+            &serde_json::json!({
+                "version": 2,
+                "plugins": {
+                    "review-tools@catalog": [{
+                        "scope": "project",
+                        "installPath": installed_root
+                    }],
+                    "fallback@catalog": [{ "scope": "user" }]
+                }
+            })
+            .to_string(),
+        );
+
+        let assets = collect_assets(&claude_dir, &fx.root.join(".claude.json"), &[]);
+
+        assert_eq!(assets.skills.len(), 2);
+        let audit = assets
+            .skills
+            .iter()
+            .find(|skill| skill.name == "audit")
+            .unwrap();
+        assert_eq!(audit.source, "Plugin · review-tools");
+        assert_eq!(audit.scope, "project");
+        assert_eq!(audit.version.as_deref(), Some("1.0"));
+        let fallback = assets
+            .skills
+            .iter()
+            .find(|skill| skill.name == "explain")
+            .unwrap();
+        assert_eq!(fallback.source, "Plugin · fallback");
+        assert!(!assets.skills.iter().any(|skill| skill.name == "hidden"));
+    }
+
+    #[test]
+    fn malformed_plugin_registry_does_not_hide_regular_skills() {
+        let fx = Fixture::new("plugin-skills-malformed");
+        fx.write(
+            ".claude/skills/regular/SKILL.md",
+            "---\nname: regular\ndescription: Regular skill\n---\n",
+        );
+        fx.write(".claude/plugins/installed_plugins.json", "{ not-json");
+
+        let assets = collect_assets(&fx.root.join(".claude"), &fx.root.join(".claude.json"), &[]);
+
+        assert_eq!(assets.skills.len(), 1);
+        assert_eq!(assets.skills[0].name, "regular");
     }
 
     #[cfg(unix)]

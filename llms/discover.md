@@ -146,7 +146,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 
 ### 3.9 Workshop — Claude Code assets in one place
 
-- Four asset classes in panorama: Skills / Commands / Subagents / MCP servers — global and per-project side by side, with counts
+- Four asset classes in panorama: Skills / Commands / Subagents / MCP servers — global and per-project side by side, with counts; Claude Code Skills also include those from actually installed plugins with their plugin source labeled, without mixing in uninstalled marketplace candidates
 - Asset details read in place: frontmatter + body rendered; open the source file or its directory with one click
 - MCP management: add (three scopes, http/stdio transports), remove, liveness probe (five states visualized); entries managed by settings files are honestly labeled as not UI-editable
 - Hooks aggregated: hooks from user/project/local settings layers, all visible in one place

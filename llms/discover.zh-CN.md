@@ -146,7 +146,7 @@
 
 ### 9. 工坊——Claude Code 资产一站式管理
 
-- 四类资产全景：Skills / Commands / 子 Agent / MCP 服务器，全局与项目级一起陈列，带计数
+- 四类资产全景：Skills / Commands / 子 Agent / MCP 服务器，全局与项目级一起陈列，带计数；Claude Code 的 Skills 还会纳入实际已安装插件，并标明插件来源，不把 marketplace 中未安装的候选项混进来
 - 资产详情直读：frontmatter + 正文渲染，一键用系统默认程序打开源文件或所在目录
 - MCP 管理：添加（三种作用域、http/stdio 传输）、删除、在线探测（五态可视化）、被 settings 托管的条目如实说明不可 UI 修改
 - Hooks 聚合陈列：用户/项目/local 各层 settings 里的 hooks 一处看全
