@@ -850,22 +850,7 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .map(|change| FilePatch {
-                    path: change
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    kind: change
-                        .get("kind")
-                        .and_then(Value::as_str)
-                        .unwrap_or("update")
-                        .to_string(),
-                    diff: change
-                        .get("diff")
-                        .and_then(Value::as_str)
-                        .map(|value| bounded_segment_text(value.to_string())),
-                })
+                .map(map_file_patch)
                 .collect(),
             status: map_status(item.get("status").and_then(Value::as_str)),
         }],
@@ -969,6 +954,60 @@ pub(crate) fn map_item_segments(session: &SessionRef, item: &Value) -> EngineRes
         }],
     };
     Ok(segments)
+}
+
+fn map_file_patch(change: &Value) -> FilePatch {
+    let path = change
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let kind = change
+        .get("kind")
+        .and_then(|value| {
+            value
+                .as_str()
+                .or_else(|| value.get("type").and_then(Value::as_str))
+        })
+        .unwrap_or("update")
+        .to_string();
+    let raw_diff = change
+        .get("diff")
+        .or_else(|| change.get("unifiedDiff"))
+        .or_else(|| change.get("unified_diff"))
+        .or_else(|| change.get("content"))
+        .and_then(Value::as_str);
+    let diff = raw_diff.map(|value| {
+        let normalized = match kind.as_str() {
+            // Codex App Server 的 add/delete diff 是完整文件内容，只有 update
+            // 才是 unified diff；在 Adapter 边界统一后，共享 UI 无需识别该差异。
+            "add" | "create" | "created" => content_as_unified_diff(value, true),
+            "delete" | "deleted" | "remove" | "removed" => content_as_unified_diff(value, false),
+            _ => value.to_string(),
+        };
+        bounded_segment_text(normalized)
+    });
+    FilePatch { path, kind, diff }
+}
+
+fn content_as_unified_diff(content: &str, added: bool) -> String {
+    let lines: Vec<_> = content.split_terminator('\n').collect();
+    let count = lines.len();
+    let mut diff = if added {
+        format!("@@ -0,0 +1,{count} @@\n")
+    } else {
+        format!("@@ -1,{count} +0,0 @@\n")
+    };
+    let marker = if added { '+' } else { '-' };
+    for line in lines {
+        diff.push(marker);
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    if !content.is_empty() && !content.ends_with('\n') {
+        diff.push_str("\\ No newline at end of file\n");
+    }
+    diff
 }
 
 fn map_user_input_segment(
@@ -1684,6 +1723,62 @@ mod tests {
         let asset = decode_data_url_asset("data:image/png;base64,aW1hZ2U=").unwrap();
         assert_eq!(asset.media_type, "image/png");
         assert_eq!(asset.bytes, b"image");
+    }
+
+    #[test]
+    fn normalizes_codex_file_contents_to_shared_unified_diffs() {
+        let session = SessionRef::new(default_instance().unwrap(), "session").unwrap();
+        let segments = map_item_segments(
+            &session,
+            &json!({
+                "id": "change-1",
+                "type": "fileChange",
+                "status": "completed",
+                "changes": [
+                    {
+                        "path": "src/new.txt",
+                        "kind": { "type": "add" },
+                        "diff": "alpha\nbeta\n"
+                    },
+                    {
+                        "path": "src/old.txt",
+                        "kind": { "type": "delete" },
+                        "diff": "gone"
+                    },
+                    {
+                        "path": "src/edit.txt",
+                        "kind": { "type": "update", "move_path": null },
+                        "diff": "@@ -1 +1 @@\n-old\n+new\n"
+                    }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            segments,
+            vec![Segment::FileChange {
+                id: "change-1".into(),
+                changes: vec![
+                    FilePatch {
+                        path: "src/new.txt".into(),
+                        kind: "add".into(),
+                        diff: Some("@@ -0,0 +1,2 @@\n+alpha\n+beta\n".into()),
+                    },
+                    FilePatch {
+                        path: "src/old.txt".into(),
+                        kind: "delete".into(),
+                        diff: Some("@@ -1,1 +0,0 @@\n-gone\n\\ No newline at end of file\n".into()),
+                    },
+                    FilePatch {
+                        path: "src/edit.txt".into(),
+                        kind: "update".into(),
+                        diff: Some("@@ -1 +1 @@\n-old\n+new\n".into()),
+                    },
+                ],
+                status: ItemStatus::Completed,
+            }]
+        );
     }
 
     #[test]
