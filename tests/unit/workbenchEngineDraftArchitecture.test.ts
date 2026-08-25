@@ -65,6 +65,12 @@ describe('standard-engine workbench drafts', () => {
     expect(rail).toContain('projectOptions.value.slice(0, 5)')
   })
 
+  it('keeps breathing room above the open-session action without shifting its popover anchor', () => {
+    expect(rail).toContain('class="shrink-0 pt-2"')
+    expect(rail).toContain('<div class="relative">')
+    expect(rail).toContain('class="absolute bottom-full left-0 right-0 mb-1.5 z-50')
+  })
+
   it('promotes Claude in place and replaces Codex in the same workbench column', () => {
     expect(picker).toContain("type TargetEngineId = 'claude-code' | 'codex'")
     expect(picker).toContain('promotePendingTaskToDraft(props.sessionId)')

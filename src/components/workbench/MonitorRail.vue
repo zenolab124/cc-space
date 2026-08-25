@@ -180,15 +180,16 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
     </TransitionGroup>
 
     <!-- ＋ 格 + Popover -->
-    <div class="relative shrink-0">
-      <!-- Popover 面板（向上弹出） -->
-      <Transition name="popover">
-        <div
-          v-if="showPopover"
-          ref="popoverRef"
-          class="absolute bottom-full left-0 right-0 mb-1.5 z-50
-                 rounded border border-border shadow-paper-lifted bg-popover"
-        >
+    <div class="shrink-0 pt-2">
+      <div class="relative">
+        <!-- Popover 面板（向上弹出） -->
+        <Transition name="popover">
+          <div
+            v-if="showPopover"
+            ref="popoverRef"
+            class="absolute bottom-full left-0 right-0 mb-1.5 z-50
+                   rounded border border-border shadow-paper-lifted bg-popover"
+          >
           <!-- 最近项目 -->
           <div v-if="recentProjects.length" class="py-1">
             <div class="px-2.5 py-1 text-[10px] text-muted-foreground/70 tracking-wider">
@@ -277,18 +278,19 @@ onUnmounted(() => document.removeEventListener('mousedown', onDocumentClick))
               <span>{{ $t('workbench.rail.pickFolder') }}</span>
             </button>
           </div>
-        </div>
-      </Transition>
+          </div>
+        </Transition>
 
-      <button
-        ref="triggerRef"
-        class="w-full min-h-10 border border-dashed border-border rounded text-xs text-muted-foreground
-               flex items-center justify-center gap-1.5 hover:text-primary hover:border-primary transition-colors"
-        @click="togglePopover"
-      >
-        <span class="text-sm">＋</span>
-        <span>{{ $t('workbench.rail.openSession') }}</span>
-      </button>
+        <button
+          ref="triggerRef"
+          class="w-full min-h-10 border border-dashed border-border rounded text-xs text-muted-foreground
+                 flex items-center justify-center gap-1.5 hover:text-primary hover:border-primary transition-colors"
+          @click="togglePopover"
+        >
+          <span class="text-sm">＋</span>
+          <span>{{ $t('workbench.rail.openSession') }}</span>
+        </button>
+      </div>
     </div>
   </aside>
 </template>
