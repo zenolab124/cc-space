@@ -6,7 +6,7 @@ import { flattenResultText, type ToolResultData } from '@/utils/toolPair'
 import type { ToolUseBlock } from '@/utils/toolDisplay'
 import { isOrchestrationTool, toolDisplayTitle, toolSummary } from '@/utils/toolDisplay'
 import MessageBlock from './MessageBlock.vue'
-import EngineAssetImage from './engine/EngineAssetImage.vue'
+import ToolResultImages from './ToolResultImages.vue'
 import ToolResultPreviewCard from './ToolResultPreviewCard.vue'
 import {
   TOOL_EXECUTION_CONTEXT,
@@ -42,8 +42,9 @@ const resultImages = computed(() => {
   if (!content || typeof content === 'string') return []
   return content.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image')
 })
-const imageCount = computed(() => resultImages.value.length
-  + (result.value?.attachments?.filter(attachment => attachment.mediaType.startsWith('image/')).length ?? 0))
+const imageAttachments = computed(() => result.value?.attachments
+  ?.filter(attachment => attachment.mediaType.startsWith('image/')) ?? [])
+const imageCount = computed(() => resultImages.value.length + imageAttachments.value.length)
 const asyncState = computed<AsyncToolState | null>(() => context?.asyncStates?.value.get(props.tool.id) ?? null)
 const waitingPermission = computed(() => {
   const request = context?.permissionRequest?.value
@@ -151,16 +152,6 @@ watch(() => foldState.requestedToolId.value, requested => {
           {{ stateLabel }}
           <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
         </span>
-        <span
-          v-if="imageCount > 0"
-          class="tool-fold-image-badge"
-          role="img"
-          :title="$t('block.toolFold.imageCount', { count: imageCount })"
-          :aria-label="$t('block.toolFold.imageCount', { count: imageCount })"
-        >
-          <span class="i-carbon-image" aria-hidden="true" />
-          <span v-if="imageCount > 1">{{ imageCount }}</span>
-        </span>
       </span>
     </button>
     <div v-else class="tool-fold-line tool-fold-line-static">
@@ -179,18 +170,14 @@ watch(() => foldState.requestedToolId.value, requested => {
           {{ stateLabel }}
           <span v-if="state === 'running'" class="tool-fold-dots" aria-hidden="true"><i /><i /><i /></span>
         </span>
-        <span
-          v-if="imageCount > 0"
-          class="tool-fold-image-badge"
-          role="img"
-          :title="$t('block.toolFold.imageCount', { count: imageCount })"
-          :aria-label="$t('block.toolFold.imageCount', { count: imageCount })"
-        >
-          <span class="i-carbon-image" aria-hidden="true" />
-          <span v-if="imageCount > 1">{{ imageCount }}</span>
-        </span>
       </span>
     </div>
+    <ToolResultImages
+      v-if="imageCount > 0"
+      :images="resultImages"
+      :attachments="imageAttachments"
+      :record-uuid="result?.recordUuid"
+    />
     <div
       v-if="!orchestration && (!foldable || expanded)"
       :id="resultContentId"
@@ -202,25 +189,10 @@ watch(() => foldState.requestedToolId.value, requested => {
       v-if="orchestration && result && (!foldable || expanded)"
       :content-id="resultContentId"
       :text="resultText"
-      :images="resultImages"
-      :attachments="result.attachments"
-      :record-uuid="result.recordUuid"
       :expanded="resultExpanded"
       :is-error="result.is_error"
       @toggle="toggleResult"
     />
-    <div
-      v-if="!orchestration && result?.attachments?.length"
-      class="tool-fold-assets"
-    >
-      <EngineAssetImage
-        v-for="attachment in result.attachments"
-        :key="attachment.asset.nativeId"
-        :attachment="attachment"
-        auto-load
-        compact
-      />
-    </div>
   </div>
 </template>
 
@@ -285,25 +257,8 @@ watch(() => foldState.requestedToolId.value, requested => {
 .tool-fold-state.is-error,
 .tool-fold-state.is-interrupted { color: var(--destructive); }
 .tool-fold-state.is-background { color: var(--primary); }
-.tool-fold-image-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 15px;
-  padding: 0 3px;
-  flex: none;
-  border: 1px solid color-mix(in srgb, var(--codex) 24%, var(--border));
-  border-radius: 4px;
-  color: var(--codex);
-  background: color-mix(in srgb, var(--codex) 7%, transparent);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-}
-.tool-fold-image-badge > :first-child { width: 11px; height: 11px; }
 .tool-fold-card { margin: 2px 0 6px 18px; }
 .tool-fold-card > :deep(*) { margin-top: 0; }
-.tool-fold-assets { margin: 2px 0 6px 32px; }
 .tool-fold-dots { display: inline-flex; width: 17px; gap: 2px; margin-left: 4px; }
 .tool-fold-dots i {
   width: 3px;

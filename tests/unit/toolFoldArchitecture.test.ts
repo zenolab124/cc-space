@@ -7,12 +7,15 @@ function source(path: string): string {
 }
 
 describe('工具调用分层折叠', () => {
-  it('外层展开后先显示紧凑结果卡,点击结果卡才显示完整内容', () => {
+  it('图片结果始终外露,文本结果仍按两层折叠', () => {
     const group = source('../../src/components/ToolProcessGroup.vue')
     const list = source('../../src/components/ContentBlockList.vue')
     const items = source('../../src/components/ToolProcessItems.vue')
     const item = source('../../src/components/ToolProcessItem.vue')
+    const resultImages = source('../../src/components/ToolResultImages.vue')
     const resultCard = source('../../src/components/ToolResultPreviewCard.vue')
+    const inlineImage = source('../../src/components/blocks/BlockImage.vue')
+    const assetImage = source('../../src/components/engine/EngineAssetImage.vue')
 
     expect(group).toContain('nested')
     expect(items).toContain('nested?: boolean')
@@ -28,11 +31,22 @@ describe('工具调用分层折叠', () => {
     expect(item).toContain(':expanded="resultExpanded"')
     expect(item).toContain('@toggle="toggleResult"')
     expect(item).toContain('if (!value) resultExpanded.value = false')
-    expect(resultCard).toContain('tool-result-clamp-3')
-    expect(resultCard).toContain("hasImages.value ? 'tool-result-clamp-2' : 'tool-result-clamp-3'")
-    expect(resultCard.indexOf('class="tool-result-preview-images"')).toBeLessThan(
-      resultCard.indexOf('class="tool-result-preview-text"'),
+    expect(item).toContain('<ToolResultImages')
+    expect(item).toContain('v-if="imageCount > 0"')
+    expect(item.indexOf('<ToolResultImages')).toBeLessThan(
+      item.indexOf('v-if="!orchestration && (!foldable || expanded)"'),
     )
+    expect(resultImages).toContain('flex-wrap: wrap')
+    expect(resultImages).toContain('flex: 0 1 240px')
+    expect(resultImages).toContain('width: 240px')
+    expect(resultImages).toContain('height: 160px')
+    expect(resultImages).toContain('<BlockImage')
+    expect(resultImages).toContain('<EngineAssetImage')
+    expect(inlineImage).toContain('@click="expanded = true"')
+    expect(assetImage).toContain('@click="openLightbox"')
+    expect(resultCard).toContain('tool-result-clamp-3')
+    expect(resultCard).not.toContain('tool-result-preview-images')
+    expect(resultCard).not.toContain('tool-result-clamp-2')
     expect(resultCard).toContain("@click=\"emit('toggle', $event)\"")
     expect(item).toContain(':aria-expanded="expanded"')
     expect(item).toContain(':aria-controls="resultContentId"')

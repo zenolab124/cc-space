@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, inject, type ComputedRef } from 'vue'
-import type { ContentBlock } from '@/types'
 import { flattenResultText, type ToolResultData } from '@/utils/toolPair'
-import BlockImage from '../BlockImage.vue'
 
 const MCP_NAME_RE = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/
 
@@ -32,12 +30,6 @@ const result = computed(() => toolResultMap?.value.get(props.toolUseId))
 const resultText = computed(() => {
   if (!result.value) return ''
   return flattenResultText(result.value.content)
-})
-
-const resultImages = computed(() => {
-  const c = result.value?.content
-  if (!c || typeof c === 'string') return []
-  return c.filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
 })
 
 const expanded = ref(false)
@@ -77,11 +69,6 @@ const outputExpanded = ref(false)
         ]"
         @click="outputExpanded = !outputExpanded"
       >{{ resultText }}</pre>
-    </div>
-
-    <!-- 结果图片(嵌套 tool_result,record_uuid 取 result 所在 record) -->
-    <div v-if="resultImages.length">
-      <BlockImage v-for="(img, i) in resultImages" :key="i" :block="img" :record-uuid="result?.recordUuid" />
     </div>
   </div>
 </template>
