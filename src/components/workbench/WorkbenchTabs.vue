@@ -4,10 +4,11 @@ import { useI18n } from 'vue-i18n'
 import { Menu } from '@tauri-apps/api/menu'
 import { useWorkbench, type WorkbenchTab } from '@/composables/useWorkbench'
 import { useConfirm } from '@/composables/useConfirm'
+import SortableWorkbenchTab from './SortableWorkbenchTab.vue'
 
 /**
- * 工作台 tab 条(FR-001):创建/重命名/关闭;溢出时横向滚动,不换行、不下拉收纳。
- * tab 不参与拖拽——排序与跨台移动会话均已废弃(切走再拖入的路径无价值)。
+ * 工作台 tab 条(FR-001):创建/重命名/关闭/排序;溢出时横向滚动,不换行、不下拉收纳。
+ * Tab 排序只改变展示顺序，不承载会话跨台移动语义。
  */
 const { t } = useI18n()
 const { state, activeTab, setActiveTab, createTab, renameTab, closeTab } = useWorkbench()
@@ -82,14 +83,17 @@ async function onContextMenu(e: MouseEvent, tab: WorkbenchTab) {
 <template>
   <div
     class="h-full flex items-center gap-0.5 pr-2 overflow-x-auto tabs-scroll"
+    role="tablist"
   >
-    <div
-      v-for="tab in state.tabs"
+    <SortableWorkbenchTab
+      v-for="(tab, index) in state.tabs"
       :key="tab.id"
-      class="wb-tab"
-      :class="{ active: tab.id === activeTab.id }"
-      @click="setActiveTab(tab.id)"
-      @dblclick="startRename(tab)"
+      :tab-id="tab.id"
+      :index="index"
+      :active="tab.id === activeTab.id"
+      :disabled="state.tabs.length <= 1 || editingTabId === tab.id"
+      @activate="setActiveTab(tab.id)"
+      @rename="startRename(tab)"
       @contextmenu="onContextMenu($event, tab)"
     >
       <input
@@ -116,10 +120,10 @@ async function onContextMenu(e: MouseEvent, tab: WorkbenchTab) {
           @pointerdown.stop
         />
       </template>
-    </div>
+    </SortableWorkbenchTab>
 
     <button
-      class="wb-tab add shrink-0"
+      class="wb-tab-add shrink-0"
       :title="$t('workbench.newTab')"
       @click="createTab()"
     >＋</button>
@@ -129,52 +133,20 @@ async function onContextMenu(e: MouseEvent, tab: WorkbenchTab) {
 </template>
 
 <style scoped>
-.wb-tab {
+.wb-tab-add {
   display: inline-flex;
+  height: 22px;
+  padding: 4px 8px;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  padding: 2px 10px;
   border-radius: var(--radius);
   color: var(--muted-foreground);
-  position: relative;
-  white-space: nowrap;
-  flex-shrink: 0;
-  height: 22px;
-  cursor: default;
-}
-.wb-tab:hover {
-  background: var(--muted);
-}
-.wb-tab.active {
-  background: var(--card);
-  box-shadow: var(--shadow-paper);
-  color: var(--foreground);
-  font-weight: 500;
-}
-.wb-tab.add {
-  padding: 4px 8px;
+  font-size: 11px;
   cursor: pointer;
 }
-/* 关闭按钮:hover 常显、active tab 常显;最后一个 tab 不渲染此按钮(见 v-if)。
-   width/height 归零替代 v-if 隐藏,避免 tab 尺寸随 hover 抖动 */
-.wb-tab-close {
-  width: 0;
-  height: 12px;
-  color: var(--muted-foreground);
-  opacity: 0;
-  transition: width 0.12s ease, opacity 0.12s ease;
-  cursor: pointer;
-  border-radius: 3px;
-}
-.wb-tab-close:hover {
-  background: var(--accent);
-  color: var(--foreground);
-}
-.wb-tab:hover .wb-tab-close,
-.wb-tab.active .wb-tab-close {
-  width: 12px;
-  opacity: 0.7;
+.wb-tab-add:hover { background: var(--muted); }
+.wb-tab-add:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
 }
 /* tab 条横向滚动:细滚动条 */
 .tabs-scroll {

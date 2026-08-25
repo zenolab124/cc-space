@@ -37,7 +37,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 > Positioning in one line: **a better session GUI than the official Claude Code desktop app** — the official app shows one session per window; Monet gives you a wall: unlimited parallel columns, global monitoring, in-place approvals.
 
 - Zero-friction new sessions: start one from recent projects in a click, or pick any folder and start chatting there — no need to open a terminal and cd first
-- Multi-tab workspaces: each tab holds a group of session columns; tabs are renamable (double-click to rename in place) with session-count badges
+- Multi-tab workspaces: each tab holds a group of session columns; tabs can be reordered by dragging, renamed in place with a double-click, and show session-count badges
 - Unlimited parallel columns: sessions stream side by side with no cap on column count and no blocking each other; when the screen runs out, scroll horizontally forever — wheel input is smoothed so it glides like a native trackpad
 - Free-form drag arrangement: drag session cards to reorder, drag column headers to swap, drag dividers to resize only the current column, and drag cards between the monitor rail and columns; opening or collapsing a session preserves every other reading width
 - Monitor rail: a card column on the left showing every session's live status, tail output, and token usage at a glance; collapsible, with hover-to-peek while collapsed

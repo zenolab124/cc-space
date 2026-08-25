@@ -13,6 +13,7 @@ import { resolveSessionRef } from '@/engines/directory'
 import type { ProjectRef, SessionRef } from '@/engines/types'
 import { clearEngineRunConfig, evictEngineRunConfig } from '@/engines/runConfig'
 import { clearRuntimeOptimisticInputs } from '@/engines/runtimeOptimisticInput'
+import { reorderWorkbenchTabs } from '@/utils/workbenchTabs'
 
 /**
  * 工作台状态模型（v2.1.0 FR-001/002/004 + NFR-002）
@@ -421,6 +422,10 @@ function setActiveTab(tabId: string) {
   if (state.value.tabs.some(t => t.id === tabId)) {
     state.value.activeTabId = tabId
   }
+}
+
+function reorderTabs(sourceTabId: string, targetTabId: string) {
+  state.value.tabs = reorderWorkbenchTabs(state.value.tabs, sourceTabId, targetTabId)
 }
 
 function reorderSessions(tabId: string, fromIndex: number, toIndex: number) {
@@ -889,6 +894,7 @@ export function useWorkbench() {
     renameTab,
     closeTab,
     setActiveTab,
+    reorderTabs,
     reorderSessions,
     openSession,
     createPendingTask,

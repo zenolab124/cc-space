@@ -34,7 +34,7 @@ import { DragDropProvider, DragOverlay } from '@dnd-kit/vue'
 const { projects, projectsRevision, loadProjects } = useProjects()
 const { selectSession } = useSessions()
 const { activeSection } = useUiState()
-const { state, activeTab, pruneDrafts, reorderSessions, reorderColumns, expandSession } = useWorkbench()
+const { state, activeTab, pruneDrafts, reorderTabs, reorderSessions, reorderColumns, expandSession } = useWorkbench()
 const { t } = useI18n()
 const { zoomLevel, setZoom, STEP } = useZoom()
 
@@ -123,6 +123,12 @@ function onWorkbenchDragEnd(event: any) {
   const sourceId = String(source.id ?? '')
   const targetId = String(target.id ?? '')
   if (import.meta.env.DEV) console.log('[dnd-end]', sourceId, '→', targetId)
+
+  // Workbench Tab reorder. IDs remain stable, so the active Tab does not change.
+  if (sourceId.startsWith('tab:') && targetId.startsWith('tab:')) {
+    reorderTabs(sourceId.slice(4), targetId.slice(4))
+    return
+  }
 
   // Column reorder (both start with "col:")
   if (sourceId.startsWith('col:') && targetId.startsWith('col:')) {
