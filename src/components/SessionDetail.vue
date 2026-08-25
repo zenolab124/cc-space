@@ -125,6 +125,8 @@ import {
   provideToolFoldState,
   useToolDisplayMode,
 } from '@/composables/useToolDisplay'
+import { useSessionFindNavigation } from '@/composables/useSessionFindNavigation'
+import type { SessionFindRequest, SessionFindStatus } from '@/utils/sessionFind'
 
 /**
  * 会话详情。两种宿主形态(v2.1.0 FR-004/009,档案馆分屏已下线):
@@ -137,6 +139,12 @@ const props = defineProps<{
   mode?: 'archive' | 'workbench'
   /** 赛马模式:隐藏列内输入框(共享输入在底部) */
   hideInput?: boolean
+  /** 工作台列实例自己的会话内查找状态；档案馆实例不传。 */
+  findRequest?: SessionFindRequest | null
+}>()
+
+const emit = defineEmits<{
+  (event: 'findStatus', status: SessionFindStatus): void
 }>()
 
 const { t, locale } = useI18n()
@@ -1378,6 +1386,22 @@ const messageGroups = computed(() => {
   return groups.map(g => ({ ...g, responses: mergeResponses(g.responses) }))
 })
 
+function nativeFindRecordText(record: VisibleRecord | null): string {
+  if (!record || (record.type !== 'user' && record.type !== 'assistant')) return ''
+  const content = record.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
+    .map(block => block.text)
+    .join('\n')
+}
+
+const findGroupTexts = computed(() => messageGroups.value.map(group => [
+  nativeFindRecordText(group.user),
+  ...group.responses.map(nativeFindRecordText),
+].filter(Boolean).join('\n')))
+
 // ---- 消息组虚拟化(Task 2 主体) ----
 // 末组豁免:虚拟化只管 messageGroups[0..n-2],末组(messageGroups[n-1])独立铺——
 // 保留 anchorRO/contentRO/追随滚动/pinLastGroupBeforeSwap 全套现有语义;
@@ -2401,6 +2425,31 @@ function scrollToGroupIndex(index: number) {
   if (index < renderGroups.value.length) messageVirtualizer.value.scrollToIndex(index, { align: 'start' })
 }
 
+function revealFindGroup(index: number) {
+  if (index < 0) return
+  detachFollow()
+  if (shouldVirtualize.value && index < renderGroups.value.length) {
+    messageVirtualizer.value.scrollToIndex(index, { align: 'center' })
+  }
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        scrollContentEl.value
+          ?.querySelector<HTMLElement>(`[data-anchor-index="${index}"]`)
+          ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      })
+    })
+  })
+}
+
+const findRequest = computed(() => props.findRequest ?? null)
+const { matchingGroupIndexes: findMatchingGroupIndexes, activeGroupIndex: findActiveGroupIndex } = useSessionFindNavigation(
+  findRequest,
+  findGroupTexts,
+  revealFindGroup,
+  status => emit('findStatus', status),
+)
+
 function jumpToStickyPrompt() {
   if (!stickyPending.value) {
     scrollToGroupIndex(stickyDisplay.value?.index ?? -1)
@@ -3373,7 +3422,11 @@ async function onReload() {
             :data-index="vitem.index"
             data-virtual-anchor="true"
             :style="{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vitem.start}px)` }"
-            :class="['space-y-4', { 'sticky-source-hidden': !stickyPending && stickyDisplay?.index === vitem.index }]"
+            :class="['space-y-4', {
+              'sticky-source-hidden': !stickyPending && stickyDisplay?.index === vitem.index,
+              'session-find-match': findMatchingGroupIndexes.has(vitem.index),
+              'session-find-active': findActiveGroupIndex === vitem.index,
+            }]"
           >
             <MessageGroup
               :group="renderGroups[vitem.index]"
@@ -3398,7 +3451,11 @@ async function onReload() {
             :key="messageGroupKey(group, gi)"
             :data-anchor-index="gi"
             :data-group-key="messageGroupKey(group, gi)"
-            :class="['space-y-4', { 'sticky-source-hidden': !stickyPending && stickyDisplay?.index === gi }]"
+            :class="['space-y-4', {
+              'sticky-source-hidden': !stickyPending && stickyDisplay?.index === gi,
+              'session-find-match': findMatchingGroupIndexes.has(gi),
+              'session-find-active': findActiveGroupIndex === gi,
+            }]"
           >
             <MessageGroup
               :group="group"
@@ -3422,7 +3479,11 @@ async function onReload() {
           :key="messageGroupKey(lastGroup, lastGroupIndex)"
           :data-anchor-index="lastGroupIndex"
           :data-group-key="messageGroupKey(lastGroup, lastGroupIndex)"
-          :class="['space-y-4', { 'sticky-source-hidden': !stickyPending && stickyDisplay?.index === lastGroupIndex }]"
+          :class="['space-y-4', {
+            'sticky-source-hidden': !stickyPending && stickyDisplay?.index === lastGroupIndex,
+            'session-find-match': findMatchingGroupIndexes.has(lastGroupIndex),
+            'session-find-active': findActiveGroupIndex === lastGroupIndex,
+          }]"
         >
           <MessageGroup
             :group="lastGroup"
@@ -3738,6 +3799,14 @@ async function onReload() {
 .search-hit-flash {
   border-radius: 6px;
   animation: search-hit-fade 1.6s ease-out;
+}
+.session-find-match {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.session-find-active {
+  outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 2px;
 }
 @keyframes search-hit-fade {
   0%, 25% { background-color: color-mix(in srgb, var(--accent) 12%, transparent); }

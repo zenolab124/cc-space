@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, provide } from 'vue'
+import { computed, nextTick, ref, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { useProjects } from '@/composables/useProjects'
@@ -25,11 +25,13 @@ import { useEngines } from '@/engines/useEngines'
 import { resolveWorkbenchEngineActions } from '@/engines/workbenchActions'
 import { engineRuntimeChannel, engineRuntimeOptions, inheritEngineRunConfig } from '@/engines/runConfig'
 import type { SessionSummary } from '@/types'
+import type { SessionFindDirection, SessionFindRequest, SessionFindStatus } from '@/utils/sessionFind'
 
 const { getMeta } = useSessionMeta()
 import UnifiedSessionDetail from '../session/UnifiedSessionDetail.vue'
 import NewTaskEnginePicker from './NewTaskEnginePicker.vue'
 import RaceEnginePicker from './RaceEnginePicker.vue'
+import SessionFindBar from '@/components/session/SessionFindBar.vue'
 
 const props = defineProps<{
   column: WorkbenchColumn
@@ -72,6 +74,7 @@ const raceEngineSwitchHint = computed(() => {
 const rcLoading = ref(false)
 const engineActionLoading = ref(false)
 const pendingTask = computed(() => pendingTaskCwd(props.column.sessionId))
+const findAvailable = computed(() => !pendingTask.value && !(isRace.value && props.enginePickerOpen))
 const sessionSummary = computed<SessionSummary | null>(() => {
   const persisted = projects.value
     .flatMap(project => project.sessions)
@@ -316,12 +319,77 @@ async function onCloseLane() {
 }
 
 const isDragging = defineModel<boolean>('dragging', { default: false })
+
+const findOpen = ref(false)
+const findQuery = ref('')
+const findDirection = ref<SessionFindDirection>('first')
+const findNavigationRevision = ref(0)
+const findStatus = ref<SessionFindStatus>({ current: 0, total: 0 })
+const findBarRef = ref<InstanceType<typeof SessionFindBar>>()
+let findPreviousFocus: HTMLElement | null = null
+
+const findRequest = computed<SessionFindRequest>(() => ({
+  active: findOpen.value,
+  query: findQuery.value,
+  navigationRevision: findNavigationRevision.value,
+  direction: findDirection.value,
+}))
+
+function focusFindInput(select = false) {
+  void nextTick(() => {
+    findBarRef.value?.focus(select)
+  })
+}
+
+function openFind() {
+  if (!findOpen.value) {
+    findPreviousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+    findOpen.value = true
+  }
+  focusFindInput(true)
+}
+
+function closeFind() {
+  if (!findOpen.value) return
+  findOpen.value = false
+  const target = findPreviousFocus
+  findPreviousFocus = null
+  void nextTick(() => {
+    if (target?.isConnected) target.focus()
+  })
+}
+
+function navigateFind(direction: Exclude<SessionFindDirection, 'first'>) {
+  if (!findStatus.value.total) return
+  findDirection.value = direction
+  findNavigationRevision.value += 1
+}
+
+function onColumnKeydown(event: KeyboardEvent) {
+  if (
+    (event.metaKey || event.ctrlKey)
+    && !event.shiftKey
+    && !event.altKey
+    && event.key.toLocaleLowerCase() === 'f'
+  ) {
+    event.preventDefault()
+    event.stopPropagation()
+    openFind()
+  }
+}
+
+function onFindStatus(status: SessionFindStatus) {
+  findStatus.value = status
+}
 </script>
 
 <template>
   <div
     class="h-full flex flex-col bg-card border border-border rounded overflow-hidden"
     :class="isDragging ? 'shadow-paper-lifted opacity-50' : 'shadow-paper'"
+    @keydown.capture="onColumnKeydown"
   >
     <!-- 列头 -->
     <div
@@ -434,6 +502,20 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         </button>
           </template>
         </div>
+        <button
+          v-if="findAvailable"
+          type="button"
+          class="icon-btn icon-btn-sm shrink-0"
+          :class="findOpen ? 'border-primary! text-primary!' : ''"
+          v-tooltip="$t('workbench.column.find')"
+          :aria-label="$t('workbench.column.find')"
+          aria-keyshortcuts="Meta+F Control+F"
+          :aria-pressed="findOpen"
+          @pointerdown.stop
+          @click.stop="openFind"
+        >
+          <span class="i-carbon-search w-3 h-3" />
+        </button>
         <!-- 关闭按钮独立于可收缩操作区,始终保留完整点击区域。 -->
         <button
           v-if="!isRace"
@@ -458,6 +540,16 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
       </div>
     </div>
 
+    <SessionFindBar
+      v-if="findOpen && findAvailable"
+      ref="findBarRef"
+      v-model:query="findQuery"
+      :status="findStatus"
+      @previous="navigateFind('previous')"
+      @next="navigateFind('next')"
+      @close="closeFind"
+    />
+
     <div class="flex-1 min-h-0">
       <NewTaskEnginePicker
         v-if="pendingTask"
@@ -476,6 +568,8 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
         :session-id="column.sessionId"
         mode="workbench"
         :hide-input="isRace"
+        :find-request="findRequest"
+        @find-status="onFindStatus"
       />
     </div>
   </div>
@@ -525,7 +619,8 @@ const isDragging = defineModel<boolean>('dragging', { default: false })
 }
 .workbench-column-actions {
   display: flex;
-  min-width: 30px;
+  /* 搜索与关闭是列头的固定入口；可选动作先收缩，二者始终保留。 */
+  min-width: 60px;
   max-width: 100%;
   flex: 0 1 auto;
   align-items: center;

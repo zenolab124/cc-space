@@ -7,7 +7,7 @@ function source(path: string): string {
 }
 
 describe('工作台列头收缩优先级', () => {
-  it('标题先占用剩余空间,关闭按钮不进入可裁切区', () => {
+  it('标题先占用剩余空间,搜索与关闭按钮不进入可裁切区', () => {
     const column = source('../../src/components/workbench/WorkbenchColumn.vue')
     const header = column.slice(column.indexOf('<!-- 列头 -->'), column.indexOf('<div class="flex-1 min-h-0">'))
 
@@ -20,7 +20,7 @@ describe('工作台列头收缩优先级', () => {
     expect(column).toContain('width: 22px;')
     expect(column).toContain('padding: 3px;')
     expect(column).toContain('flex: 1 1 0;')
-    expect(column).toContain('min-width: 30px;')
+    expect(column).toContain('min-width: 60px;')
     expect(column).toContain('.workbench-column-optional-actions {')
     expect(column).toContain('overflow: hidden;')
     expect(column).toContain('.workbench-column-close { flex: 0 0 auto; }')

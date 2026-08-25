@@ -71,12 +71,18 @@ import {
   shouldTriggerPanel,
   type SlashCommand,
 } from '@/composables/useSlashCommands'
+import { useSessionFindNavigation } from '@/composables/useSessionFindNavigation'
+import type { SessionFindRequest, SessionFindStatus } from '@/utils/sessionFind'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
   mode?: 'archive' | 'workbench'
   hideInput?: boolean
-}>(), { mode: 'archive', hideInput: false })
+  findRequest?: SessionFindRequest | null
+}>(), { mode: 'archive', hideInput: false, findRequest: null })
+const emit = defineEmits<{
+  (event: 'findStatus', status: SessionFindStatus): void
+}>()
 provide(SESSION_FILE_ROOT, computed(() => props.session.cwd))
 
 const { t, locale } = useI18n()
@@ -386,6 +392,12 @@ const conversationGroups = computed(() => {
   }
   return groups
 })
+const findGroupTexts = computed(() => conversationGroups.value.map(group => group.records
+  .filter(record => record.role === 'user' || record.role === 'assistant')
+  .flatMap(record => record.segments)
+  .filter(segment => segment.kind === 'text')
+  .map(segment => segment.text)
+  .join('\n')))
 const historicalGroups = computed(() => conversationGroups.value.length > 1
   ? conversationGroups.value.slice(0, -1)
   : [])
@@ -633,6 +645,31 @@ function scrollToConversationGroup(index: number) {
   }
   if (index < historicalGroups.value.length) conversationVirtualizer.value.scrollToIndex(index, { align: 'start' })
 }
+
+function revealFindGroup(index: number) {
+  if (index < 0) return
+  stopTimelineFollow()
+  if (shouldVirtualize.value && index < historicalGroups.value.length) {
+    conversationVirtualizer.value.scrollToIndex(index, { align: 'center' })
+  }
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        timelineContentElement.value
+          ?.querySelector<HTMLElement>(`[data-conversation-index="${index}"]`)
+          ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      })
+    })
+  })
+}
+
+const findRequest = computed(() => props.findRequest ?? null)
+const { matchingGroupIndexes: findMatchingGroupIndexes, activeGroupIndex: findActiveGroupIndex } = useSessionFindNavigation(
+  findRequest,
+  findGroupTexts,
+  revealFindGroup,
+  status => emit('findStatus', status),
+)
 const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
 const imageDropArea = computed<HTMLElement | null | undefined>(() =>
@@ -2104,7 +2141,11 @@ onUnmounted(() => {
             :ref="element => element && conversationVirtualizer.measureElement(element as Element)"
             :data-index="virtualItem.index"
             :data-conversation-index="virtualItem.index"
-            :class="{ 'sticky-source-hidden': stickyDisplay?.index === virtualItem.index }"
+            :class="{
+              'sticky-source-hidden': stickyDisplay?.index === virtualItem.index,
+              'session-find-match': findMatchingGroupIndexes.has(virtualItem.index),
+              'session-find-active': findActiveGroupIndex === virtualItem.index,
+            }"
             :style="{
               position: 'absolute',
               top: 0,
@@ -2131,7 +2172,11 @@ onUnmounted(() => {
             v-for="(group, index) in historicalGroups"
             :key="`${session.id}:${group.key}`"
             :data-conversation-index="index"
-            :class="{ 'sticky-source-hidden': stickyDisplay?.index === index }"
+            :class="{
+              'sticky-source-hidden': stickyDisplay?.index === index,
+              'session-find-match': findMatchingGroupIndexes.has(index),
+              'session-find-active': findActiveGroupIndex === index,
+            }"
           >
             <EngineConversationGroup
               :records="group.records"
@@ -2153,7 +2198,11 @@ onUnmounted(() => {
           :data-conversation-index="conversationGroups.length - 1"
           :class="[
             historicalGroups.length > 0 ? 'mt-4' : '',
-            { 'sticky-source-hidden': stickyDisplay?.index === conversationGroups.length - 1 },
+            {
+              'sticky-source-hidden': stickyDisplay?.index === conversationGroups.length - 1,
+              'session-find-match': findMatchingGroupIndexes.has(conversationGroups.length - 1),
+              'session-find-active': findActiveGroupIndex === conversationGroups.length - 1,
+            },
           ]"
           ref="lastGroupElement"
         >
@@ -2331,6 +2380,14 @@ onUnmounted(() => {
   will-change: transform;
 }
 .sticky-source-hidden :deep(.conversation-user-message) { visibility: hidden; }
+.session-find-match {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.session-find-active {
+  outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 2px;
+}
 .engine-sticky-nav-btn {
   display: inline-flex;
   padding: 1px;
