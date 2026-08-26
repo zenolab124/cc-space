@@ -210,7 +210,7 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 
 - Resume any session in the system terminal (channel carried along); open projects in VS Code; reveal files in Finder
 - Jump straight to the relevant system privacy settings pane
-- TCC permission checkup (macOS): detects Automation, Accessibility, Screen Recording, and Local Network status; Local Network checks use a real channel endpoint over TCP, keep denied requests alive while the user enables access, and can identify and remove extra app copies that confuse macOS permission records
+- TCC permission checkup (macOS): detects Automation, Accessibility, Screen Recording, and Local Network status; the page initially shows only the current process cache, while the user explicitly starts a no-payload Network.framework UDP path probe for Local Network. Only an explicit `localNetworkDenied` path reason counts as denied; other network failures remain unknown. Monet can identify same-bundle-ID app copies and move non-running copies to Trash, but it cannot delete historical Local Network records from System Settings or precisely reset Local Network with `tccutil`
 - Claude Code services: a four-layer locator chain finds the claude binary (nvm/fnm/volta all work), one-click CLI install, one-click upgrade, environment diagnostic report
 - Custom Claude data root (multi-account / custom CLAUDE_CONFIG_DIR setups)
 - App self-update: GitHub Releases + signature verification; when a release is available, Settings shows localized New / Improved / Fixed notes with expandable details, download progress, and restart status in place
