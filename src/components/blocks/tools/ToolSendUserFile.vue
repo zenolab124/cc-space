@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { openPath, showPathOpenMenu } from '@/composables/useFileOpener'
+import { showImageContextMenu } from '@/composables/useImageActions'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
 
@@ -26,6 +27,7 @@ interface FileEntry {
 
 const files = ref<FileEntry[]>([])
 const lightboxSrc = ref<string | null>(null)
+const lightboxPath = ref<string | null>(null)
 
 const caption = props.input.caption as string | undefined
 const rawFiles = (props.input.files ?? []) as string[]
@@ -78,6 +80,16 @@ function revealInFinder(path: string) {
   // 文件管理器中显示并高亮该文件(Rust 侧平台分支;Linux 退化开所在目录)
   invoke('reveal_in_finder', { path })
 }
+
+function openImageLightbox(file: FileEntry) {
+  lightboxSrc.value = file.dataUrl
+  lightboxPath.value = file.path
+}
+
+function closeImageLightbox() {
+  lightboxSrc.value = null
+  lightboxPath.value = null
+}
 </script>
 
 <template>
@@ -94,12 +106,17 @@ function revealInFinder(path: string) {
         <div v-if="f.loading" class="h-32 rounded bg-muted flex items-center justify-center">
           <span class="i-carbon-loading animate-spin w-4 h-4 text-muted-foreground" />
         </div>
-        <div v-else-if="f.dataUrl" class="relative group" @contextmenu="showPathOpenMenu($event, f.path)">
+        <div
+          v-else-if="f.dataUrl"
+          class="relative group"
+          @contextmenu="showImageContextMenu($event, { src: f.dataUrl, path: f.path })"
+        >
           <img
             :src="f.dataUrl"
             :alt="f.fileName"
+            :data-image-path="f.path"
             class="max-w-full max-h-80 rounded border border-border cursor-zoom-in object-contain"
-            @click="lightboxSrc = f.dataUrl"
+            @click="openImageLightbox(f)"
           >
           <div class="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
             <button
@@ -150,9 +167,13 @@ function revealInFinder(path: string) {
       <div
         v-if="lightboxSrc"
         class="fixed inset-0 z-999 flex items-center justify-center bg-black/80 cursor-zoom-out"
-        @click="lightboxSrc = null"
+        @click="closeImageLightbox"
       >
-        <img :src="lightboxSrc" class="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl">
+        <img
+          :src="lightboxSrc"
+          class="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
+          @contextmenu="showImageContextMenu($event, { src: lightboxSrc, path: lightboxPath })"
+        >
       </div>
     </Teleport>
   </div>

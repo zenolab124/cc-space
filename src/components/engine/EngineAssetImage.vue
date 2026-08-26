@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { resolveAsset } from '@/engines/client'
 import type { ToolResultAttachment } from '@/engines/types'
 import { errorMessage } from '@/utils/errorMessage'
+import { showImageContextMenu } from '@/composables/useImageActions'
 
 const props = withDefaults(defineProps<{
   attachment: ToolResultAttachment
@@ -156,6 +157,7 @@ onUnmounted(() => {
           :alt="attachment.title || t('engine.attachment')"
           class="engine-asset-lightbox-image"
           decoding="async"
+          @contextmenu="showImageContextMenu($event, { src: fullAssetUrl || assetUrl })"
         />
         <span v-if="loadingFullAsset" class="engine-asset-lightbox-loading">
           <span class="i-carbon-renew animate-spin h-4 w-4" />

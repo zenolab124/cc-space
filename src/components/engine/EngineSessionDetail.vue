@@ -2141,7 +2141,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <SessionSurface :root-ref="bindDetailRoot">
+  <SessionSurface :root-ref="bindDetailRoot" :file-root="session.cwd">
     <template #topbar>
       <SessionIdentityBar
         v-if="mode === 'archive'"

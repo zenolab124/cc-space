@@ -2,6 +2,7 @@
 import { ref, computed, inject } from 'vue'
 import type { ContentBlock } from '@/types'
 import { IMAGE_LOCATOR, buildCcimgUrl, withFullParam } from '@/utils/ccimg'
+import { showImageContextMenu } from '@/composables/useImageActions'
 
 const props = defineProps<{
   block: Extract<ContentBlock, { type: 'image' }>
@@ -55,7 +56,11 @@ function onKeydown(e: KeyboardEvent) {
         @keydown="onKeydown"
         tabindex="0"
       >
-        <img :src="fullUrl ?? imgUrl" class="block-image-full" />
+        <img
+          :src="fullUrl ?? imgUrl"
+          class="block-image-full"
+          @contextmenu="showImageContextMenu($event, { src: fullUrl ?? imgUrl })"
+        />
       </div>
     </Teleport>
   </div>

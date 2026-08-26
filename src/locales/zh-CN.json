@@ -74,6 +74,26 @@
     "systemPrompt": "指令",
     "revealDir": "打开目录"
   },
+  "copy": {
+    "plain": "复制纯文本",
+    "markdown": "复制 Markdown",
+    "rich": "复制富文本",
+    "full": "全量复制",
+    "chooseMode": "选择复制方式",
+    "richDescription": "复制语义化富文本，不包含界面增强布局",
+    "image": "复制图片",
+    "imageAddress": "复制图片地址",
+    "filePath": "复制文件路径",
+    "openImage": "打开图片",
+    "imageCopied": "图片已复制",
+    "addressCopied": "图片地址已复制",
+    "pathCopied": "文件路径已复制",
+    "imageOpened": "图片已打开",
+    "locationOpened": "已在文件管理器中显示",
+    "actionFailed": "操作失败",
+    "imageUnavailable": "当前图片不可复制",
+    "imageDecodeFailed": "无法转换该图片"
+  },
   "time": {
     "justNow": "刚刚",
     "minutesAgo": "{n} 分钟前",

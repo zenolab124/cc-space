@@ -21,6 +21,7 @@ import {
   registerManagedScrollFrame,
   type ScrollAxis,
 } from '@/lib/scrollGestureCoordinator'
+import { showImageContextMenu } from '@/composables/useImageActions'
 
 interface LoadedArtifact {
   fileName: string
@@ -429,6 +430,7 @@ onUnmounted(() => {
         <img
           :src="imageSource"
           :alt="fileName"
+          :data-image-path="candidate.path"
           loading="lazy"
           decoding="async"
           class="artifact-image"
@@ -451,6 +453,7 @@ onUnmounted(() => {
           :alt="fileName"
           class="artifact-image-lightbox-content"
           decoding="async"
+          @contextmenu="showImageContextMenu($event, { src: imageSource, path: candidate.path, fileRoot: root })"
         />
         <button
           ref="lightboxCloseRef"

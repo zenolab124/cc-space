@@ -3265,6 +3265,7 @@ async function onReload() {
   <SessionSurface
     v-else
     :root-ref="bindDetailRoot"
+    :file-root="currentSession.summary.cwd"
     @pointerdown.capture="activateRenderSurface"
   >
     <SessionIdentityBar

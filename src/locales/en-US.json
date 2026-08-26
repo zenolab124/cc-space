@@ -74,6 +74,26 @@
     "systemPrompt": "Prompt",
     "revealDir": "Reveal Folder"
   },
+  "copy": {
+    "plain": "Copy Plain Text",
+    "markdown": "Copy Markdown",
+    "rich": "Copy Rich Text",
+    "full": "Copy Full Layout",
+    "chooseMode": "Choose copy format",
+    "richDescription": "Copy semantic rich text without enhanced interface layout",
+    "image": "Copy Image",
+    "imageAddress": "Copy Image Address",
+    "filePath": "Copy File Path",
+    "openImage": "Open Image",
+    "imageCopied": "Image copied",
+    "addressCopied": "Image address copied",
+    "pathCopied": "File path copied",
+    "imageOpened": "Image opened",
+    "locationOpened": "Revealed in file manager",
+    "actionFailed": "Action failed",
+    "imageUnavailable": "This image cannot be copied",
+    "imageDecodeFailed": "Unable to convert this image"
+  },
   "time": {
     "justNow": "Just now",
     "minutesAgo": "{n} min ago",
