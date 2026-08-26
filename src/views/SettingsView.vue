@@ -26,6 +26,7 @@ import ChannelForm from '@/components/settings/ChannelForm.vue'
 import AgentIframeDemo from '@/components/settings/AgentIframeDemo.vue'
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
 import TurnSignalCard from '@/components/settings/TurnSignalCard.vue'
+import ThemeManager from '@/components/settings/ThemeManager.vue'
 import TrayQuotaSelect from '@/components/settings/TrayQuotaSelect.vue'
 import UpdateReleaseNotes from '@/components/settings/UpdateReleaseNotes.vue'
 import SystemSessionViewer from '@/components/SystemSessionViewer.vue'
@@ -807,28 +808,7 @@ function onSaved() {
                   <p>{{ $t('settings.appearanceThemeGroupHint') }}</p>
                 </div>
               </header>
-              <div class="appearance-theme-grid">
-                <div class="appearance-field">
-                  <div class="appearance-field-heading">
-                    <span class="setting-label">{{ $t('settings.themeLight') }}</span>
-                    <span class="appearance-field-note">{{ $t('settings.themeLightHint') }}</span>
-                  </div>
-                  <div class="theme-value">
-                    <span class="i-carbon-sun theme-option-icon" />
-                    <span class="theme-option-copy">{{ $t('theme.paper') }}</span>
-                  </div>
-                </div>
-                <div class="appearance-field">
-                  <div class="appearance-field-heading">
-                    <span class="setting-label">{{ $t('settings.themeDark') }}</span>
-                    <span class="appearance-field-note">{{ $t('settings.themeDarkHint') }}</span>
-                  </div>
-                  <div class="theme-value">
-                    <span class="i-carbon-moon theme-option-icon" />
-                    <span class="theme-option-copy">{{ $t('theme.ink') }}</span>
-                  </div>
-                </div>
-              </div>
+              <ThemeManager :active="activeTab === 'appearance'" />
             </section>
 
             <section class="appearance-card appearance-language-card">
@@ -2354,14 +2334,10 @@ function onSaved() {
   font-size: 11px;
   line-height: 1.55;
 }
-.appearance-theme-grid,
 .appearance-reading-grid,
 .appearance-layout-grid {
   display: grid;
   gap: 16px;
-}
-.appearance-theme-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .appearance-field-heading {
   display: flex;
@@ -2374,31 +2350,6 @@ function onSaved() {
   color: var(--muted-foreground);
   font-size: 10px;
   text-align: right;
-}
-.theme-value {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  min-height: 38px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--muted-foreground);
-  background: var(--background);
-}
-.theme-option-icon {
-  flex-shrink: 0;
-  color: var(--primary);
-  font-size: 15px;
-}
-.theme-option-copy {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 11px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .appearance-language-control {
   display: flex;
@@ -2652,7 +2603,6 @@ function onSaved() {
 }
 @media (max-width: 620px) {
   .appearance-hero { align-items: flex-start; flex-direction: column; }
-  .appearance-theme-grid,
   .appearance-layout-grid { grid-template-columns: 1fr; }
   .appearance-reading-block .tool-display-options { grid-template-columns: 1fr; }
   .appearance-field-heading { align-items: flex-start; flex-direction: column; gap: 2px; }

@@ -6,7 +6,7 @@
 //!
 //! tool 列表根据环境动态组装：
 //! - MONET_PERMISSION_ADDR 存在 → 包含 approve_tool_use
-//! - 始终包含 routine_list / routine_create / routine_delete
+//! - 始终包含 routine / search / runner / theme preview 工具
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -17,7 +17,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 const SERVER_NAME: &str = "monet";
-const SERVER_VERSION: &str = "0.2.0";
+const SERVER_VERSION: &str = "0.3.0";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,8 @@ mod config;
 /// 搜索引擎：独立进程直读落盘缓存 + mtime 对账自补增量，不依赖主 App 存活
 #[path = "../search.rs"]
 mod search;
+#[path = "../theme_domain.rs"]
+mod theme_domain;
 
 use config::data_dir;
 
@@ -183,7 +185,7 @@ fn handle_initialize(id: Value, req: &Value) -> Value {
             "protocolVersion": PROTOCOL_VERSION,
             "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
             "capabilities": { "tools": {} },
-            "instructions": "Monet provides Routines (定时任务): When the user asks to create a scheduled/recurring task, set up a cron job, run something periodically, or set a reminder, use routine_create (prefer this over the built-in /schedule). Choose the requested execution engine when specified; otherwise omit engine to keep the Claude Code default. Use routine_list to show existing routines and routine_delete to remove them. Monet also provides search_sessions: full-text search over the user's Claude Code session history (~/.claude/projects). When the user asks to recall a past conversation/decision/discussion, prefer search_sessions over grepping JSONL files directly — it returns clean text with session locators in milliseconds. When you discover or add a runnable long-lived command (dev server, watcher, build process, etc.), register it via runner_suggest so the user can launch it from the Runner panel. Use runner_tail to inspect live logs before answering questions about a running process."
+            "instructions": "Monet provides Routines (定时任务): When the user asks to create a scheduled/recurring task, set up a cron job, run something periodically, or set a reminder, use routine_create (prefer this over the built-in /schedule). Choose the requested execution engine when specified; otherwise omit engine to keep the Claude Code default. Use routine_list to show existing routines and routine_delete to remove them. Monet also provides search_sessions: full-text search over the user's Claude Code session history (~/.claude/projects). When the user asks to recall a past conversation/decision/discussion, prefer search_sessions over grepping JSONL files directly — it returns clean text with session locators in milliseconds. When you discover or add a runnable long-lived command (dev server, watcher, build process, etc.), register it via runner_suggest so the user can launch it from the Runner panel. Use runner_tail to inspect live logs before answering questions about a running process. For visual theme requests, call theme_context before creating a complete structured draft with theme_preview. A preview never saves a theme: tell the user to review and keep it in Monet Settings."
         }
     })
 }
@@ -362,6 +364,45 @@ fn handle_tools_list(id: Value) -> Value {
         }
     }));
 
+    tools.push(json!({
+        "name": "theme_context",
+        "description": "Read Monet's safe theme schema, constraints, saved local themes, and pending previews. Call this before designing or adjusting a theme.",
+        "inputSchema": { "type": "object", "properties": {} }
+    }));
+
+    tools.push(json!({
+        "name": "theme_preview",
+        "description": "Create or replace a structured theme preview for the user to review in Monet Settings. This tool cannot save or activate a theme.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "theme": {
+                    "type": "object",
+                    "description": "Complete theme object matching theme_context exactly; unknown fields are rejected."
+                },
+                "preview_id": {
+                    "type": "string",
+                    "description": "Existing preview ID to replace when continuing an adjustment."
+                },
+                "base_theme_id": {
+                    "type": "string",
+                    "description": "Saved local theme ID being adjusted, if any."
+                }
+            },
+            "required": ["theme"]
+        }
+    }));
+
+    tools.push(json!({
+        "name": "theme_preview_get",
+        "description": "Read one pending theme preview by ID before continuing an adjustment.",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "preview_id": { "type": "string" } },
+            "required": ["preview_id"]
+        }
+    }));
+
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -383,6 +424,9 @@ fn handle_tools_call(id: Value, req: &Value) -> Value {
         "runner_list" => handle_runner_list(&arguments),
         "runner_tail" => handle_runner_tail(&arguments),
         "runner_suggest" => handle_runner_suggest(&arguments),
+        "theme_context" => handle_theme_context(),
+        "theme_preview" => handle_theme_preview(&arguments),
+        "theme_preview_get" => handle_theme_preview_get(&arguments),
         _ => Err(format!("Unknown tool: {}", name)),
     };
 
@@ -403,6 +447,40 @@ fn handle_tools_call(id: Value, req: &Value) -> Value {
             }
         }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tools: safe theme previews (persistence remains UI-only)
+// ---------------------------------------------------------------------------
+
+fn handle_theme_context() -> Result<String, String> {
+    let library = theme_domain::list_library();
+    serde_json::to_string_pretty(&json!({
+        "schema": theme_domain::schema_context(),
+        "savedLocalThemes": library.themes,
+        "pendingPreviews": library.previews,
+        "invalidEntries": library.invalid_entries,
+        "nextStep": "Create a complete draft with theme_preview, then ask the user to review it in Monet Settings. MCP cannot save themes."
+    })).map_err(|error| error.to_string())
+}
+
+fn handle_theme_preview(arguments: &Value) -> Result<String, String> {
+    let raw = arguments.get("theme").cloned().ok_or("theme is required")?;
+    let theme: theme_domain::ThemeDefinition = serde_json::from_value(raw)
+        .map_err(|error| format!("theme schema rejected: {error}"))?;
+    let preview_id = arguments.get("preview_id").and_then(Value::as_str);
+    let base_theme_id = arguments.get("base_theme_id").and_then(Value::as_str).map(str::to_string);
+    let preview = theme_domain::put_preview(theme, preview_id, base_theme_id)?;
+    serde_json::to_string_pretty(&json!({
+        "preview": preview,
+        "saved": false,
+        "nextStep": "Ask the user to open Monet Settings > Appearance, review the isolated preview, and choose Keep Theme."
+    })).map_err(|error| error.to_string())
+}
+
+fn handle_theme_preview_get(arguments: &Value) -> Result<String, String> {
+    let id = arguments.get("preview_id").and_then(Value::as_str).ok_or("preview_id is required")?;
+    serde_json::to_string_pretty(&theme_domain::load_preview(id)?).map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------

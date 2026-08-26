@@ -69,7 +69,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Input box: Enter to send / Shift+Enter for newline; paste or drag in images (format validation, auto-compression for oversized files, classified error messages); thumbnail stack with hover-to-delete
 - Multi-engine command palette: type `/` or `$` to open, with keyboard navigation and source badges (built-in / skill / terminal passthrough); Monet normalizes Claude Code and Codex prefix/protocol differences, prefers project/repository skills over same-named user skills, and sends Codex skills as structured references; instant argument validation catches missing arguments and unknown model names before sending, while `/help` or `$help` renders the current engine's command list locally
 - Interactive commands auto-route to terminal: things a GUI can't do (`/login`, `/vim`) open the system terminal at the session's directory with the command pre-filled
-- Busy queueing: when the session is busy or running elsewhere, messages queue up and send in order; the queue is visible and revocable
+- Busy queueing: when the session is busy or running elsewhere, messages queue up in order and remain editable, removable, and retryable; Codex can steer a chosen message directly into the active turn, while Claude Code keeps an explicit confirm-before-interrupt-and-send flow
 - External session awareness: when a session is running in a terminal or VS Code, Monet shows "running in X" naming the owner; you can watch along, or terminate it from Monet
 - File ledger: see at a glance which files this session touched — modified and read-only groups, per-change diffs, and a one-click jump back to the conversation moment where the AI explained why it changed the file; includes a git worktree snapshot; Read/Edit/Write cards in the message stream link straight into the ledger
 - Async task panel: everything the AI farmed out (subagents, workflows, background commands) in one place — active/completed sections, live progress and exit codes, per-task stop controls, and a jump back to the turn that started it
@@ -87,6 +87,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Three tool-call display modes: full cards, collapsed items, or grouped consecutive processes; collapsed rows retain action summaries, added/deleted line counts, and running/failure state, while expanded Edits use one unified viewer shared by Claude Code and Codex with dual line numbers, line- and word-level emphasis, and automatic folding of long unchanged context; Bash copying and Read/Write file navigation keep their purpose-built cards; normal clicks stay local and Shift-click toggles all while remembering the default
 - In-session navigation: an anchor rail on the left (hover to preview each turn's question, click to jump); the current turn's user message pins to the top with previous/next-turn buttons; a back-to-bottom float — glide through a several-hundred-turn session
 - Tokens transparent throughout: per-reply in/cache/new/out quadruple, per-turn totals, and a context-usage bar in the top bar (warns as it fills) — see when context will overflow and where tokens go, in real time
+- Semantic copying: selections can be copied as plain text, Markdown, clean rich text, or full HTML with safe enhanced layout; the default shortcut uses rich text, formulas do not duplicate KaTeX presentation layers, and image context menus can copy the bitmap, copy/open a remote address, or copy/reveal a local path
 - Long-content governance: long user messages fade-collapse, huge text expands on demand (size labeled so you know the cost), floating copy button on code blocks
 - Adaptive image-text layout for user messages: a single portrait image goes text-left/image-right; landscape or multiple images go images-top/text-below — the best arrangement, automatically
 - Timeline anchors: day separators, channel-switch lines, model-switch markers — see at a glance what happened over the course of a session
@@ -100,7 +101,7 @@ Base facts: cross-platform desktop app (macOS Apple Silicon + Windows, installer
 - Dense list rows: title + branch + relative time + tokens + model + one-line summary (hover for full text)
 - Context menu: resume this session in the terminal (automatically carrying its channel), delete session (soft delete — a metadata marker only, the JSONL file is never touched; deleting also stops the session's Runners and names the workbench tabs it will leave)
 - Session metadata: title (AI stops overwriting once you've edited it by hand), tags, star, summary
-- One click to open any archived session into the Workbench and keep chatting
+- Open any archived session into the Workbench and keep chatting; the split button targets the most recently used ordinary workbench by default, while its arrow selects an exact destination, including from search results
 
 ### 3.5 Global search — find any conversation ever
 
@@ -174,6 +175,7 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 - Search session history: ask "what did we decide about the database migration?" and it full-text searches your entire history itself
 - Create scheduled tasks: say "summarize my work every day at nine" in conversation and the AI creates the Routine, instantly visible in the UI
 - Manage Runners: the AI checks "is the server up? what's the error?" by reading live logs directly, and registers commands worth keeping around
+- Design themes: the AI reads the safe token schema and creates or revises a pending preview; MCP itself cannot save a theme, so the user must explicitly keep it in Settings
 - Permission approval bridge: the GUI approval cards in the Workbench work through it
 
 ### 3.11 Multi-channel — official and third-party APIs, one place
@@ -197,7 +199,7 @@ And the reverse holds — install Monet, and the Claude in your sessions automat
 
 ### 3.13 Interface & polish
 
-- Paper/Ink dual themes (warm paper light + cool ink dark), independently assignable per mode, follows the system, one-click cycling
+- Paper/Ink remain safe fallbacks; light and dark slots can independently select built-in, community, or local themes while still following the system or cycling in one click. Natural-language AI generation and adjustment produce structured drafts in an isolated preview and save only after confirmation; sharing uses the user's authenticated `gh` identity or an anonymous Issue relay, then becomes a PR only after maintainer approval and ships in a later release
 - 12 UI languages + AI-extendable to any language
 - UI zoom (Cmd +/-/0, also in settings)
 - Virtual scrolling for huge sessions (threshold adjustable) — thousands of messages without lag

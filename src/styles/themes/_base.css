@@ -49,3 +49,29 @@ h1, h2, h3, h4 {
   font-weight: 600;
   letter-spacing: -0.012em;
 }
+
+.theme-custom {
+  font-size: calc(100% * var(--theme-font-scale, 1));
+  line-height: var(--theme-line-height, 1.6);
+}
+
+.theme-custom .custom-theme-atmosphere::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  pointer-events: none;
+  opacity: var(--theme-atmosphere-noise, 0);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  mix-blend-mode: soft-light;
+}
+
+.theme-custom .custom-theme-atmosphere::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 35%, var(--theme-atmosphere-tint) 100%);
+  opacity: var(--theme-atmosphere-vignette, 0);
+}

@@ -1,0 +1,40 @@
+name: Theme submission
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  create-contribution:
+    if: >-
+      github.event.label.name == 'theme-approved' &&
+      contains(github.event.issue.labels.*.name, 'theme-submission')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate and generate contribution
+        id: theme
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_USER: ${{ github.event.issue.user.login }}
+        run: node scripts/theme-contribution.mjs
+
+      - name: Create contribution pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: theme-submission/issue-${{ github.event.issue.number }}
+          delete-branch: true
+          commit-message: "feat: add community theme ${{ steps.theme.outputs.theme_id }}"
+          title: "Theme: ${{ steps.theme.outputs.theme_name }} (refs #${{ github.event.issue.number }})"
+          body: |
+            Generated from approved theme submission #${{ github.event.issue.number }}.
+
+            The source is declarative theme data. Validation and the preview are deterministic.

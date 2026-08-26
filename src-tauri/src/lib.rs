@@ -64,6 +64,8 @@ pub mod quota;
 mod tray_agent;
 mod translate;
 mod turn_signal;
+pub mod theme_domain;
+mod themes;
 mod widget;
 mod widget_storage;
 /// pub：候选清单+pid+日志回读，MCP bin 经 #[path] 共享
@@ -297,6 +299,16 @@ pub fn run() {
             turn_signal::turn_signal_status,
             turn_signal::turn_signal_install,
             turn_signal::turn_signal_uninstall,
+            themes::theme_library,
+            themes::theme_schema_context,
+            themes::theme_generate_preview,
+            themes::theme_save_preview,
+            themes::theme_discard_preview,
+            themes::theme_rename,
+            themes::theme_delete,
+            themes::theme_prepare_submission,
+            themes::theme_submit,
+            themes::theme_export_submission,
             cli_env::claude_env_check,
             cli_env::claude_env_upgrade,
             cli_env::claude_env_install,
