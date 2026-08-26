@@ -19,6 +19,7 @@ import {
   removeSessionRenderSurface,
   markSessionRenderActive,
   sessionRenderCadence,
+  type PendingQueueItem,
 } from '@/composables/useStreaming'
 import { useSessionSettings, type ChannelMark } from '@/composables/useSessionSettings'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
@@ -172,7 +173,22 @@ const {
   releaseRecords,
 } = detail
 
-const { sendMessage, stopStreaming, stopAsyncTask, clearStreamingTurns, clearPendingUserMessage, getStream, removePendingQueueItem, consumePendingQueue, removeLandedTurns, demoteUnlandedTurns } = useStreaming()
+const {
+  sendMessage,
+  stopStreaming,
+  stopAsyncTask,
+  clearStreamingTurns,
+  clearPendingUserMessage,
+  getStream,
+  enqueuePendingQueueItem,
+  removePendingQueueItem,
+  updatePendingQueueItem,
+  prioritizePendingQueueItem,
+  failPendingQueueItem,
+  consumePendingQueue,
+  removeLandedTurns,
+  demoteUnlandedTurns,
+} = useStreaming()
 
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const featureBannerShown = ref(false)
@@ -702,18 +718,18 @@ async function onPermissionDecide(
   if (req) await respondRequest(req.requestId, decision, extra)
 }
 
-async function onStop() {
+async function onStop(options: { skipConfirm?: boolean } = {}): Promise<boolean> {
   const sid = effectiveSessionId.value
-  if (!sid) return
+  if (!sid) return false
   // 与按钮文案同判据:自家流式优先走温和停止,仅纯外部运行才走终止链路
   if (externalRunning.value && !stream.value.streaming) {
-    if (stopping.value) return
+    if (stopping.value) return false
     // 外部进程不是我们 spawn 的:终止前确认,并说明归属方(可能正在生成,杀了会丢那一轮)
     const owner = externalOwner.value
     const msg = owner
       ? t('session.killExternalConfirmBy', { owner })
       : t('session.killExternalConfirm')
-    if (!(await confirmDialog(msg, t('session.killExternalOk')))) return
+    if (!options.skipConfirm && !(await confirmDialog(msg, t('session.killExternalOk')))) return false
     stopping.value = true
     // 兜底须覆盖探测节拍(3s) + 进程收尾落盘的最坏耗时，过短会在横幅消失前解锁按钮
     stoppingTimeout = window.setTimeout(() => {
@@ -724,14 +740,16 @@ async function onStop() {
       await invoke('kill_external_session', { sessionId: sid })
     } catch {
       stopping.value = false
+      return false
     }
-    return
+    return true
   }
   // 自发轮(后台唤醒轮):interrupt 只打断当前在跑的这一轮,进程内已武装的
   // 定时唤醒不受影响,到点仍会再次触发——toast 说清边界,彻底断根走列头关闭
   const autoTurnOnly = !stream.value.streaming && ownProcessBusy.value
   await stopStreaming(sid)
   if (autoTurnOnly) notifyTransient(t('session.autoTurnStopped'), t('session.autoTurnStoppedHint'))
+  return true
 }
 
 // --- 会话级设置(模型 / 努力等级 / 渠道) ---
@@ -1059,15 +1077,53 @@ const imageDropArea = computed<HTMLElement | null | undefined>(() =>
 )
 const imageInput = useImageInput({ pasteTarget: textareaRef, dropTarget: imageDropArea })
 onMounted(() => imageInput.attach())
-const composerQueueItems = computed<ComposerQueueItem[]>(() => stream.value.pendingQueue.map((item, index) => ({
-  id: String(index),
+function pendingQueueDetail(item: PendingQueueItem): string {
+  return [item.opts.model, item.opts.effort, item.opts.channel].filter(Boolean).join(' · ')
+}
+
+const composerQueueItems = computed<ComposerQueueItem[]>(() => stream.value.pendingQueue.map(item => ({
+  id: item.id,
   text: item.message,
   imageCount: item.opts.images?.length ?? 0,
+  detail: item.error || pendingQueueDetail(item),
+  status: item.status,
+  actionLabel: item.status === 'failed' && !externalRunning.value && !ownProcessBusy.value
+    ? t('common.retry')
+    : externalRunning.value || ownProcessBusy.value
+      ? t('session.queueInterruptAndSend')
+      : t('session.queueSendNow'),
+  actionTitle: permissionRequest.value ? t('session.queueResolveApprovalFirst') : undefined,
+  actionDisabled: !!permissionRequest.value || stopping.value,
 })))
 
 function removeComposerQueueItem(id: string) {
   if (!effectiveSessionId.value) return
-  removePendingQueueItem(effectiveSessionId.value, Number(id))
+  removePendingQueueItem(effectiveSessionId.value, id)
+}
+
+function updateComposerQueueItem(id: string, text: string) {
+  if (!effectiveSessionId.value) return
+  updatePendingQueueItem(effectiveSessionId.value, id, text)
+}
+
+async function processComposerQueueItem(id: string) {
+  const sid = effectiveSessionId.value
+  if (!sid || permissionRequest.value) return
+  const busy = externalRunning.value || ownProcessBusy.value
+  if (busy) {
+    const approved = await confirmDialog(
+      t('session.queueInterruptConfirm'),
+      t('session.queueInterruptAndSend'),
+    )
+    if (!approved) return
+  }
+  if (!prioritizePendingQueueItem(sid, id)) return
+  if (!busy) {
+    maybeConsumeQueue()
+    return
+  }
+  const stopped = await onStop({ skipConfirm: true })
+  if (!stopped) failPendingQueueItem(sid, id, t('session.queueInterruptFailed'))
 }
 
 // 会话级图片定位上下文(主会话,无 agentId);历史区图片按此拼 ccimg 协议 URL
@@ -2118,7 +2174,7 @@ async function handleSend() {
     permissionMode: rc.launch.permissionMode ?? undefined,
   }
   if (externalRunning.value || ownProcessBusy.value) {
-    stream.value.pendingQueue.push({ message: text, opts })
+    enqueuePendingQueueItem(cs.summary.id, text, opts)
     return
   }
   await sendMessage(cs.summary.id, cs.summary.cwd, text, opts)
@@ -3638,7 +3694,12 @@ async function onReload() {
       </template>
 
       <template #queue>
-        <SessionComposerQueue :items="composerQueueItems" @remove="removeComposerQueueItem" />
+        <SessionComposerQueue
+          :items="composerQueueItems"
+          @remove="removeComposerQueueItem"
+          @update="updateComposerQueueItem"
+          @process="processComposerQueueItem"
+        />
       </template>
 
       <template #attachments>

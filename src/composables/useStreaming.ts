@@ -73,8 +73,11 @@ export interface TailLine {
  * 不 mount 消息流组件树（NFR-001 渲染分级的结构性前提）。
  */
 export interface PendingQueueItem {
+  id: string
   message: string
   opts: SendOptions
+  status: 'pending' | 'processing' | 'failed'
+  error?: string
 }
 
 export interface SessionStreamState {
@@ -87,6 +90,8 @@ export interface SessionStreamState {
   pendingSentAt: number | null
   /** BTW 预输入队列：流式中用户发的消息暂存于此，前一轮 result 落账后再逐条发送 */
   pendingQueue: PendingQueueItem[]
+  /** 用户点“立即处理”的队列项；空闲消费时优先取它，其余项相对顺序不变。 */
+  priorityPendingQueueItemId: string | null
   streamError: string | null
   /** 本次流式开始时刻（监控卡持续时间显示） */
   startedAt: number | null
@@ -165,6 +170,7 @@ function createState(): SessionStreamState {
     pendingImages: null,
     pendingSentAt: null,
     pendingQueue: [],
+    priorityPendingQueueItemId: null,
     streamError: null,
     startedAt: null,
     activeTool: null,
@@ -1224,17 +1230,27 @@ function completeFinish(sessionId: string) {
 // ---- 操作 ----
 
 /** 发送消息并开始流式接收。opts 可选,缺省时不向 CLI 附加 --model / --effort */
+let pendingQueueSequence = 0
+
+function enqueuePendingQueueItem(sessionId: string, message: string, opts: SendOptions): string {
+  const state = getStream(sessionId)
+  const id = `pending-${Date.now()}-${++pendingQueueSequence}`
+  state.pendingQueue.push({ id, message, opts, status: 'pending' })
+  return id
+}
+
 async function sendMessage(
   sessionId: string,
   cwd: string,
   message: string,
   opts: SendOptions = {},
-) {
+  queueWhenBusy = true,
+): Promise<boolean> {
   const state = getStream(sessionId)
 
   if (state.streaming) {
-    state.pendingQueue.push({ message, opts })
-    return
+    if (queueWhenBusy) enqueuePendingQueueItem(sessionId, message, opts)
+    return queueWhenBusy
   }
 
   // 清掉上一轮的 turn 索引、残余 pending 与尾部。
@@ -1289,13 +1305,15 @@ async function sendMessage(
         i18n.global.t('session.elsewhereOk'),
       )
       if (ok) {
-        await sendMessage(sessionId, cwd, message, { ...opts, forceNew: true })
+        return await sendMessage(sessionId, cwd, message, { ...opts, forceNew: true }, queueWhenBusy)
       }
-      return
+      return false
     }
     state.streamError = err
     finishStream(sessionId)
+    return false
   }
+  return true
 }
 
 /** 出错重试:用最近一次发送的消息与参数重发(FR-003 就地决策) */
@@ -1339,17 +1357,65 @@ function clearPendingUserMessage(sessionId: string) {
   state.pendingSentAt = null
 }
 
-function removePendingQueueItem(sessionId: string, index: number) {
+function removePendingQueueItem(sessionId: string, id: string) {
   const state = streams.get(sessionId)
-  if (state) state.pendingQueue.splice(index, 1)
+  if (!state) return
+  const index = state.pendingQueue.findIndex(item => item.id === id)
+  if (index >= 0 && state.pendingQueue[index].status !== 'processing') {
+    state.pendingQueue.splice(index, 1)
+  }
+  if (state.priorityPendingQueueItemId === id) state.priorityPendingQueueItemId = null
+}
+
+function updatePendingQueueItem(sessionId: string, id: string, message: string) {
+  const item = streams.get(sessionId)?.pendingQueue.find(candidate => candidate.id === id)
+  if (!item || item.status === 'processing') return
+  item.message = message
+  item.status = 'pending'
+  delete item.error
+}
+
+function prioritizePendingQueueItem(sessionId: string, id: string): boolean {
+  const state = streams.get(sessionId)
+  const item = state?.pendingQueue.find(candidate => candidate.id === id)
+  if (!state || !item || item.status === 'processing') return false
+  state.priorityPendingQueueItemId = id
+  item.status = 'processing'
+  delete item.error
+  return true
+}
+
+function failPendingQueueItem(sessionId: string, id: string, error: string) {
+  const state = streams.get(sessionId)
+  const item = state?.pendingQueue.find(candidate => candidate.id === id)
+  if (!state || !item) return
+  item.status = 'failed'
+  item.error = error
+  if (state.priorityPendingQueueItemId === id) state.priorityPendingQueueItemId = null
 }
 
 /** 消费 BTW 队列队首：前一轮 reload 落账后由 SessionDetail 调用 */
 async function consumePendingQueue(sessionId: string, cwd: string) {
   const state = streams.get(sessionId)
   if (!state || state.streaming || state.pendingQueue.length === 0) return
-  const next = state.pendingQueue.shift()!
-  await sendMessage(sessionId, cwd, next.message, next.opts)
+  const priorityId = state.priorityPendingQueueItemId
+  const index = priorityId
+    ? state.pendingQueue.findIndex(item => item.id === priorityId)
+    : 0
+  const resolvedIndex = index >= 0 ? index : 0
+  const next = state.pendingQueue[resolvedIndex]
+  next.status = 'processing'
+  delete next.error
+  const accepted = await sendMessage(sessionId, cwd, next.message, next.opts, false)
+  const currentIndex = state.pendingQueue.findIndex(item => item.id === next.id)
+  if (accepted) {
+    if (currentIndex >= 0) state.pendingQueue.splice(currentIndex, 1)
+    if (state.priorityPendingQueueItemId === next.id) state.priorityPendingQueueItemId = null
+  } else if (currentIndex >= 0) {
+    next.status = 'failed'
+    next.error = state.streamError ?? i18n.global.t('session.queueSendFailed')
+    if (state.priorityPendingQueueItemId === next.id) state.priorityPendingQueueItemId = null
+  }
 }
 
 /** 中断当前回复（先分离异步任务，再发 interrupt，不杀进程；
@@ -1409,7 +1475,11 @@ export function useStreaming() {
     closeSession,
     clearStreamingTurns,
     clearPendingUserMessage,
+    enqueuePendingQueueItem,
     removePendingQueueItem,
+    updatePendingQueueItem,
+    prioritizePendingQueueItem,
+    failPendingQueueItem,
     consumePendingQueue,
     removeLandedTurns,
     demoteUnlandedTurns,

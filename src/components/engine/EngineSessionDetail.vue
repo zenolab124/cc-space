@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useI18n } from 'vue-i18n'
 import { relativeTime, type SessionSummary } from '@/types'
 import type { ConversationRecord, InteractionRequest, ModelDescriptor, RuntimeEventEnvelope, RuntimeInputItem, RuntimeSnapshot, SessionActions, SessionRef } from '@/engines/types'
-import { attachSession, closeSession, createSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sessionActions, startTurnWithInput } from '@/engines/client'
+import { attachSession, closeSession, createSession, forkSession, interruptTurn, listModels, loadTimeline, respondInteraction, runtimeSnapshots, sendInputWhileRunning, sessionActions, startTurnWithInput } from '@/engines/client'
 import type { SourceChangeEnvelope } from '@/engines/events'
 import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
@@ -180,9 +180,23 @@ interface QueuedRuntimeInput {
   imageCount: number
   images: Array<{ id: string; dataUrl: string; mediaType: string }>
   input: RuntimeInputItem[]
+  config: QueuedTurnConfig
+  status: 'pending' | 'processing' | 'failed'
+  error?: string
+}
+
+interface QueuedTurnConfig {
+  model: string | null
+  effort: string | null
+  serviceTier: string | null
+  channelId: string | null
+  modelOverridden: boolean
+  effortOverridden: boolean
 }
 
 const queuedInputs = ref<QueuedRuntimeInput[]>([])
+const priorityQueuedInputId = ref<string | null>(null)
+const activeTurnConfig = ref<QueuedTurnConfig | null>(null)
 const sessionBannerVisible = ref(false)
 const sessionBannerResumed = ref(false)
 const SESSION_BANNER_MS = 5000
@@ -684,10 +698,81 @@ const runtimeActive = computed(() => snapshot.value?.phase === 'running' || snap
 const isBusy = computed(() => runtimeActive.value || visualActiveTurnId.value !== null || sending.value)
 const activeTurnId = computed(() => snapshot.value?.activeTurnId ?? null)
 const canSendWhileBusy = computed(() => canSend.value)
+
+function currentQueuedTurnConfig(): QueuedTurnConfig {
+  return {
+    model: selectedModel.value,
+    effort: selectedEffort.value,
+    serviceTier: selectedServiceTier.value,
+    channelId: selectedChannel.value,
+    modelOverridden: modelOverridden.value,
+    effortOverridden: effortOverridden.value,
+  }
+}
+
+function resolvedActiveTurnConfig(): QueuedTurnConfig {
+  return activeTurnConfig.value ?? {
+    model: timelineModel.value ?? selectedModel.value,
+    effort: timelineEffort.value ?? selectedEffort.value,
+    serviceTier: selectedServiceTier.value,
+    channelId: attachedChannel.value ?? selectedChannel.value,
+    modelOverridden: modelOverridden.value,
+    effortOverridden: effortOverridden.value,
+  }
+}
+
+function sameTurnConfig(left: QueuedTurnConfig, right: QueuedTurnConfig): boolean {
+  return left.model === right.model
+    && left.effort === right.effort
+    && left.serviceTier === right.serviceTier
+    && left.channelId === right.channelId
+}
+
+function canSteerQueuedInput(item: QueuedRuntimeInput): boolean {
+  return isBusy.value
+    && actions.value?.sendWhileRunning.available === true
+    && !!runtimeId.value
+    && !!activeTurnId.value
+    && sameTurnConfig(item.config, resolvedActiveTurnConfig())
+}
+
+function queuedConfigDetail(item: QueuedRuntimeInput): string {
+  const channel = item.config.channelId
+    ? channels.value.find(candidate => candidate.id === item.config.channelId)?.name ?? item.config.channelId
+    : null
+  return [item.error, item.config.model, item.config.effort, channel].filter(Boolean).join(' · ')
+}
+
+function queuedActionDisabled(item: QueuedRuntimeInput): boolean {
+  if (pendingInteractions.value.length > 0 || interrupting.value || sending.value) return true
+  if (!isBusy.value || canSteerQueuedInput(item)) return false
+  return !runtimeId.value || !activeTurnId.value || actions.value?.interrupt.available !== true
+}
+
+function queuedActionTitle(item: QueuedRuntimeInput): string | undefined {
+  if (pendingInteractions.value.length) return t('session.queueResolveApprovalFirst')
+  if (queuedActionDisabled(item) && isBusy.value) {
+    const reason = actions.value?.interrupt.reasonCode
+    return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
+  }
+  return undefined
+}
+
 const composerQueueItems = computed<ComposerQueueItem[]>(() => queuedInputs.value.map(item => ({
   id: item.id,
   text: item.text,
   imageCount: item.imageCount,
+  detail: queuedConfigDetail(item),
+  status: item.status,
+  actionLabel: item.status === 'failed' && !isBusy.value
+    ? t('common.retry')
+    : canSteerQueuedInput(item)
+      ? t('session.queueSendCurrent')
+      : isBusy.value
+        ? t('session.queueInterruptAndSend')
+        : t('session.queueSendNow'),
+  actionTitle: queuedActionTitle(item),
+  actionDisabled: queuedActionDisabled(item),
 })))
 const pendingInteractions = computed(() => snapshot.value?.pendingInteractions ?? [])
 const starred = computed(() => !!getMeta(props.session.id)?.starred)
@@ -1447,24 +1532,25 @@ function handleModelCommand(model: string): boolean {
   return true
 }
 
-function selectedTurnOptions(serviceTier: string | null = selectedServiceTier.value) {
+function turnOptions(config: QueuedTurnConfig) {
   return {
-    ...(selectedModel.value ? { model: selectedModel.value } : {}),
-    ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
-    serviceTier,
+    ...(config.model ? { model: config.model } : {}),
+    ...(config.effort ? { effort: config.effort } : {}),
+    serviceTier: config.serviceTier,
   }
 }
 
-async function startTurnWithFastFallback(session: SessionRef, inputItems: RuntimeInputItem[]) {
-  const requestedServiceTier = selectedServiceTier.value
+async function startTurnWithFastFallback(session: SessionRef, item: QueuedRuntimeInput) {
+  const requestedServiceTier = item.config.serviceTier
   try {
-    return await startTurnWithInput(session, inputItems, selectedTurnOptions(requestedServiceTier))
+    return await startTurnWithInput(session, item.input, turnOptions(item.config))
   } catch (cause) {
     if (!requestedServiceTier || !isFastServiceTierUnavailableError(cause)) throw cause
     // turn/start 被服务端拒绝时尚未创建 turn，可安全按标准档重放一次。
-    selectedServiceTier.value = null
+    if (selectedServiceTier.value === requestedServiceTier) selectedServiceTier.value = null
+    item.config = { ...item.config, serviceTier: null }
     fastModeNotice.value = t('topbar.fastModeFallback')
-    return await startTurnWithInput(session, inputItems, selectedTurnOptions(null))
+    return await startTurnWithInput(session, item.input, turnOptions(item.config))
   }
 }
 
@@ -1481,7 +1567,7 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
     item.images,
   ))
   try {
-    const turn = await startTurnWithFastFallback(reference.value, item.input)
+    const turn = await startTurnWithFastFallback(reference.value, item)
     liveRecords.value = bindOptimisticUserTurn(
       liveRecords.value,
       optimisticId,
@@ -1492,6 +1578,7 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
     if (!completedTurnIds.has(turn.reference.nativeTurnId)) {
       visualActiveTurnId.value = turn.reference.nativeTurnId
     }
+    activeTurnConfig.value = { ...item.config }
     return true
   } catch (cause) {
     liveRecords.value = liveRecords.value.filter(record => record.id !== optimisticId)
@@ -1507,13 +1594,92 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
 
 async function consumeQueuedInput() {
   if (isBusy.value || preparingInput.value || queuedInputs.value.length === 0) return
-  const next = queuedInputs.value.shift()!
-  const sent = await submitRuntimeInput(next, false)
-  if (!sent) queuedInputs.value.unshift(next)
+  const priorityIndex = priorityQueuedInputId.value
+    ? queuedInputs.value.findIndex(item => item.id === priorityQueuedInputId.value)
+    : -1
+  const next = queuedInputs.value[priorityIndex >= 0 ? priorityIndex : 0]
+  next.status = 'processing'
+  delete next.error
+  selectedModel.value = next.config.model
+  selectedEffort.value = next.config.effort
+  selectedServiceTier.value = next.config.serviceTier
+  selectedChannel.value = next.config.channelId
+  modelOverridden.value = next.config.modelOverridden
+  effortOverridden.value = next.config.effortOverridden
+  await nextTick()
+
+  const preparation = await prepareSessionForSend(next.input)
+  let sent = preparation === 'forked'
+  if (preparation === 'attached' && runtimeId.value) {
+    sent = await submitRuntimeInput(next, false)
+  }
+  const currentIndex = queuedInputs.value.findIndex(item => item.id === next.id)
+  if (sent) {
+    if (currentIndex >= 0) queuedInputs.value.splice(currentIndex, 1)
+    if (priorityQueuedInputId.value === next.id) priorityQueuedInputId.value = null
+  } else if (currentIndex >= 0) {
+    next.status = 'failed'
+    next.error = error.value ?? t('session.queueSendFailed')
+    if (priorityQueuedInputId.value === next.id) priorityQueuedInputId.value = null
+  }
 }
 
 function removeQueuedInput(id: string) {
   queuedInputs.value = queuedInputs.value.filter(item => item.id !== id)
+  if (priorityQueuedInputId.value === id) priorityQueuedInputId.value = null
+}
+
+function updateQueuedInput(id: string, text: string) {
+  const item = queuedInputs.value.find(candidate => candidate.id === id)
+  if (!item || item.status === 'processing') return
+  const nonTextInput = item.input.filter(inputItem => inputItem.kind !== 'text')
+  item.text = text
+  item.input = [
+    ...(text ? [{ kind: 'text' as const, text }] : []),
+    ...nonTextInput,
+  ]
+  item.status = 'pending'
+  delete item.error
+}
+
+async function processQueuedInput(id: string) {
+  const item = queuedInputs.value.find(candidate => candidate.id === id)
+  if (!item || item.status === 'processing' || pendingInteractions.value.length) return
+
+  if (!isBusy.value) {
+    priorityQueuedInputId.value = id
+    void consumeQueuedInput()
+    return
+  }
+
+  if (canSteerQueuedInput(item) && reference.value && runtimeId.value && activeTurnId.value) {
+    item.status = 'processing'
+    delete item.error
+    try {
+      await sendInputWhileRunning(reference.value, runtimeId.value, activeTurnId.value, item.input)
+      queuedInputs.value = queuedInputs.value.filter(candidate => candidate.id !== id)
+    } catch (cause) {
+      item.status = 'failed'
+      item.error = causeMessage(cause)
+      error.value = item.error
+    }
+    return
+  }
+
+  if (!reference.value || !runtimeId.value || !activeTurnId.value || actions.value?.interrupt.available !== true) return
+  const approved = await confirm(t('session.queueInterruptConfirm'), t('session.queueInterruptAndSend'))
+  if (!approved) return
+  priorityQueuedInputId.value = id
+  item.status = 'processing'
+  delete item.error
+  try {
+    await interruptTurn(reference.value, runtimeId.value, activeTurnId.value)
+  } catch (cause) {
+    priorityQueuedInputId.value = null
+    item.status = 'failed'
+    item.error = causeMessage(cause)
+    error.value = item.error
+  }
 }
 
 async function send() {
@@ -1569,6 +1735,8 @@ async function send() {
         mediaType: image.mime,
       })),
       input: inputItems,
+      config: currentQueuedTurnConfig(),
+      status: 'pending',
     }
 
     if (queueForNextTurn) {
@@ -1838,6 +2006,8 @@ watch(() => props.session.id, async () => {
     commandError.value = null
     cursorPos.value = 0
     queuedInputs.value = []
+    priorityQueuedInputId.value = null
+    activeTurnConfig.value = null
     imageInput.clearImages()
     snapshot.value = null
     visualActiveTurnId.value = null
@@ -2292,7 +2462,12 @@ onUnmounted(() => {
         </template>
 
         <template #queue>
-          <SessionComposerQueue :items="composerQueueItems" @remove="removeQueuedInput" />
+          <SessionComposerQueue
+            :items="composerQueueItems"
+            @remove="removeQueuedInput"
+            @update="updateQueuedInput"
+            @process="processQueuedInput"
+          />
         </template>
 
         <template #attachments>
