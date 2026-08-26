@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Monet MCP server
 //!
 //! stdio JSON-RPC 2.0 server，双职能：
@@ -31,6 +33,7 @@ mod config;
 #[path = "../search.rs"]
 mod search;
 #[path = "../theme_domain.rs"]
+#[allow(dead_code)]
 mod theme_domain;
 
 use config::data_dir;

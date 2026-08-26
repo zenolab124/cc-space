@@ -726,7 +726,7 @@ function sameTurnConfig(left: QueuedTurnConfig, right: QueuedTurnConfig): boolea
     && left.channelId === right.channelId
 }
 
-function canSteerQueuedInput(item: QueuedRuntimeInput): boolean {
+function canSendQueuedInputWhileRunning(item: QueuedRuntimeInput): boolean {
   return isBusy.value
     && actions.value?.sendWhileRunning.available === true
     && !!runtimeId.value
@@ -743,7 +743,7 @@ function queuedConfigDetail(item: QueuedRuntimeInput): string {
 
 function queuedActionDisabled(item: QueuedRuntimeInput): boolean {
   if (pendingInteractions.value.length > 0 || interrupting.value || sending.value) return true
-  if (!isBusy.value || canSteerQueuedInput(item)) return false
+  if (!isBusy.value || canSendQueuedInputWhileRunning(item)) return false
   return !runtimeId.value || !activeTurnId.value || actions.value?.interrupt.available !== true
 }
 
@@ -764,7 +764,7 @@ const composerQueueItems = computed<ComposerQueueItem[]>(() => queuedInputs.valu
   status: item.status,
   actionLabel: item.status === 'failed' && !isBusy.value
     ? t('common.retry')
-    : canSteerQueuedInput(item)
+    : canSendQueuedInputWhileRunning(item)
       ? t('session.queueSendCurrent')
       : isBusy.value
         ? t('session.queueInterruptAndSend')
@@ -1400,7 +1400,7 @@ async function forkAndSend(inputItems: RuntimeInputItem[]): Promise<boolean> {
       attachedChannel: selectedChannel.value,
       attachedCapabilityFingerprint: created.capabilityFingerprint,
     })
-    await startTurnWithFastFallback(created.session, inputItems)
+    await startTurnWithFastFallback(created.session, inputItems, currentQueuedTurnConfig())
     input.value = ''
     return true
   } catch (cause) {
@@ -1533,17 +1533,21 @@ function turnOptions(config: QueuedTurnConfig) {
   }
 }
 
-async function startTurnWithFastFallback(session: SessionRef, item: QueuedRuntimeInput) {
-  const requestedServiceTier = item.config.serviceTier
+async function startTurnWithFastFallback(
+  session: SessionRef,
+  inputItems: RuntimeInputItem[],
+  config: QueuedTurnConfig,
+) {
+  const requestedServiceTier = config.serviceTier
   try {
-    return await startTurnWithInput(session, item.input, turnOptions(item.config))
+    return await startTurnWithInput(session, inputItems, turnOptions(config))
   } catch (cause) {
     if (!requestedServiceTier || !isFastServiceTierUnavailableError(cause)) throw cause
     // turn/start 被服务端拒绝时尚未创建 turn，可安全按标准档重放一次。
     if (selectedServiceTier.value === requestedServiceTier) selectedServiceTier.value = null
-    item.config = { ...item.config, serviceTier: null }
+    config.serviceTier = null
     fastModeNotice.value = t('topbar.fastModeFallback')
-    return await startTurnWithInput(session, item.input, turnOptions(item.config))
+    return await startTurnWithInput(session, inputItems, turnOptions(config))
   }
 }
 
@@ -1560,7 +1564,7 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
     item.images,
   ))
   try {
-    const turn = await startTurnWithFastFallback(reference.value, item)
+    const turn = await startTurnWithFastFallback(reference.value, item.input, item.config)
     liveRecords.value = bindOptimisticUserTurn(
       liveRecords.value,
       optimisticId,
@@ -1645,7 +1649,7 @@ async function processQueuedInput(id: string) {
     return
   }
 
-  if (canSteerQueuedInput(item) && reference.value && runtimeId.value && activeTurnId.value) {
+  if (canSendQueuedInputWhileRunning(item) && reference.value && runtimeId.value && activeTurnId.value) {
     item.status = 'processing'
     delete item.error
     try {

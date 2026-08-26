@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use tauri::Manager;
 
 mod artifact_preview;

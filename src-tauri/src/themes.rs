@@ -36,13 +36,16 @@ pub struct ThemeSubmissionResult {
 
 fn strip_markdown_fence(value: &str) -> &str {
     let trimmed = value.trim();
-    if !trimmed.starts_with("```") { return trimmed; }
+    if !trimmed.starts_with("```") {
+        return trimmed;
+    }
     let body = trimmed.split_once('\n').map(|(_, body)| body).unwrap_or("");
     body.strip_suffix("```").unwrap_or(body).trim()
 }
 
 fn generation_prompt(request: &str, previous: Option<&ThemeDefinition>) -> Result<String, String> {
-    let context = serde_json::to_string_pretty(&theme_domain::schema_context()).map_err(|error| error.to_string())?;
+    let context = serde_json::to_string_pretty(&theme_domain::schema_context())
+        .map_err(|error| error.to_string())?;
     let previous = previous
         .map(serde_json::to_string_pretty)
         .transpose()
@@ -78,10 +81,22 @@ pub async fn theme_generate_preview(
         return Err("theme request must be 1-2000 characters".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let existing_preview = preview_id.as_deref().map(theme_domain::load_preview).transpose()?;
-        let previous = existing_preview.as_ref().map(|preview| &preview.theme).cloned()
-            .or_else(|| base_theme_id.as_deref().and_then(|id| theme_domain::load_theme(id).ok()));
-        let effective_base = existing_preview.as_ref().and_then(|preview| preview.base_theme_id.clone())
+        let existing_preview = preview_id
+            .as_deref()
+            .map(theme_domain::load_preview)
+            .transpose()?;
+        let previous = existing_preview
+            .as_ref()
+            .map(|preview| &preview.theme)
+            .cloned()
+            .or_else(|| {
+                base_theme_id
+                    .as_deref()
+                    .and_then(|id| theme_domain::load_theme(id).ok())
+            });
+        let effective_base = existing_preview
+            .as_ref()
+            .and_then(|preview| preview.base_theme_id.clone())
             .or(base_theme_id);
         let prompt = generation_prompt(&request, previous.as_ref())?;
         let raw = crate::agent::request_for_agent(&prompt, "theme")?;
@@ -119,22 +134,32 @@ fn gh_username() -> Option<String> {
         .env("PATH", crate::streaming::enhanced_path())
         .output()
         .ok()?;
-    if !output.status.success() { return None; }
+    if !output.status.success() {
+        return None;
+    }
     let username = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!username.is_empty()).then_some(username)
 }
 
 fn submission_identity() -> ThemeSubmissionIdentity {
     match gh_username() {
-        Some(username) => ThemeSubmissionIdentity { mode: "github", username: Some(username) },
-        None => ThemeSubmissionIdentity { mode: "anonymous", username: None },
+        Some(username) => ThemeSubmissionIdentity {
+            mode: "github",
+            username: Some(username),
+        },
+        None => ThemeSubmissionIdentity {
+            mode: "anonymous",
+            username: None,
+        },
     }
 }
 
 fn markdown_text(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
-        if matches!(character, '\\' | '[' | ']' | '*' | '_' | '#') { escaped.push('\\'); }
+        if matches!(character, '\\' | '[' | ']' | '*' | '_' | '#') {
+            escaped.push('\\');
+        }
         escaped.push(character);
     }
     escaped
@@ -142,7 +167,9 @@ fn markdown_text(value: &str) -> String {
 
 fn validate_public_name(value: &str) -> Result<&str, String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() { return Ok("Anonymous Monet user"); }
+    if trimmed.is_empty() {
+        return Ok("Anonymous Monet user");
+    }
     let lower = trimmed.to_ascii_lowercase();
     if trimmed.chars().count() > 60
         || trimmed.chars().any(char::is_control)
@@ -168,9 +195,14 @@ fn submission_payload(
     anonymous: bool,
 ) -> Result<(String, String, String), String> {
     let report = theme_domain::validate_theme(theme);
-    if !report.valid { return Err("theme validation failed".to_string()); }
+    if !report.valid {
+        return Err("theme validation failed".to_string());
+    }
     let theme_json = serde_json::to_string_pretty(theme).map_err(|error| error.to_string())?;
-    let author = match public_name { Some(value) => validate_public_name(value)?, None => &theme.author };
+    let author = match public_name {
+        Some(value) => validate_public_name(value)?,
+        None => &theme.author,
+    };
     let appearance = match theme.appearance {
         theme_domain::ThemeAppearance::Light => "light",
         theme_domain::ThemeAppearance::Dark => "dark",
@@ -185,8 +217,12 @@ fn submission_payload(
          {}\n\n\
          ## Machine-readable theme\n\n\
          ```json\n{}\n```\n",
-        markdown_text(&theme.name), markdown_text(author), appearance,
-        theme.id, markdown_text(&theme.description), theme_json,
+        markdown_text(&theme.name),
+        markdown_text(author),
+        appearance,
+        theme.id,
+        markdown_text(&theme.description),
+        theme_json,
     );
     if anonymous {
         body.push_str("\n---\n— Submitted anonymously through the Monet theme relay.\n");
@@ -202,14 +238,23 @@ pub async fn theme_prepare_submission(
     tauri::async_runtime::spawn_blocking(move || {
         let theme = theme_domain::load_theme(&theme_id)?;
         let identity = submission_identity();
-        let github_author = identity.username.as_ref().map(|username| format!("@{username}"));
+        let github_author = identity
+            .username
+            .as_ref()
+            .map(|username| format!("@{username}"));
         let effective_name = if identity.mode == "github" {
             github_author.as_deref()
         } else {
             Some(public_name.as_deref().unwrap_or(""))
         };
-        let (title, body, theme_json) = submission_payload(&theme, effective_name, identity.mode == "anonymous")?;
-        Ok(ThemeSubmissionPreview { identity, title, body, theme_json })
+        let (title, body, theme_json) =
+            submission_payload(&theme, effective_name, identity.mode == "anonymous")?;
+        Ok(ThemeSubmissionPreview {
+            identity,
+            title,
+            body,
+            theme_json,
+        })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -217,24 +262,48 @@ pub async fn theme_prepare_submission(
 
 fn submit_with_gh(title: &str, body: &str) -> Result<String, String> {
     let mut child = Command::new("gh")
-        .args(["issue", "create", "--repo", REPOSITORY, "--label", "theme-submission", "--title", title, "--body-file", "-"])
+        .args([
+            "issue",
+            "create",
+            "--repo",
+            REPOSITORY,
+            "--label",
+            "theme-submission",
+            "--title",
+            title,
+            "--body-file",
+            "-",
+        ])
         .env("PATH", crate::streaming::enhanced_path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| error.to_string())?;
-    child.stdin.take().ok_or("failed to open gh stdin")?.write_all(body.as_bytes()).map_err(|error| error.to_string())?;
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or("failed to open gh stdin")?
+        .write_all(body.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let url = String::from_utf8_lossy(&output.stdout).lines().find(|line| line.starts_with("https://"))
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let url = stdout
+        .lines()
+        .find(|line| line.starts_with("https://"))
         .ok_or("gh did not return an issue URL")?;
     Ok(url.to_string())
 }
 
-fn submit_anonymously(theme: &ThemeDefinition, public_name: Option<&str>) -> Result<String, String> {
+fn submit_anonymously(
+    theme: &ThemeDefinition,
+    public_name: Option<&str>,
+) -> Result<String, String> {
     let response = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
@@ -246,9 +315,17 @@ fn submit_anonymously(theme: &ThemeDefinition, public_name: Option<&str>) -> Res
     let status = response.status();
     let payload: Value = response.json().map_err(|error| error.to_string())?;
     if !status.is_success() {
-        return Err(payload.get("error").and_then(Value::as_str).unwrap_or("submission failed").to_string());
+        return Err(payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("submission failed")
+            .to_string());
     }
-    payload.get("url").and_then(Value::as_str).map(str::to_string).ok_or("submission URL missing".to_string())
+    payload
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or("submission URL missing".to_string())
 }
 
 #[tauri::command]
@@ -263,23 +340,36 @@ pub async fn theme_submit(
         let theme = theme_domain::load_theme(&theme_id)?;
         let identity = submission_identity();
         if identity.mode != expected_mode || identity.username != expected_username {
-            return Err("GitHub submission identity changed; review the public payload again".to_string());
+            return Err(
+                "GitHub submission identity changed; review the public payload again".to_string(),
+            );
         }
         if let Some(username) = identity.username {
             let author = format!("@{username}");
             let (title, body, _) = submission_payload(&theme, Some(&author), false)?;
             if body != expected_body {
-                return Err("public theme payload changed; review it again before submitting".to_string());
+                return Err(
+                    "public theme payload changed; review it again before submitting".to_string(),
+                );
             }
             let url = submit_with_gh(&title, &body)?;
-            Ok(ThemeSubmissionResult { url, mode: "github" })
+            Ok(ThemeSubmissionResult {
+                url,
+                mode: "github",
+            })
         } else {
-            let (_, body, _) = submission_payload(&theme, Some(public_name.as_deref().unwrap_or("")), true)?;
+            let (_, body, _) =
+                submission_payload(&theme, Some(public_name.as_deref().unwrap_or("")), true)?;
             if body != expected_body {
-                return Err("public theme payload changed; review it again before submitting".to_string());
+                return Err(
+                    "public theme payload changed; review it again before submitting".to_string(),
+                );
             }
             let url = submit_anonymously(&theme, public_name.as_deref())?;
-            Ok(ThemeSubmissionResult { url, mode: "anonymous" })
+            Ok(ThemeSubmissionResult {
+                url,
+                mode: "anonymous",
+            })
         }
     })
     .await
@@ -294,7 +384,11 @@ pub fn theme_export_submission(
     path: PathBuf,
 ) -> Result<(), String> {
     let theme = theme_domain::load_theme(&theme_id)?;
-    let effective_name = if anonymous { Some(public_name.as_deref().unwrap_or("")) } else { public_name.as_deref() };
+    let effective_name = if anonymous {
+        Some(public_name.as_deref().unwrap_or(""))
+    } else {
+        public_name.as_deref()
+    };
     let (_, body, _) = submission_payload(&theme, effective_name, anonymous)?;
     crate::config::atomic_write(&path, &body).map_err(|error| error.to_string())
 }

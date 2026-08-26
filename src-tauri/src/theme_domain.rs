@@ -155,15 +155,21 @@ fn safe_theme_id(id: &str) -> bool {
         && id.len() <= 40
         && !id.starts_with('-')
         && !id.ends_with('-')
-        && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn ensure_theme_id(id: &str) -> Result<(), String> {
-    safe_theme_id(id).then_some(()).ok_or_else(|| "invalid theme id".to_string())
+    safe_theme_id(id)
+        .then_some(())
+        .ok_or_else(|| "invalid theme id".to_string())
 }
 
 fn ensure_preview_id(id: &str) -> Result<(), String> {
-    uuid::Uuid::parse_str(id).map(|_| ()).map_err(|_| "invalid preview id".to_string())
+    uuid::Uuid::parse_str(id)
+        .map(|_| ())
+        .map_err(|_| "invalid preview id".to_string())
 }
 
 fn preview_path(id: &str) -> PathBuf {
@@ -181,7 +187,11 @@ fn issue(field: &str, kind: &str, message: impl Into<String>) -> ThemeValidation
 fn validate_text(field: &str, value: &str, max: usize, issues: &mut Vec<ThemeValidationIssue>) {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.chars().count() > max {
-        issues.push(issue(field, "schema", format!("must be 1-{max} characters")));
+        issues.push(issue(
+            field,
+            "schema",
+            format!("must be 1-{max} characters"),
+        ));
         return;
     }
     let lower = trimmed.to_ascii_lowercase();
@@ -197,12 +207,19 @@ fn validate_text(field: &str, value: &str, max: usize, issues: &mut Vec<ThemeVal
         || trimmed.starts_with("\\\\")
         || trimmed.as_bytes().get(1) == Some(&b':');
     if unsafe_content {
-        issues.push(issue(field, "unsafe", "contains a URL, path, markup, or control sequence"));
+        issues.push(issue(
+            field,
+            "unsafe",
+            "contains a URL, path, markup, or control sequence",
+        ));
     }
 }
 
 fn parse_hex(value: &str) -> Option<[u8; 3]> {
-    if value.len() != 7 || !value.starts_with('#') || !value[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+    if value.len() != 7
+        || !value.starts_with('#')
+        || !value[1..].chars().all(|c| c.is_ascii_hexdigit())
+    {
         return None;
     }
     Some([
@@ -215,7 +232,11 @@ fn parse_hex(value: &str) -> Option<[u8; 3]> {
 fn luminance(rgb: [u8; 3]) -> f64 {
     let linear = |value: u8| {
         let channel = f64::from(value) / 255.0;
-        if channel <= 0.04045 { channel / 12.92 } else { ((channel + 0.055) / 1.055).powf(2.4) }
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
     };
     0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
 }
@@ -223,21 +244,36 @@ fn luminance(rgb: [u8; 3]) -> f64 {
 fn contrast(a: &str, b: &str) -> Option<f64> {
     let first = luminance(parse_hex(a)?);
     let second = luminance(parse_hex(b)?);
-    let (light, dark) = if first > second { (first, second) } else { (second, first) };
+    let (light, dark) = if first > second {
+        (first, second)
+    } else {
+        (second, first)
+    };
     Some((light + 0.05) / (dark + 0.05))
 }
 
 pub fn validate_theme(theme: &ThemeDefinition) -> ThemeValidationReport {
     let mut issues = Vec::new();
     if theme.schema_version != THEME_SCHEMA_VERSION {
-        issues.push(issue("schemaVersion", "schema", format!("must equal {THEME_SCHEMA_VERSION}")));
+        issues.push(issue(
+            "schemaVersion",
+            "schema",
+            format!("must equal {THEME_SCHEMA_VERSION}"),
+        ));
     }
-    if !safe_theme_id(&theme.id) || RESERVED_IDS.contains(&theme.id.as_str())
-    {
-        issues.push(issue("id", "schema", "must be a non-reserved lowercase slug (3-40 characters)"));
+    if !safe_theme_id(&theme.id) || RESERVED_IDS.contains(&theme.id.as_str()) {
+        issues.push(issue(
+            "id",
+            "schema",
+            "must be a non-reserved lowercase slug (3-40 characters)",
+        ));
     }
     if theme.source.kind != ThemeSourceKind::Local || theme.source.issue.is_some() {
-        issues.push(issue("source", "schema", "local drafts must use { kind: local } without an issue"));
+        issues.push(issue(
+            "source",
+            "schema",
+            "local drafts must use { kind: local } without an issue",
+        ));
     }
     validate_text("name", &theme.name, 60, &mut issues);
     validate_text("author", &theme.author, 60, &mut issues);
@@ -261,7 +297,10 @@ pub fn validate_theme(theme: &ThemeDefinition) -> ThemeValidationReport {
         ("colors.accent", &colors.accent),
         ("colors.accentForeground", &colors.accent_foreground),
         ("colors.destructive", &colors.destructive),
-        ("colors.destructiveForeground", &colors.destructive_foreground),
+        (
+            "colors.destructiveForeground",
+            &colors.destructive_foreground,
+        ),
         ("colors.border", &colors.border),
         ("colors.input", &colors.input),
         ("colors.ring", &colors.ring),
@@ -284,20 +323,52 @@ pub fn validate_theme(theme: &ThemeDefinition) -> ThemeValidationReport {
     }
 
     let pairs = [
-        ("foreground/background", &colors.foreground, &colors.background),
+        (
+            "foreground/background",
+            &colors.foreground,
+            &colors.background,
+        ),
         ("cardForeground/card", &colors.card_foreground, &colors.card),
-        ("popoverForeground/popover", &colors.popover_foreground, &colors.popover),
-        ("primaryForeground/primary", &colors.primary_foreground, &colors.primary),
-        ("secondaryForeground/secondary", &colors.secondary_foreground, &colors.secondary),
-        ("mutedForeground/muted", &colors.muted_foreground, &colors.muted),
-        ("accentForeground/accent", &colors.accent_foreground, &colors.accent),
-        ("destructiveForeground/destructive", &colors.destructive_foreground, &colors.destructive),
+        (
+            "popoverForeground/popover",
+            &colors.popover_foreground,
+            &colors.popover,
+        ),
+        (
+            "primaryForeground/primary",
+            &colors.primary_foreground,
+            &colors.primary,
+        ),
+        (
+            "secondaryForeground/secondary",
+            &colors.secondary_foreground,
+            &colors.secondary,
+        ),
+        (
+            "mutedForeground/muted",
+            &colors.muted_foreground,
+            &colors.muted,
+        ),
+        (
+            "accentForeground/accent",
+            &colors.accent_foreground,
+            &colors.accent,
+        ),
+        (
+            "destructiveForeground/destructive",
+            &colors.destructive_foreground,
+            &colors.destructive,
+        ),
         ("tagForeground/tag", &colors.tag_foreground, &colors.tag),
     ];
     for (field, foreground, background) in pairs {
         if let Some(ratio) = contrast(foreground, background) {
             if ratio < 4.5 {
-                issues.push(issue(field, "contrast", format!("contrast {ratio:.2}:1 is below WCAG AA 4.5:1")));
+                issues.push(issue(
+                    field,
+                    "contrast",
+                    format!("contrast {ratio:.2}:1 is below WCAG AA 4.5:1"),
+                ));
             }
         }
     }
@@ -307,24 +378,52 @@ pub fn validate_theme(theme: &ThemeDefinition) -> ThemeValidationReport {
         issues.push(issue("metrics.radius", "range", "must be between 2 and 16"));
     }
     if !metrics.font_scale.is_finite() || !(0.90..=1.15).contains(&metrics.font_scale) {
-        issues.push(issue("metrics.fontScale", "range", "must be between 0.90 and 1.15"));
+        issues.push(issue(
+            "metrics.fontScale",
+            "range",
+            "must be between 0.90 and 1.15",
+        ));
     }
     if !metrics.line_height.is_finite() || !(1.30..=1.90).contains(&metrics.line_height) {
-        issues.push(issue("metrics.lineHeight", "range", "must be between 1.30 and 1.90"));
+        issues.push(issue(
+            "metrics.lineHeight",
+            "range",
+            "must be between 1.30 and 1.90",
+        ));
     }
     if !metrics.shadow.opacity.is_finite() || !(0.0..=0.6).contains(&metrics.shadow.opacity) {
-        issues.push(issue("metrics.shadow.opacity", "range", "must be between 0 and 0.6"));
+        issues.push(issue(
+            "metrics.shadow.opacity",
+            "range",
+            "must be between 0 and 0.6",
+        ));
     }
     if metrics.shadow.y > 16 || metrics.shadow.blur > 40 {
-        issues.push(issue("metrics.shadow", "range", "shadow y/blur exceed the allowed range"));
+        issues.push(issue(
+            "metrics.shadow",
+            "range",
+            "shadow y/blur exceed the allowed range",
+        ));
     }
     if !theme.atmosphere.noise.is_finite() || !(0.0..=0.12).contains(&theme.atmosphere.noise) {
-        issues.push(issue("atmosphere.noise", "range", "must be between 0 and 0.12"));
+        issues.push(issue(
+            "atmosphere.noise",
+            "range",
+            "must be between 0 and 0.12",
+        ));
     }
-    if !theme.atmosphere.vignette.is_finite() || !(0.0..=0.30).contains(&theme.atmosphere.vignette) {
-        issues.push(issue("atmosphere.vignette", "range", "must be between 0 and 0.30"));
+    if !theme.atmosphere.vignette.is_finite() || !(0.0..=0.30).contains(&theme.atmosphere.vignette)
+    {
+        issues.push(issue(
+            "atmosphere.vignette",
+            "range",
+            "must be between 0 and 0.30",
+        ));
     }
-    ThemeValidationReport { valid: issues.is_empty(), issues }
+    ThemeValidationReport {
+        valid: issues.is_empty(),
+        issues,
+    }
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
@@ -356,38 +455,66 @@ pub fn list_library() -> ThemeLibrary {
         match read_json::<ThemeDefinition>(&path) {
             Ok(theme)
                 if validate_theme(&theme).valid
-                    && path.file_stem().and_then(|value| value.to_str()) == Some(theme.id.as_str()) => themes.push(theme),
-            _ => invalid_entries.push(path.file_name().and_then(|value| value.to_str()).unwrap_or("unknown").to_string()),
+                    && path.file_stem().and_then(|value| value.to_str())
+                        == Some(theme.id.as_str()) =>
+            {
+                themes.push(theme)
+            }
+            _ => invalid_entries.push(
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+            ),
         }
     }
     let mut previews = Vec::new();
     for path in json_files(&previews_dir()) {
         match read_json::<ThemePreview>(&path) {
             Ok(mut preview)
-                if path.file_stem().and_then(|value| value.to_str()) == Some(preview.preview_id.as_str()) => {
-                    preview.validation = validate_theme(&preview.theme);
-                    previews.push(preview);
-                }
-            _ => invalid_entries.push(path.file_name().and_then(|value| value.to_str()).unwrap_or("unknown").to_string()),
+                if path.file_stem().and_then(|value| value.to_str())
+                    == Some(preview.preview_id.as_str()) =>
+            {
+                preview.validation = validate_theme(&preview.theme);
+                previews.push(preview);
+            }
+            _ => invalid_entries.push(
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+            ),
         }
     }
-    themes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    themes.sort_by_key(|theme| theme.name.to_lowercase());
     previews.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    ThemeLibrary { themes, previews, invalid_entries }
+    ThemeLibrary {
+        themes,
+        previews,
+        invalid_entries,
+    }
 }
 
 pub fn load_theme(id: &str) -> Result<ThemeDefinition, String> {
     ensure_theme_id(id)?;
     let theme: ThemeDefinition = read_json(&theme_path(id))?;
-    if theme.id != id { return Err("theme id does not match its file".to_string()); }
+    if theme.id != id {
+        return Err("theme id does not match its file".to_string());
+    }
     let report = validate_theme(&theme);
-    if report.valid { Ok(theme) } else { Err("theme is invalid".to_string()) }
+    if report.valid {
+        Ok(theme)
+    } else {
+        Err("theme is invalid".to_string())
+    }
 }
 
 pub fn load_preview(id: &str) -> Result<ThemePreview, String> {
     ensure_preview_id(id)?;
     let mut preview: ThemePreview = read_json(&preview_path(id))?;
-    if preview.preview_id != id { return Err("preview id does not match its file".to_string()); }
+    if preview.preview_id != id {
+        return Err("preview id does not match its file".to_string());
+    }
     preview.validation = validate_theme(&preview.theme);
     Ok(preview)
 }
@@ -397,7 +524,9 @@ pub fn put_preview(
     preview_id: Option<&str>,
     base_theme_id: Option<String>,
 ) -> Result<ThemePreview, String> {
-    let id = preview_id.map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let id = preview_id
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     ensure_preview_id(&id)?;
     if preview_id.is_some() && !preview_path(&id).exists() {
         return Err("preview not found".to_string());
@@ -422,7 +551,9 @@ pub fn put_preview(
 pub fn discard_preview(id: &str) -> Result<(), String> {
     ensure_preview_id(id)?;
     let path = preview_path(id);
-    if path.exists() { fs::remove_file(path).map_err(|error| error.to_string())?; }
+    if path.exists() {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -446,7 +577,9 @@ pub fn rename_theme(id: &str, name: &str) -> Result<ThemeDefinition, String> {
     let mut theme = load_theme(id)?;
     let mut issues = Vec::new();
     validate_text("name", name, 60, &mut issues);
-    if !issues.is_empty() { return Err(issues[0].message.clone()); }
+    if !issues.is_empty() {
+        return Err(issues[0].message.clone());
+    }
     theme.name = name.trim().to_string();
     write_json(&theme_path(id), &theme)?;
     Ok(theme)
@@ -454,9 +587,13 @@ pub fn rename_theme(id: &str, name: &str) -> Result<ThemeDefinition, String> {
 
 pub fn delete_theme(id: &str) -> Result<(), String> {
     ensure_theme_id(id)?;
-    if RESERVED_IDS.contains(&id) { return Err("built-in themes cannot be deleted".to_string()); }
+    if RESERVED_IDS.contains(&id) {
+        return Err("built-in themes cannot be deleted".to_string());
+    }
     let path = theme_path(id);
-    if !path.exists() { return Err("theme not found".to_string()); }
+    if !path.exists() {
+        return Err("theme not found".to_string());
+    }
     fs::remove_file(path).map_err(|error| error.to_string())
 }
 
@@ -514,4 +651,60 @@ pub fn schema_context() -> serde_json::Value {
             "atmosphere": { "tint": "#3C2D1F", "noise": 0.02, "vignette": 0.08 }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn example_theme() -> ThemeDefinition {
+        serde_json::from_value(schema_context()["example"].clone())
+            .expect("schema example must deserialize")
+    }
+
+    #[test]
+    fn schema_example_is_a_valid_local_theme() {
+        let report = validate_theme(&example_theme());
+        assert!(report.valid, "{:?}", report.issues);
+    }
+
+    #[test]
+    fn unknown_fields_are_rejected_before_preview() {
+        let mut raw = schema_context()["example"].clone();
+        raw.as_object_mut().expect("example object").insert(
+            "css".to_string(),
+            serde_json::json!("body { display: none }"),
+        );
+        assert!(serde_json::from_value::<ThemeDefinition>(raw).is_err());
+    }
+
+    #[test]
+    fn unsafe_metadata_and_low_contrast_are_reported() {
+        let mut theme = example_theme();
+        theme.description = "Load https://example.invalid/theme.css".to_string();
+        theme.colors.foreground = "#EEEEEE".to_string();
+        theme.colors.background = "#FFFFFF".to_string();
+
+        let report = validate_theme(&theme);
+        assert!(!report.valid);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.field == "description" && issue.kind == "unsafe"));
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.field == "foreground/background" && issue.kind == "contrast"));
+    }
+
+    #[test]
+    fn local_theme_cannot_claim_a_community_issue() {
+        let mut theme = example_theme();
+        theme.source.issue = Some(42);
+        let report = validate_theme(&theme);
+        assert!(report
+            .issues
+            .iter()
+            .any(|issue| issue.field == "source" && issue.kind == "schema"));
+    }
 }
