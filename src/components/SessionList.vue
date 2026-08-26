@@ -15,6 +15,7 @@ import {
 import type { SessionSummary } from '@/types'
 import { useRunners } from '@/composables/useRunners'
 import { resolveEnginePresentation } from '@/engines/presentation'
+import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
 
 const { t } = useI18n()
 const { getMeta } = useSessionMeta()
@@ -352,8 +353,11 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
             @click="selectSession(session.id)"
             @contextmenu="onContextMenu($event, session)"
           >
-            <div class="text-sm text-foreground truncate">
-              {{ displayTitle(session, getMeta(session.id)?.title) }}
+            <div class="flex min-w-0 items-center gap-2">
+              <div class="min-w-0 flex-1 truncate text-sm text-foreground">
+                {{ displayTitle(session, getMeta(session.id)?.title) }}
+              </div>
+              <WorkbenchTargetButton :session-id="session.id" variant="secondary" />
             </div>
             <div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
               <span

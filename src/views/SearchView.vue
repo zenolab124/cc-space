@@ -8,6 +8,7 @@ import { useUiState } from '@/composables/useUiState'
 import { fileName } from '@/utils/path'
 import { instanceKey } from '@/engines/identity'
 import { useChannels } from '@/composables/useChannels'
+import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
 
 const { t } = useI18n()
 const {
@@ -299,6 +300,11 @@ function onSubmit() {
               {{ projectNames[hit.projectId] ?? hit.projectId }}
             </span>
             <span>{{ relativeTime(hit.lastModified) }}</span>
+            <WorkbenchTargetButton
+              class="ml-auto"
+              :session-id="hit.sessionId"
+              variant="secondary"
+            />
           </div>
         </div>
       </div>

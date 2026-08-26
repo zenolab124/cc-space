@@ -79,6 +79,7 @@ import SessionTypingIndicator from './session/SessionTypingIndicator.vue'
 import SessionInteractionPanel from './session/SessionInteractionPanel.vue'
 import SessionReadonlyBar from './session/SessionReadonlyBar.vue'
 import SessionIdentityBar from './session/SessionIdentityBar.vue'
+import WorkbenchTargetButton from './workbench/WorkbenchTargetButton.vue'
 import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
@@ -158,7 +159,7 @@ const { projects, loadProjects } = useProjects()
 const { selectedSessionId, selectSession } = useSessions()
 const { pendingScrollTarget } = useSearch()
 const { findSession, removeSession, draftCwd, forkSourceOf } = useWorkbench()
-const { goToSession, notifyTransient } = useNotifications()
+const { notifyTransient } = useNotifications()
 
 // 每个实例独立的 detail 数据
 const detail = createSessionDetail()
@@ -1141,11 +1142,6 @@ const workbenchHome = computed(() => {
   if (!sid) return null
   return findSession(sid)?.tab ?? null
 })
-
-function onOpenInWorkbench() {
-  const sid = effectiveSessionId.value
-  if (sid) goToSession(sid)
-}
 
 const { getMeta, updateMeta, refreshSummary } = useSessionMeta()
 const summaryGenerating = ref(false)
@@ -3741,12 +3737,7 @@ async function onReload() {
         <span v-else class="i-carbon-text-short-paragraph w-3 h-3" />
         {{ currentSummary ? $t('archive.refreshSummary') : $t('archive.generateSummary') }}
       </button>
-      <button
-        class="shrink-0 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:shadow-paper transition-shadow"
-        @click="onOpenInWorkbench"
-      >
-        {{ workbenchHome ? $t('session.goTo') : $t('session.openInWorkbench') }}
-      </button>
+      <WorkbenchTargetButton v-if="effectiveSessionId" :session-id="effectiveSessionId" />
     </SessionReadonlyBar>
     
     <!-- Runner 悬浮面板：列内 absolute，随列滚动/缩放天然跟随 -->

@@ -251,6 +251,8 @@
     "bannerHooks": "SessionStart Hooks（{count}）",
     "goTo": "前往",
     "openInWorkbench": "在工作台打开",
+    "addToWorkbench": "加入工作台",
+    "openWorkbench": "打开工作台",
     "streaming": "流式输出",
     "waitingTool": "等待工具",
     "waitingPermission": "等待权限",
@@ -274,6 +276,8 @@
   },
   "workbench": {
     "defaultTabName": "工作台 {seq}",
+    "chooseTarget": "选择目标工作台",
+    "targetDefault": "{name}（默认）",
     "stateReset": "工作台状态已重置",
     "stateRepaired": "已修复 {count} 处工作台状态不一致",
     "newTab": "新建工作台",

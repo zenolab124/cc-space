@@ -76,6 +76,8 @@ export interface EngineDraft {
 interface WorkbenchState {
   tabs: WorkbenchTab[]
   activeTabId: string
+  /** 最近一次激活的普通工作台；赛马 Tab 不覆盖默认加入目标。 */
+  lastOrdinaryTabId: string
   /** 「工作台 N」的 N:历史递增,关闭 tab 不回收 */
   tabSeq: number
   /** 展开序号计数 */
@@ -164,6 +166,7 @@ function createInitialState(): WorkbenchState {
   return {
     tabs: [tab],
     activeTabId: tab.id,
+    lastOrdinaryTabId: tab.id,
     tabSeq: 1,
     openSeq: 0,
     pendingTasks: {},
@@ -262,6 +265,10 @@ function loadState(): WorkbenchState | null {
       activeTabId = tabs[0].id
       stateRepairCount += 1
     }
+    const ordinaryTabs = tabs.filter(tab => !tab.race)
+    const lastOrdinaryTabId = ordinaryTabs.some(tab => tab.id === parsed.lastOrdinaryTabId)
+      ? parsed.lastOrdinaryTabId!
+      : ordinaryTabs.find(tab => tab.id === activeTabId)?.id ?? ordinaryTabs[0]?.id ?? ''
     const pendingTasks: Record<string, string> = {}
     if (parsed.pendingTasks && typeof parsed.pendingTasks === 'object' && !Array.isArray(parsed.pendingTasks)) {
       for (const [key, value] of Object.entries(parsed.pendingTasks)) {
@@ -306,6 +313,7 @@ function loadState(): WorkbenchState | null {
     return {
       tabs,
       activeTabId,
+      lastOrdinaryTabId,
       tabSeq: typeof parsed.tabSeq === 'number' ? parsed.tabSeq : tabs.length,
       openSeq: typeof parsed.openSeq === 'number' ? parsed.openSeq : 0,
       pendingTasks,
@@ -348,6 +356,14 @@ watch(state, saveState, { deep: true })
 
 const activeTab = computed<WorkbenchTab>(() => {
   return state.value.tabs.find(t => t.id === state.value.activeTabId) ?? state.value.tabs[0]
+})
+
+const ordinaryTabs = computed(() => state.value.tabs.filter(tab => !tab.race))
+
+const defaultOrdinaryTab = computed<WorkbenchTab | null>(() => {
+  return ordinaryTabs.value.find(tab => tab.id === state.value.lastOrdinaryTabId)
+    ?? ordinaryTabs.value[0]
+    ?? null
 })
 
 /** 重复打开时的高亮目标(背景闪烁 1 秒) */
@@ -395,6 +411,7 @@ function createTab(): WorkbenchTab {
   const tab = createTabObject(state.value.tabSeq)
   state.value.tabs.push(tab)
   state.value.activeTabId = tab.id
+  state.value.lastOrdinaryTabId = tab.id
   return tab
 }
 
@@ -415,13 +432,20 @@ function closeTab(tabId: string) {
   if (state.value.activeTabId === tabId) {
     state.value.activeTabId = state.value.tabs[Math.max(0, idx - 1)].id
   }
+  if (state.value.lastOrdinaryTabId === tabId) {
+    const activeOrdinary = state.value.tabs.find(tab => tab.id === state.value.activeTabId && !tab.race)
+    state.value.lastOrdinaryTabId = activeOrdinary?.id
+      ?? state.value.tabs.find(tab => !tab.race)?.id
+      ?? ''
+  }
   for (const sid of removed.sessionIds) teardownSession(sid)
 }
 
 function setActiveTab(tabId: string) {
-  if (state.value.tabs.some(t => t.id === tabId)) {
-    state.value.activeTabId = tabId
-  }
+  const tab = state.value.tabs.find(candidate => candidate.id === tabId)
+  if (!tab) return
+  state.value.activeTabId = tabId
+  if (!tab.race) state.value.lastOrdinaryTabId = tabId
 }
 
 function reorderTabs(sourceTabId: string, targetTabId: string) {
@@ -620,7 +644,7 @@ export type OpenResult =
 function openSession(sessionId: string): OpenResult {
   const found = findSession(sessionId)
   if (found) {
-    state.value.activeTabId = found.tab.id
+    setActiveTab(found.tab.id)
     flashSession(sessionId)
     return { kind: 'existing', tabId: found.tab.id, collapsedSessionIds: [] }
   }
@@ -628,6 +652,29 @@ function openSession(sessionId: string): OpenResult {
   tab.sessionIds.push(sessionId)
   const expanded = expandSession(tab.id, sessionId)
   return { kind: 'added', tabId: tab.id, collapsedSessionIds: expanded.collapsedSessionIds }
+}
+
+/**
+ * 从档案/搜索加入指定普通工作台。未指定时使用最近激活的普通工作台；
+ * 若普通工作台不存在则创建一个。已归属会话只定位原工作台，不移动或复制。
+ */
+function openSessionInTab(sessionId: string, targetTabId?: string): OpenResult {
+  const found = findSession(sessionId)
+  if (found) {
+    setActiveTab(found.tab.id)
+    const expanded = expandSession(found.tab.id, sessionId)
+    flashSession(sessionId)
+    return { kind: 'existing', tabId: found.tab.id, collapsedSessionIds: expanded.collapsedSessionIds }
+  }
+
+  let target = targetTabId
+    ? state.value.tabs.find(tab => tab.id === targetTabId && !tab.race) ?? defaultOrdinaryTab.value
+    : defaultOrdinaryTab.value
+  if (!target) target = createTab()
+  setActiveTab(target.id)
+  target.sessionIds.push(sessionId)
+  const expanded = expandSession(target.id, sessionId)
+  return { kind: 'added', tabId: target.id, collapsedSessionIds: expanded.collapsedSessionIds }
 }
 
 /**
@@ -877,6 +924,8 @@ export function useWorkbench() {
   return {
     state,
     activeTab,
+    ordinaryTabs,
+    defaultOrdinaryTab,
     minColumnWidth,
     flashSessionId,
     focusColumnRequest,
@@ -897,6 +946,7 @@ export function useWorkbench() {
     reorderTabs,
     reorderSessions,
     openSession,
+    openSessionInTab,
     createPendingTask,
     promotePendingTaskToDraft,
     pendingTaskCwd,

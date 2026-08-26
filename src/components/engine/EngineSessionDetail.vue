@@ -31,6 +31,7 @@ import SessionInteractionPanel from '@/components/session/SessionInteractionPane
 import SessionApprovalCard, { type SessionApprovalOption } from '@/components/session/SessionApprovalCard.vue'
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
 import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
+import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
 import ConversationUserMessage from '@/components/session/ConversationUserMessage.vue'
 import SessionBannerOverlay from '@/components/session/SessionBannerOverlay.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
@@ -39,7 +40,6 @@ import RunConfigCapsule from '@/components/topbar/RunConfigCapsule.vue'
 import { triggerMetaGeneration, useSessionMeta } from '@/composables/useSessionMeta'
 import { clearHint, getHint, requestHint } from '@/composables/usePermissionHints'
 import { useWorkbench } from '@/composables/useWorkbench'
-import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
 import { useSessions } from '@/composables/useSessions'
 import { useConfirm } from '@/composables/useConfirm'
@@ -141,7 +141,6 @@ const { getMeta, updateMeta, refreshSummary } = useSessionMeta()
 const summaryGenerating = ref(false)
 const { enabled: htmlVisualEnabled } = useHtmlVisual()
 const {
-  openSession,
   removeSession,
   findSession,
   engineDraft,
@@ -150,7 +149,6 @@ const {
   discardStagedSession,
   replaceWorkbenchSession,
 } = useWorkbench()
-const { switchSection } = useUiState()
 const { loadProjects } = useProjects()
 const { selectSession } = useSessions()
 const { confirm, confirmMulti } = useConfirm()
@@ -1023,11 +1021,6 @@ async function openCwd() {
   } catch (cause) {
     error.value = causeMessage(cause)
   }
-}
-
-function openInWorkbench() {
-  openSession(props.session.id)
-  switchSection('workbench')
 }
 
 async function softDelete() {
@@ -2509,15 +2502,11 @@ onUnmounted(() => {
           <span v-else class="i-carbon-text-short-paragraph mr-1 h-3 w-3" />
           {{ currentSummary ? t('archive.refreshSummary') : t('archive.generateSummary') }}
         </button>
-        <button
-          type="button"
-          class="shrink-0 rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground transition-shadow hover:shadow-paper disabled:cursor-not-allowed disabled:opacity-45"
+        <WorkbenchTargetButton
+          :session-id="props.session.id"
           :disabled="actions?.resume.available !== true"
-          :title="actions?.resume.available === true ? t('session.openInWorkbench') : resumeUnavailableReason"
-          @click="openInWorkbench"
-        >
-          {{ t('session.openInWorkbench') }}
-        </button>
+          :title="actions?.resume.available === true ? '' : resumeUnavailableReason"
+        />
       </SessionReadonlyBar>
     </template>
 
