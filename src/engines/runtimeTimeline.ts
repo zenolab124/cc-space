@@ -178,6 +178,26 @@ export function syncRuntimeVisualActivity(
   return authoritative ? snapshotTurnId : snapshotTurnId ?? activeTurnId
 }
 
+export type RuntimeVisualReconciliationDecision = 'none' | 'wait' | 'recover'
+
+/**
+ * 普通终态快照不能立即越过仍在排空的流式事件；但事件若永久缺失，视觉 turn
+ * 也不能无限挂住。调用方在短宽限期后据此决定是否做一次权威快照对账。
+ */
+export function runtimeVisualReconciliationDecision(
+  activeTurnId: string | null,
+  snapshot: RuntimeSnapshot | null,
+  hasPendingTurnDelta: boolean,
+): RuntimeVisualReconciliationDecision {
+  if (!activeTurnId || !snapshot) return 'none'
+  const terminal = snapshot.phase === 'idle'
+    || snapshot.phase === 'failed'
+    || snapshot.phase === 'exited'
+    || snapshot.phase === 'detached'
+  if (!terminal) return 'none'
+  return hasPendingTurnDelta ? 'wait' : 'recover'
+}
+
 /**
  * 标准运行时事件的唯一时间线 reducer。所有事件分支都在这里穷举，避免新增协议事件
  * 被某个会话界面静默忽略。

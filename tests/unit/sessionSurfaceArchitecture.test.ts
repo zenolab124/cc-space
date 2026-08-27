@@ -188,6 +188,8 @@ describe('unified session surface architecture', () => {
     expect(engineClient).toContain('sendInputWhileRunning')
     expect(standardController).toContain('queuedInputs.value.push(queuedItem)')
     expect(standardController).toContain("event.payload.phase === 'idle' && visualActiveTurnId.value === null")
+    expect(standardController).toContain('runtimeVisualReconciliationDecision(')
+    expect(standardController).toContain('await recoverRuntimeSnapshot()')
     expect(standardController).toContain('startTurnWithFastFallback(reference.value, item.input, item.config)')
     expect(standardController).toContain('startTurnWithInput(session, inputItems, turnOptions(config))')
     expect(standardController).toContain('actions.value?.sendWhileRunning.available === true')

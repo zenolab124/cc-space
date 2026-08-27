@@ -7,6 +7,7 @@ import {
   reconcileLiveRecords,
   reduceRuntimeTimeline,
   reduceRuntimeVisualActivity,
+  runtimeVisualReconciliationDecision,
   syncRuntimeVisualActivity,
 } from '../../src/engines/runtimeTimeline'
 import type {
@@ -221,6 +222,18 @@ describe('runtime visual activity', () => {
       runtimeSnapshot({ phase: 'idle' }),
       true,
     )).toBeNull()
+  })
+
+  it('recovers a stale visual turn only after terminal snapshots finish draining', () => {
+    const idle = runtimeSnapshot({ phase: 'idle', activeTurnId: null })
+    expect(runtimeVisualReconciliationDecision('turn-1', idle, true)).toBe('wait')
+    expect(runtimeVisualReconciliationDecision('turn-1', idle, false)).toBe('recover')
+    expect(runtimeVisualReconciliationDecision(null, idle, false)).toBe('none')
+    expect(runtimeVisualReconciliationDecision(
+      'turn-1',
+      runtimeSnapshot({ phase: 'running', activeTurnId: 'turn-1' }),
+      false,
+    )).toBe('none')
   })
 })
 

@@ -37,6 +37,16 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
     menuOpen.value = false
   }
 
+  function clearSelection() {
+    const selection = window.getSelection()
+    const surface = root.value
+    if (selection?.rangeCount && surface) selection.collapse(surface, 0)
+    if (selection?.rangeCount) selection.removeAllRanges()
+    savedRange = null
+    requestedMode = null
+    hideToolbar()
+  }
+
   function updateSelection() {
     if (selectionFrame) window.cancelAnimationFrame(selectionFrame)
     selectionFrame = window.requestAnimationFrame(() => {
@@ -44,7 +54,11 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
       const surface = root.value
       if (!surface) return hideToolbar()
       const range = selectionRangeWithin(surface)
-      if (!range || !range.toString().trim()) return hideToolbar()
+      if (!range || !range.toString().trim()) {
+        savedRange = null
+        requestedMode = null
+        return hideToolbar()
+      }
       savedRange = range
       const rect = range.getBoundingClientRect()
       const width = 144
@@ -70,12 +84,16 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
   function onCopy(event: ClipboardEvent) {
     const surface = root.value
     if (!surface) return
-    const range = requestedMode ? savedRange : selectionRangeWithin(surface)
+    const explicitMode = requestedMode
+    const range = explicitMode ? savedRange : selectionRangeWithin(surface)
     if (!range || !surface.contains(range.commonAncestorContainer)) return
-    const mode = requestedMode ?? 'rich'
+    const mode = explicitMode ?? 'rich'
     requestedMode = null
     try {
-      if (writePayload(event, mode, range)) hideToolbar()
+      if (writePayload(event, mode, range)) {
+        if (explicitMode) clearSelection()
+        else hideToolbar()
+      }
     } catch (cause) {
       requestedMode = null
       notifyTransient(i18n.global.t('copy.actionFailed'), String(cause))
@@ -84,10 +102,11 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
 
   async function copy(mode: SemanticCopyMode) {
     if (!savedRange) return
+    const range = savedRange.cloneRange()
     const selection = window.getSelection()
     if (!selection) return
     selection.removeAllRanges()
-    selection.addRange(savedRange)
+    selection.addRange(range)
     requestedMode = mode
     let copied = false
     try {
@@ -95,10 +114,11 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
     } catch {
       copied = false
     }
+    if (copied) clearSelection()
     if (!copied) {
       requestedMode = null
       try {
-        const payload = buildSemanticClipboardPayload(savedRange.cloneContents(), mode)
+        const payload = buildSemanticClipboardPayload(range.cloneContents(), mode)
         if (mode === 'markdown') {
           await navigator.clipboard.writeText(payload.markdown ?? payload.plain)
         } else {
@@ -115,7 +135,7 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
             await navigator.clipboard.write([new ClipboardItem(values)])
           }
         }
-        hideToolbar()
+        clearSelection()
       } catch (cause) {
         notifyTransient(i18n.global.t('copy.actionFailed'), String(cause))
       }
@@ -127,9 +147,22 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
     menuOpen.value = !menuOpen.value
   }
 
+  function onPointerDown(event: PointerEvent) {
+    if (event.button !== 0 || !savedRange) return
+    const target = event.target
+    if (target instanceof Element && target.closest('[data-copy-exclude]')) return
+    clearSelection()
+  }
+
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && savedRange) clearSelection()
+  }
+
   onMounted(() => {
     document.addEventListener('selectionchange', updateSelection)
     document.addEventListener('copy', onCopy, true)
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('resize', updateSelection)
     window.addEventListener('scroll', updateSelection, true)
   })
@@ -138,6 +171,8 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
     if (selectionFrame) window.cancelAnimationFrame(selectionFrame)
     document.removeEventListener('selectionchange', updateSelection)
     document.removeEventListener('copy', onCopy, true)
+    document.removeEventListener('pointerdown', onPointerDown, true)
+    document.removeEventListener('keydown', onKeyDown, true)
     window.removeEventListener('resize', updateSelection)
     window.removeEventListener('scroll', updateSelection, true)
   })

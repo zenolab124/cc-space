@@ -11,7 +11,7 @@ import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
-import { bindOptimisticUserTurn, composeRuntimeTimeline, createOptimisticUserRecord, hasLiveTurn, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
+import { bindOptimisticUserTurn, composeRuntimeTimeline, createOptimisticUserRecord, hasLiveTurn, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, runtimeVisualReconciliationDecision, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
 import { bindLatestRuntimeOptimisticInput, reconcileRuntimeOptimisticInputs, useRuntimeOptimisticInputs } from '@/engines/runtimeOptimisticInput'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
@@ -169,6 +169,8 @@ const completedTurnIds = new Set<string>()
 const metadataGeneratedTurnIds = new Set<string>()
 const settlementTimers = new Map<string, number>()
 const TURN_SETTLEMENT_DELAYS = [0, 100, 250, 600, 1_200, 2_000] as const
+const RUNTIME_VISUAL_RECONCILE_DELAY_MS = 750
+let runtimeVisualReconcileTimer: number | null = null
 let queuedInputSequence = 0
 let pendingDraftReplacement: DraftChannelReplacement | null = null
 
@@ -1064,6 +1066,41 @@ function cancelTurnSettlements() {
   metadataGeneratedTurnIds.clear()
 }
 
+function cancelRuntimeVisualReconciliation() {
+  if (runtimeVisualReconcileTimer !== null) window.clearTimeout(runtimeVisualReconcileTimer)
+  runtimeVisualReconcileTimer = null
+}
+
+function scheduleRuntimeVisualReconciliation() {
+  const turnId = visualActiveTurnId.value
+  const decision = runtimeVisualReconciliationDecision(
+    turnId,
+    snapshot.value,
+    !!turnId && runtimeDeltaShaper.pendingTurnIds.value.has(turnId),
+  )
+  if (decision === 'none') {
+    cancelRuntimeVisualReconciliation()
+    return
+  }
+  if (runtimeVisualReconcileTimer !== null) return
+  const generation = sessionGeneration
+  runtimeVisualReconcileTimer = window.setTimeout(async () => {
+    runtimeVisualReconcileTimer = null
+    if (generation !== sessionGeneration) return
+    const currentTurnId = visualActiveTurnId.value
+    const currentDecision = runtimeVisualReconciliationDecision(
+      currentTurnId,
+      snapshot.value,
+      !!currentTurnId && runtimeDeltaShaper.pendingTurnIds.value.has(currentTurnId),
+    )
+    if (currentDecision === 'wait') {
+      scheduleRuntimeVisualReconciliation()
+    } else if (currentDecision === 'recover') {
+      await recoverRuntimeSnapshot()
+    }
+  }, RUNTIME_VISUAL_RECONCILE_DELAY_MS)
+}
+
 function generateMetadataForSettledTurn(turnId: string) {
   if (!interactive.value || !reference.value || metadataGeneratedTurnIds.has(turnId)) return
   metadataGeneratedTurnIds.add(turnId)
@@ -1365,7 +1402,8 @@ async function recoverRuntimeSnapshot() {
         recovered,
         true,
       )
-      runtimeId.value = recovered.runtimeId
+      scheduleRuntimeVisualReconciliation()
+      runtimeId.value = recovered.phase === 'detached' ? null : recovered.runtimeId
       if (recovered.phase === 'idle') void consumeQueuedInput()
     }
   } catch (_) {
@@ -1962,6 +2000,7 @@ function applyRuntimeEvent(envelope: RuntimeEventEnvelope) {
     visualActiveTurnId.value,
     envelope.event,
   )
+  scheduleRuntimeVisualReconciliation()
   const effect = reduceRuntimeTimeline(liveRecords.value, envelope, {
     ...(selectedModel.value ? { model: selectedModel.value } : {}),
     ...(selectedEffort.value ? { effort: selectedEffort.value } : {}),
@@ -1992,6 +2031,7 @@ function onInputKeydown(event: KeyboardEvent) {
 
 watch(() => props.session.id, async () => {
   sessionGeneration++
+  cancelRuntimeVisualReconciliation()
   const generation = sessionGeneration
   const sessionId = props.session.id
   if (pendingDraftReplacement && pendingDraftReplacement.sessionId !== sessionId) {
@@ -2115,6 +2155,7 @@ onMounted(async () => {
         visualActiveTurnId.value,
         event.payload,
       )
+      scheduleRuntimeVisualReconciliation()
       if (!event.payload.sequenceConsistent) void recoverRuntimeSnapshot()
       if (event.payload.phase === 'idle' && visualActiveTurnId.value === null) {
         void consumeQueuedInput()
@@ -2137,6 +2178,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   sessionGeneration++
+  cancelRuntimeVisualReconciliation()
   resetSessionBanner()
   cancelTurnSettlements()
   invalidateTimelineScrollRequests()

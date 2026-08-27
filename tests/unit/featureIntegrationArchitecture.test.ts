@@ -26,6 +26,7 @@ describe('feature integration boundaries', () => {
 
   it('keeps semantic copy modes distinct and sanitizes enhanced HTML', () => {
     const clipboard = source('../../src/utils/semanticClipboard.ts')
+    const semanticCopy = source('../../src/composables/useSemanticCopy.ts')
 
     expect(clipboard).toContain("export type SemanticCopyMode = 'plain' | 'markdown' | 'rich' | 'full'")
     expect(clipboard).toContain("if (mode === 'rich') return { plain, html: sanitizedHtml(container, false) }")
@@ -34,6 +35,14 @@ describe('feature integration boundaries', () => {
     expect(clipboard).toContain("javascript:|@import|-moz-binding")
     expect(clipboard).toContain("annotation[encoding=\"application/x-tex\"]")
     expect(clipboard).toContain("/^(?:data|blob|ccimg):/i")
+    expect(semanticCopy).toContain('function clearSelection()')
+    expect(semanticCopy).toContain('if (copied) clearSelection()')
+    expect(semanticCopy).toContain("target.closest('[data-copy-exclude]')")
+    expect(semanticCopy).toContain("event.key === 'Escape'")
+    expect(semanticCopy).toContain("document.addEventListener('pointerdown', onPointerDown, true)")
+    expect(semanticCopy).toContain("document.removeEventListener('pointerdown', onPointerDown, true)")
+    expect(semanticCopy).toContain("document.addEventListener('keydown', onKeyDown, true)")
+    expect(semanticCopy).toContain("document.removeEventListener('keydown', onKeyDown, true)")
   })
 
   it('allows MCP theme previews but reserves persistence for confirmed UI actions', () => {
