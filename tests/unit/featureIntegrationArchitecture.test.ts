@@ -29,7 +29,8 @@ describe('feature integration boundaries', () => {
 
     expect(clipboard).toContain("export type SemanticCopyMode = 'plain' | 'markdown' | 'rich' | 'full'")
     expect(clipboard).toContain("if (mode === 'rich') return { plain, html: sanitizedHtml(container, false) }")
-    expect(clipboard).toContain('return { plain, markdown, html: sanitizedHtml(container, true) }')
+    expect(clipboard).toContain('const html = sanitizedHtml(container, true)')
+    expect(clipboard).toContain('return { plain: html, markdown, html }')
     expect(clipboard).toContain("javascript:|@import|-moz-binding")
     expect(clipboard).toContain("annotation[encoding=\"application/x-tex\"]")
     expect(clipboard).toContain("/^(?:data|blob|ccimg):/i")

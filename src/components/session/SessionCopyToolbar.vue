@@ -51,6 +51,7 @@ const copyModes: SemanticCopyMode[] = ['plain', 'markdown', 'rich', 'full']
           :key="mode"
           type="button"
           class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-muted"
+          :title="mode === 'full' ? $t('copy.fullDescription') : undefined"
           @click="emit('copy', mode)"
         >
           <span :class="mode === 'rich' ? 'i-carbon-checkmark' : ''" class="h-3 w-3 shrink-0" />

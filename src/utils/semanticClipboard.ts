@@ -387,5 +387,8 @@ export function buildSemanticClipboardPayload(
   const markdown = normalizeOutput(markdownChildren(container))
   if (mode === 'markdown') return { plain: markdown, markdown }
   if (mode === 'rich') return { plain, html: sanitizedHtml(container, false) }
-  return { plain, markdown, html: sanitizedHtml(container, true) }
+  const html = sanitizedHtml(container, true)
+  // 全量复制的纯文本备用格式也必须是 HTML 源码：富文本目标消费 text/html，
+  // 聊天框/代码编辑器等纯文本目标则能拿到完整标签与内联样式。
+  return { plain: html, markdown, html }
 }
