@@ -323,6 +323,8 @@
     "openInWorkbench": "在工作台打开",
     "addToWorkbench": "加入工作台",
     "openWorkbench": "打开工作台",
+    "addToCurrentWorkbench": "加入当前工作台",
+    "jumpToOpenSession": "跳转到已打开会话",
     "streaming": "流式输出",
     "waitingTool": "等待工具",
     "waitingPermission": "等待权限",

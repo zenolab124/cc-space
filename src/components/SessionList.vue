@@ -357,7 +357,7 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               <div class="min-w-0 flex-1 truncate text-sm text-foreground">
                 {{ displayTitle(session, getMeta(session.id)?.title) }}
               </div>
-              <WorkbenchTargetButton :session-id="session.id" variant="secondary" />
+              <WorkbenchTargetButton :session-id="session.id" variant="secondary" compact />
             </div>
             <div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
               <span

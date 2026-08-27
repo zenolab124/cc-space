@@ -14,7 +14,12 @@ describe('feature integration boundaries', () => {
     expect(button).toContain('defaultOrdinaryTab')
     expect(button).toContain('ordinaryTabs.value.map')
     expect(button).toContain('openTarget(tab.id)')
-    expect(button).toContain('v-if="!existing && ordinaryTabs.length"')
+    expect(button).toContain('v-if="!compact && !existing && ordinaryTabs.length"')
+    expect(button).toContain("existing ? 'i-carbon-launch' : 'i-carbon-add-alt'")
+    expect(source('../../src/components/SessionList.vue')).toContain('variant="secondary" compact')
+    expect(source('../../src/components/SessionDetail.vue')).toContain(
+      '<WorkbenchTargetButton v-if="effectiveSessionId" :session-id="effectiveSessionId" />',
+    )
     expect(workbench).toContain('lastOrdinaryTabId')
     expect(workbench).toContain('tab.id === targetTabId && !tab.race')
   })

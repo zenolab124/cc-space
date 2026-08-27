@@ -323,6 +323,8 @@
     "openInWorkbench": "Open in Workbench",
     "addToWorkbench": "Add to Workbench",
     "openWorkbench": "Open Workbench",
+    "addToCurrentWorkbench": "Add to Current Workbench",
+    "jumpToOpenSession": "Jump to Open Session",
     "streaming": "Streaming",
     "waitingTool": "Waiting for tool",
     "waitingPermission": "Waiting for permission",
