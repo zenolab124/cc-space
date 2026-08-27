@@ -3,7 +3,12 @@ import { computed, inject, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolResultData } from '@/utils/toolPair'
 import type { ContentBlock } from '@/types'
-import { summarizeToolProcess, type ToolProcessSummaryItem, type ToolUseBlock } from '@/utils/toolDisplay'
+import {
+  summarizeToolProcess,
+  toolDisplayTitle,
+  type ToolProcessSummaryItem,
+  type ToolUseBlock,
+} from '@/utils/toolDisplay'
 import {
   TOOL_EXECUTION_CONTEXT,
   TOOL_FOLD_INTERACTION,
@@ -19,6 +24,9 @@ const props = defineProps<{
   blockRecordUuids?: Array<string | null | undefined>
   tools: ToolUseBlock[]
   streaming?: boolean
+  /** 回合级执行轨道只让最新调用占据摘要行。 */
+  latestOnly?: boolean
+  showImages?: boolean
 }>()
 
 const { t } = useI18n()
@@ -41,7 +49,9 @@ function stateOf(tool: ToolUseBlock): ToolVisualState {
 }
 
 const states = computed(() => props.tools.map(stateOf))
+const latestTool = computed(() => props.tools[props.tools.length - 1] ?? null)
 const groupState = computed<ToolVisualState>(() => {
+  if (props.latestOnly && states.value.length > 0) return states.value[states.value.length - 1]
   const priority: ToolVisualState[] = ['permission', 'error', 'interrupted', 'running', 'background', 'unknown', 'done']
   return priority.find(state => states.value.includes(state)) ?? 'unknown'
 })
@@ -67,25 +77,38 @@ function summaryLabel(item: ToolProcessSummaryItem): string {
 }
 
 const summaryTitle = computed(() => [
-  processSummary.value.map(summaryLabel).join(' · '),
+  props.latestOnly && latestTool.value
+    ? toolDisplayTitle(latestTool.value)
+    : processSummary.value.map(summaryLabel).join(' · '),
   t('block.foldShiftHint'),
 ].filter(Boolean).join('\n'))
 const stateLabel = computed(() => {
+  if (props.latestOnly) {
+    if (groupState.value === 'permission') return t('block.toolFold.permission')
+    if (groupState.value === 'error') return t('block.toolFold.failed')
+    if (groupState.value === 'interrupted') return t('block.toolFold.interrupted')
+    if (groupState.value === 'running') return t('block.toolFold.running')
+    if (groupState.value === 'background') return t('block.toolFold.background')
+    return ''
+  }
   if (groupState.value === 'permission' && failedCount.value) {
     return t('block.toolFold.failedAndPermission', { count: failedCount.value })
   }
   if (groupState.value === 'permission') return t('block.toolFold.permission')
   if (groupState.value === 'error') return t('block.toolFold.failedCount', { count: failedCount.value })
   if (groupState.value === 'interrupted') return t('block.toolFold.interrupted')
-  if (groupState.value === 'running') return t('block.toolFold.runningProgress', {
-    current: Math.max(1, states.value.findIndex(state => state === 'running') + 1),
-    total: props.tools.length,
-  })
+  if (groupState.value === 'running') {
+    return t('block.toolFold.runningProgress', {
+      current: Math.max(1, states.value.findIndex(state => state === 'running') + 1),
+      total: props.tools.length,
+    })
+  }
   if (groupState.value === 'background') return t('block.toolFold.background')
   return ''
 })
 
 const groupKey = computed(() => props.tools[0]?.id ?? '')
+const contentId = computed(() => `tool-process-${groupKey.value.replace(/[^a-zA-Z0-9_-]/g, '-')}`)
 const containsRequested = computed(() => props.tools.some(tool => tool.id === foldState.requestedToolId.value))
 const autoExpanded = computed(() =>
   containsRequested.value || groupState.value === 'permission',
@@ -94,7 +117,7 @@ const expanded = computed(() => {
   if (containsRequested.value) return true
   if (foldState.collapsedGroups.has(groupKey.value)) return false
   return foldState.expandedGroups.has(groupKey.value)
-    || foldState.groupDefaultExpanded.value
+    || (!props.latestOnly && foldState.groupDefaultExpanded.value)
     || autoExpanded.value
 })
 
@@ -119,10 +142,15 @@ function toggle(event: MouseEvent) {
       :expanded="expanded"
       :state="groupState"
       :title="summaryTitle"
+      :content-id="contentId"
       @toggle="toggle"
     >
     <template #summary>
-      <span class="tool-process-summary">
+      <span v-if="latestOnly && latestTool" class="tool-process-summary is-latest">
+        <span class="i-carbon-tool-kit tool-process-icon" aria-hidden="true" />
+        <span>{{ toolDisplayTitle(latestTool) }}</span>
+      </span>
+      <span v-else class="tool-process-summary">
         <template v-for="(item, index) in visibleSummary" :key="`${item.kind}:${item.name}`">
           <span v-if="index" class="tool-process-separator" aria-hidden="true">·</span>
           <span>{{ summaryLabel(item) }}</span>
@@ -145,6 +173,7 @@ function toggle(event: MouseEvent) {
         :blocks="blocks"
         :block-record-uuids="blockRecordUuids"
         :streaming="streaming"
+        :show-images="showImages"
         nested
       />
     </slot>
@@ -167,6 +196,9 @@ function toggle(event: MouseEvent) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tool-process-summary.is-latest { align-items: center; font-size: 11px; }
+.tool-process-summary.is-latest > span:last-child { min-width: 0; }
+.tool-process-icon { width: 12px; height: 12px; flex: none; opacity: 0.68; }
 .tool-process-separator,
 .tool-process-more {
   flex: none;

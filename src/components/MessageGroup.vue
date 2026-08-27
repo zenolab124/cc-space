@@ -4,11 +4,11 @@ import { useI18n } from 'vue-i18n'
 import type { SessionRecord, ContentBlock } from '@/types'
 import type { ChannelMark } from '@/composables/useSessionSettings'
 import { useToolDisplayMode, type ToolDisplayMode } from '@/composables/useToolDisplay'
-import { joinsToolRun, segmentToolBlocks, type ToolUseBlock } from '@/utils/toolDisplay'
+import { segmentToolBlocks, type ToolUseBlock } from '@/utils/toolDisplay'
 import type { AssistantResponseMeta } from '@/utils/assistantResponse'
 import type { ConversationTurnView } from '@/engines/presentation'
 import ContentBlockList from './ContentBlockList.vue'
-import ToolProcessGroup from './ToolProcessGroup.vue'
+import ToolProcessTrack from './ToolProcessTrack.vue'
 import SystemEventRow from './SystemEventRow.vue'
 import UserMsgContent from './UserMsgContent.vue'
 import DividerMark from './DividerMark.vue'
@@ -46,6 +46,7 @@ const props = defineProps<{
 
 const { t: _t } = useI18n() // 保持导入以便模板 $t 可用
 const { toolDisplayModeFor } = useToolDisplayMode()
+const turnDisplayMode = computed(() => toolDisplayModeFor('claude-code'))
 const hasAssistantResponses = computed(() => props.group.responses.some(record => record.type === 'assistant'))
 const normalUserVisible = computed(() => {
   const user = props.group.user
@@ -90,73 +91,32 @@ interface ResponsePart {
 interface ResponseEntry {
   key: string
   parts: ResponsePart[]
-  blocks: ContentBlock[]
-  grouped: boolean
-  displayMode: ToolDisplayMode
-}
-
-function hasChannelMark(record: VisibleRecord): boolean {
-  return !!record.uuid && (props.channelMarksByUuid.get(record.uuid)?.length ?? 0) > 0
-}
-
-function isPureToolProcess(blocks: ContentBlock[]): boolean {
-  return blocks.length > 0 && segmentToolBlocks(blocks).every(segment => segment.kind === 'tools')
 }
 
 function toolsOf(blocks: ContentBlock[]): ToolUseBlock[] {
   return segmentToolBlocks(blocks).flatMap(segment => segment.kind === 'tools' ? segment.tools : [])
 }
 
-const responseEntries = computed<ResponseEntry[]>(() => {
-  const entries: ResponseEntry[] = []
-  let pending: ResponseEntry | null = null
+function withoutToolProcess(blocks: ContentBlock[]): ContentBlock[] {
+  return segmentToolBlocks(blocks).flatMap(segment => segment.kind === 'block' ? [segment.block] : [])
+}
 
-  function flush() {
-    if (pending) entries.push(pending)
-    pending = null
+const turnToolBlocks = computed(() => props.group.responses.flatMap(record =>
+  record.type === 'assistant'
+    ? segmentToolBlocks(props.contentBlocks(record)).flatMap(segment =>
+        segment.kind === 'tools' ? segment.blocks : [])
+    : []))
+const turnTools = computed(() => toolsOf(turnToolBlocks.value))
+
+const responseEntries = computed<ResponseEntry[]>(() => props.group.responses.map((record, index) => {
+  const sourceBlocks = record.type === 'assistant' ? props.contentBlocks(record) : []
+  const displayMode = toolDisplayModeFor('claude-code')
+  const blocks = displayMode === 'grouped' ? withoutToolProcess(sourceBlocks) : sourceBlocks
+  return {
+    key: record.uuid ?? `${record.type}:${index}`,
+    parts: [{ record, index, blocks, displayMode }],
   }
-
-  props.group.responses.forEach((record, index) => {
-    const blocks = record.type === 'assistant' ? props.contentBlocks(record) : []
-    const displayMode = toolDisplayModeFor('claude-code')
-    if (record.type !== 'assistant') {
-      flush()
-      entries.push({
-        key: record.uuid ?? `system:${index}`,
-        parts: [{ record, index, blocks, displayMode }],
-        blocks,
-        grouped: false,
-        displayMode,
-      })
-      return
-    }
-
-    const canJoin = displayMode === 'grouped'
-      && pending?.displayMode === displayMode
-      && pending?.parts.every(part => part.record.type === 'assistant')
-      && isPureToolProcess(pending.blocks)
-      && isPureToolProcess(blocks)
-      && !hasChannelMark(pending.parts[pending.parts.length - 1].record)
-      && joinsToolRun(pending.blocks, blocks)
-
-    if (canJoin && pending) {
-      pending.parts.push({ record, index, blocks, displayMode })
-      pending.blocks.push(...blocks)
-      pending.grouped = true
-    } else {
-      flush()
-      pending = {
-        key: record.uuid ?? `assistant:${index}`,
-        parts: [{ record, index, blocks, displayMode }],
-        blocks: [...blocks],
-        grouped: false,
-        displayMode,
-      }
-    }
-  })
-  flush()
-  return entries
-})
+}))
 </script>
 
 <template>
@@ -194,19 +154,16 @@ const responseEntries = computed<ResponseEntry[]>(() => {
     </template>
 
     <template #response>
+      <ToolProcessTrack
+        v-if="turnDisplayMode === 'grouped' && turnTools.length"
+        :blocks="turnToolBlocks"
+        :tools="turnTools"
+      />
       <template v-for="entry in responseEntries" :key="entry.key">
-        <div
-          v-if="entry.grouped"
-          v-memo="[entry]"
-          class="assistant-response-entry"
-          :class="{ 'response-cv': granularVisibility }"
-        >
-          <ToolProcessGroup :blocks="entry.blocks" :tools="toolsOf(entry.blocks)" />
-        </div>
-        <template v-else v-for="part in entry.parts" :key="part.record.uuid || part.index">
+        <template v-for="part in entry.parts" :key="part.record.uuid || part.index">
           <SystemEventRow v-if="part.record.type === 'system'" :record="part.record" />
           <div
-            v-else
+            v-else-if="part.blocks.length"
             v-memo="[part.record]"
             class="assistant-response-entry"
             :class="{ 'response-cv': granularVisibility }"

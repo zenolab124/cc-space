@@ -22,10 +22,12 @@ import {
 } from '@/composables/useToolDisplay'
 import ConversationTurn from '@/components/session/ConversationTurn.vue'
 import ContentBlockList from '@/components/ContentBlockList.vue'
+import ToolProcessTrack from '@/components/ToolProcessTrack.vue'
 import SessionContentState from '@/components/session/SessionContentState.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
 import ArtifactPreviewList from '@/components/artifacts/ArtifactPreviewList.vue'
 import { detectEngineSegmentArtifacts } from '@/features/artifact-preview/detectArtifacts'
+import { isToolUseBlock } from '@/utils/toolDisplay'
 
 const props = defineProps<{
   records: ConversationRecord[]
@@ -88,6 +90,8 @@ const artifactCandidates = computed(() => props.streaming
 const responseProcessEntries = computed(() => responseRecords.value.flatMap(record => record.segments
   .map((segment, index) => ({ key: `${record.id}:${index}`, segment }))
   .filter(entry => isEngineProcessSegment(entry.segment))))
+const turnProcessProjection = computed(() => projectEngineProcessEntries(responseProcessEntries.value))
+const turnProcessTools = computed(() => turnProcessProjection.value.blocks.filter(isToolUseBlock))
 const toolDisplayMode = computed(() => toolDisplayModeFor(props.engineId))
 type ResponseBlockView =
   | Extract<EngineResponseBlock, { kind: 'content' }>
@@ -198,14 +202,24 @@ const turnView = computed<ConversationTurnView>(() => ({
       </div>
     </template>
     <template #response>
+      <ToolProcessTrack
+        v-if="toolDisplayMode === 'grouped' && turnProcessTools.length"
+        :blocks="turnProcessProjection.blocks"
+        :tools="turnProcessTools"
+        :streaming="streaming"
+      />
       <template v-for="block in responseBlocks" :key="block.key">
         <ContentBlockList
-          v-if="block.kind === 'process'"
+          v-if="block.kind === 'process' && toolDisplayMode !== 'grouped'"
           :blocks="block.projection.blocks"
           :streaming="streaming"
           :display-mode="block.displayMode"
         />
-        <EngineSegmentBlock v-else :segment="block.entry.segment" :streaming="streaming" />
+        <EngineSegmentBlock
+          v-else-if="block.kind === 'content'"
+          :segment="block.entry.segment"
+          :streaming="streaming"
+        />
       </template>
       <ArtifactPreviewList
         v-if="artifactRoot"

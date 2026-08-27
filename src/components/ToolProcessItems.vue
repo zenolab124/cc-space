@@ -10,8 +10,10 @@ const props = withDefaults(defineProps<{
   streaming?: boolean
   /** 分组展开时由外层统一折叠,工具项只展示内容。 */
   nested?: boolean
+  showImages?: boolean
 }>(), {
   nested: false,
+  showImages: true,
 })
 
 function toolOf(block: ContentBlock): ToolUseBlock | null {
@@ -27,6 +29,7 @@ function toolOf(block: ContentBlock): ToolUseBlock | null {
         :tool="toolOf(block)!"
         :streaming="streaming"
         :foldable="!props.nested"
+        :show-images="showImages"
       />
       <MessageBlock
         v-else

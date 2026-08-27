@@ -21,8 +21,11 @@ const props = withDefaults(defineProps<{
   streaming?: boolean
   /** 分组模式由外层统一折叠,单独模式才显示工具项折叠按钮。 */
   foldable?: boolean
+  /** 图片可由回合级右侧堆叠统一承载，避免在历史详情中重复出现。 */
+  showImages?: boolean
 }>(), {
   foldable: true,
+  showImages: true,
 })
 
 const { t } = useI18n()
@@ -173,7 +176,7 @@ watch(() => foldState.requestedToolId.value, requested => {
       </span>
     </div>
     <ToolResultImages
-      v-if="imageCount > 0"
+      v-if="showImages && imageCount > 0"
       :images="resultImages"
       :attachments="imageAttachments"
       :record-uuid="result?.recordUuid"
