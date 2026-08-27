@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, type ComputedRef } from 'vue'
+import { computed, inject, ref, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ContentBlock } from '@/types'
 import type { ToolResultAttachment } from '@/engines/types'
@@ -14,6 +14,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const expanded = ref(false)
 const context = inject(TOOL_EXECUTION_CONTEXT, null)
 const legacyResults = inject<ComputedRef<Map<string, ToolResultData>>>('toolResultMap')
 
@@ -63,10 +64,15 @@ const entries = computed<ImageEntry[]>(() => props.tools.flatMap(tool => {
 }))
 
 function stackStyle(index: number): Record<string, string> {
-  const depth = Math.min(entries.value.length - index - 1, 4)
+  const fullDepth = entries.value.length - index - 1
+  const depth = Math.min(fullDepth, 4)
+  const tilt = `${depth % 2 === 0 ? depth * -0.45 : depth * 0.45}deg`
   return {
     '--stack-depth': String(depth),
-    '--stack-tilt': `${depth % 2 === 0 ? depth * -0.45 : depth * 0.45}deg`,
+    '--stack-tilt': tilt,
+    'transform': expanded.value
+      ? `rotate(${tilt})`
+      : `translate(${-depth * 4}px, ${depth * 4}px) rotate(${tilt})`,
     'z-index': String(index + 1),
   }
 }
@@ -76,8 +82,10 @@ function stackStyle(index: number): Record<string, string> {
   <div
     v-if="entries.length"
     class="tool-image-stack"
+    :class="{ 'is-expanded': expanded }"
     role="group"
     :aria-label="t('block.toolFold.imageCount', { count: entries.length })"
+    @keydown.esc.stop="expanded = false"
   >
     <div
       v-for="(entry, index) in entries"
@@ -97,46 +105,90 @@ function stackStyle(index: number): Record<string, string> {
         compact
       />
     </div>
-    <span v-if="entries.length > 1" class="tool-image-stack-count">
+    <button
+      v-if="!expanded"
+      type="button"
+      class="tool-image-stack-open"
+      :aria-expanded="false"
+      :aria-label="`${t('common.expand')} · ${t('block.toolFold.imageCount', { count: entries.length })}`"
+      @click="expanded = true"
+    >
+      <span class="tool-image-stack-count-badge">{{ entries.length }}</span>
+    </button>
+    <button
+      v-else
+      type="button"
+      class="tool-image-stack-count"
+      :aria-expanded="true"
+      :aria-label="t('common.collapse')"
+      @click="expanded = false"
+    >
+      <span class="i-carbon-chevron-right h-2.5 w-2.5 rotate-180" aria-hidden="true" />
       {{ entries.length }}
-    </span>
+    </button>
   </div>
 </template>
 
 <style scoped>
 .tool-image-stack {
-  position: relative;
+  position: absolute;
+  top: -70px;
+  right: 6px;
+  bottom: auto;
+  z-index: 12;
   width: 150px;
   height: 98px;
-  flex: none;
-  margin: 4px 5px 8px 14px;
   isolation: isolate;
+}
+.tool-image-stack.is-expanded {
+  left: 6px;
+  z-index: 80;
+  display: flex;
+  width: auto;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 7px;
 }
 .tool-image-stack-card {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 6px;
-  background: var(--card);
-  box-shadow: var(--shadow-paper);
+  border: 1px solid color-mix(in srgb, var(--border) 86%, var(--foreground) 14%);
+  border-radius: 4px;
+  padding: 3px;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--card) 96%, white 4%),
+    var(--card)
+  );
+  box-shadow:
+    0 1px 1px color-mix(in srgb, var(--foreground) 12%, transparent),
+    0 4px 10px color-mix(in srgb, var(--foreground) 13%, transparent),
+    var(--shadow-paper);
   transform: translate(
     calc(var(--stack-depth) * -4px),
     calc(var(--stack-depth) * 4px)
   ) rotate(var(--stack-tilt));
   transform-origin: 70% 50%;
-  transition: transform 160ms ease, box-shadow 160ms ease;
+  transition: transform 190ms cubic-bezier(0.2, 0.78, 0.2, 1), box-shadow 160ms ease;
 }
-.tool-image-stack:hover .tool-image-stack-card,
-.tool-image-stack:focus-within .tool-image-stack-card {
-  transform: translate(
-    calc(var(--stack-depth) * -7px),
-    calc(var(--stack-depth) * 7px)
-  ) rotate(var(--stack-tilt));
+.tool-image-stack.is-expanded .tool-image-stack-card {
+  position: relative;
+  inset: auto;
+  width: auto;
+  min-width: 42px;
+  max-width: 150px;
+  flex: 1 1 150px;
+  overflow: visible;
+  box-shadow:
+    0 1px 1px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 7px 18px color-mix(in srgb, var(--foreground) 18%, transparent),
+    var(--shadow-paper);
 }
 .tool-image-stack-card:focus-within {
   box-shadow: 0 0 0 2px var(--ring), var(--shadow-paper);
 }
+.tool-image-stack:not(.is-expanded) .tool-image-stack-card { pointer-events: none; }
 .tool-image-stack-card :deep(> div),
 .tool-image-stack-card :deep(.engine-asset-image),
 .tool-image-stack-card :deep(.engine-asset-image-open) {
@@ -152,7 +204,7 @@ function stackStyle(index: number): Record<string, string> {
   height: 100%;
   max-height: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: 2px;
   object-fit: contain;
   background: var(--muted);
 }
@@ -169,6 +221,39 @@ function stackStyle(index: number): Record<string, string> {
   color: var(--muted-foreground);
   text-overflow: ellipsis;
 }
+.tool-image-stack-open {
+  position: absolute;
+  inset: -5px;
+  z-index: 10001;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: zoom-in;
+}
+.tool-image-stack-open:focus-visible,
+.tool-image-stack-count:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.tool-image-stack-count-badge {
+  position: absolute;
+  right: -1px;
+  bottom: -2px;
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  box-shadow: var(--shadow-paper);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
 .tool-image-stack-count {
   position: absolute;
   right: -6px;
@@ -179,6 +264,7 @@ function stackStyle(index: number): Record<string, string> {
   height: 18px;
   align-items: center;
   justify-content: center;
+  gap: 3px;
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 5px;
@@ -188,6 +274,7 @@ function stackStyle(index: number): Record<string, string> {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  cursor: pointer;
 }
 @media (prefers-reduced-motion: reduce) {
   .tool-image-stack-card { transition: none; }
@@ -196,7 +283,7 @@ function stackStyle(index: number): Record<string, string> {
   .tool-image-stack {
     width: 104px;
     height: 72px;
-    margin-left: 9px;
+    right: 3px;
   }
 }
 </style>

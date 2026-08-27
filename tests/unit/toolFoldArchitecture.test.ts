@@ -7,7 +7,7 @@ function source(path: string): string {
 }
 
 describe('工具调用分层折叠', () => {
-  it('分组模式按回合压成最新标题,图片移入右侧堆叠', () => {
+  it('常规动作保持分组,编排调用压成标题轨道,图片在右侧纸片展开', () => {
     const group = source('../../src/components/ToolProcessGroup.vue')
     const list = source('../../src/components/ContentBlockList.vue')
     const items = source('../../src/components/ToolProcessItems.vue')
@@ -49,12 +49,22 @@ describe('工具调用分层折叠', () => {
     expect(inlineImage).toContain('@click="expanded = true"')
     expect(assetImage).toContain('@click="openLightbox"')
     expect(group).toContain('latestOnly?: boolean')
+    expect(group).toContain('titlesOnly?: boolean')
     expect(group).toContain('toolDisplayTitle(latestTool)')
+    expect(group).toContain('class="tool-title-history-row"')
     expect(group).toContain(':show-images="showImages"')
+    expect(processTrack).toContain('regularTools')
+    expect(processTrack).toContain('orchestrationTools')
     expect(processTrack).toContain('latest-only')
+    expect(processTrack).toContain('titles-only')
     expect(processTrack).toContain(':show-images="false"')
     expect(processTrack).toContain('<ToolImageStack')
+    expect(processTrack).not.toContain('border: 1px')
     expect(imageStack).toContain('class="tool-image-stack-card"')
+    expect(imageStack).toContain("const expanded = ref(false)")
+    expect(imageStack).toContain("@click=\"expanded = true\"")
+    expect(imageStack).toContain('position: absolute')
+    expect(imageStack).toContain('.tool-image-stack.is-expanded .tool-image-stack-card')
     expect(imageStack).toContain('<BlockImage')
     expect(imageStack).toContain('<EngineAssetImage')
     expect(imageStack).toContain('@container (max-width: 420px)')

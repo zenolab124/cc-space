@@ -26,6 +26,8 @@ const props = defineProps<{
   streaming?: boolean
   /** 回合级执行轨道只让最新调用占据摘要行。 */
   latestOnly?: boolean
+  /** 编排工具展开时只回放历史标题，不渲染输入、结果与卡片。 */
+  titlesOnly?: boolean
   showImages?: boolean
 }>()
 
@@ -50,6 +52,9 @@ function stateOf(tool: ToolUseBlock): ToolVisualState {
 
 const states = computed(() => props.tools.map(stateOf))
 const latestTool = computed(() => props.tools[props.tools.length - 1] ?? null)
+const historyTools = computed(() => props.latestOnly
+  ? props.tools.slice(0, -1).reverse()
+  : props.tools)
 const groupState = computed<ToolVisualState>(() => {
   if (props.latestOnly && states.value.length > 0) return states.value[states.value.length - 1]
   const priority: ToolVisualState[] = ['permission', 'error', 'interrupted', 'running', 'background', 'unknown', 'done']
@@ -74,6 +79,16 @@ function summaryLabel(item: ToolProcessSummaryItem): string {
   return item.detail.toLocaleLowerCase().startsWith(action.toLocaleLowerCase())
     ? item.detail
     : `${action} ${item.detail}`
+}
+
+function compactStateLabel(tool: ToolUseBlock): string {
+  const state = stateOf(tool)
+  if (state === 'permission') return t('block.toolFold.permission')
+  if (state === 'error') return t('block.toolFold.failed')
+  if (state === 'interrupted') return t('block.toolFold.interrupted')
+  if (state === 'running') return t('block.toolFold.running')
+  if (state === 'background') return t('block.toolFold.background')
+  return ''
 }
 
 const summaryTitle = computed(() => [
@@ -169,7 +184,25 @@ function toggle(event: MouseEvent) {
       </span>
     </template>
     <slot>
+      <div v-if="titlesOnly" class="tool-title-history">
+        <div
+          v-for="tool in historyTools"
+          :key="tool.id"
+          class="tool-title-history-row"
+        >
+          <span class="i-carbon-tool-kit tool-title-history-icon" aria-hidden="true" />
+          <span class="tool-title-history-text">{{ toolDisplayTitle(tool) }}</span>
+          <span
+            v-if="compactStateLabel(tool)"
+            class="tool-title-history-state"
+            :class="`is-${stateOf(tool)}`"
+          >
+            {{ compactStateLabel(tool) }}
+          </span>
+        </div>
+      </div>
       <ToolProcessItems
+        v-else
         :blocks="blocks"
         :block-record-uuids="blockRecordUuids"
         :streaming="streaming"
@@ -199,6 +232,37 @@ function toggle(event: MouseEvent) {
 .tool-process-summary.is-latest { align-items: center; font-size: 11px; }
 .tool-process-summary.is-latest > span:last-child { min-width: 0; }
 .tool-process-icon { width: 12px; height: 12px; flex: none; opacity: 0.68; }
+.tool-title-history {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  padding: 1px 0 2px;
+}
+.tool-title-history-row {
+  display: flex;
+  min-width: 0;
+  min-height: var(--tool-row-height);
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: var(--tool-row-line-height);
+}
+.tool-title-history-icon { width: 12px; height: 12px; flex: none; opacity: 0.58; }
+.tool-title-history-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-title-history-state { flex: none; font-size: 10px; font-weight: 500; }
+.tool-title-history-state.is-error,
+.tool-title-history-state.is-interrupted { color: var(--destructive); }
+.tool-title-history-state.is-running { color: var(--claude); }
+.tool-title-history-state.is-permission { color: var(--accent); }
+.tool-title-history-state.is-background { color: var(--primary); }
 .tool-process-separator,
 .tool-process-more {
   flex: none;
