@@ -1650,12 +1650,26 @@ async function processQueuedInput(id: string) {
   }
 
   if (canSendQueuedInputWhileRunning(item) && reference.value && runtimeId.value && activeTurnId.value) {
+    const target = reference.value
+    const targetRuntimeId = runtimeId.value
+    const targetTurnId = activeTurnId.value
+    const optimisticId = `pending-user-${item.id}`
+    const optimisticRecord = createOptimisticUserRecord(
+      target,
+      optimisticId,
+      item.text,
+      item.images,
+      targetTurnId,
+    )
+    optimisticRecord.sourceMeta.optimisticPlacement = 'tail'
+    liveRecords.value.push(optimisticRecord)
     item.status = 'processing'
     delete item.error
     try {
-      await sendInputWhileRunning(reference.value, runtimeId.value, activeTurnId.value, item.input)
+      await sendInputWhileRunning(target, targetRuntimeId, targetTurnId, item.input)
       queuedInputs.value = queuedInputs.value.filter(candidate => candidate.id !== id)
     } catch (cause) {
+      liveRecords.value = liveRecords.value.filter(record => record.id !== optimisticId)
       item.status = 'failed'
       item.error = causeMessage(cause)
       error.value = item.error

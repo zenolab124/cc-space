@@ -268,6 +268,28 @@ describe('live history reconciliation', () => {
     ])
   })
 
+  it('keeps an in-turn optimistic prompt at the live timeline tail', () => {
+    const persisted = [record({ id: 'user-1', role: 'user', turnId: 'turn-1' })]
+    const liveResponse = record({
+      id: 'assistant-live',
+      turnId: 'turn-1',
+      segments: [{ kind: 'text', text: 'working', phase: 'streaming' }],
+    })
+    const currentTaskInput = record({
+      id: 'pending-user-current',
+      role: 'user',
+      turnId: 'turn-1',
+      segments: [{ kind: 'text', text: 'also check this' }],
+      sourceMeta: {
+        ...optimisticUserSourceMeta(),
+        optimisticPlacement: 'tail',
+      },
+    })
+
+    expect(composeRuntimeTimeline(persisted, [liveResponse, currentTaskInput]).map(item => item.id))
+      .toEqual(['user-1', 'assistant-live', 'pending-user-current'])
+  })
+
   it('does not render a late live copy after the normalized history record has landed', () => {
     const persisted = [
       record({ id: 'item-1', role: 'user', turnId: 'turn-2' }),

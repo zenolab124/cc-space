@@ -315,7 +315,7 @@ export function composeRuntimeTimeline(
       continue
     }
 
-    if (record.role === 'user') {
+    if (record.role === 'user' && record.sourceMeta.optimisticPlacement !== 'tail') {
       const firstResponse = sameTurnIndexes.find(index => merged[index].role !== 'user')
       const insertAt = firstResponse ?? sameTurnIndexes[sameTurnIndexes.length - 1] + 1
       merged.splice(insertAt, 0, record)
