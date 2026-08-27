@@ -148,14 +148,18 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
   }
 
   function onPointerDown(event: PointerEvent) {
-    if (event.button !== 0 || !savedRange) return
+    const selection = window.getSelection()
+    if (event.button !== 0 || !selection || selection.isCollapsed || selection.rangeCount === 0) return
     const target = event.target
     if (target instanceof Element && target.closest('[data-copy-exclude]')) return
     clearSelection()
   }
 
   function onKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && savedRange) clearSelection()
+    const selection = window.getSelection()
+    if (event.key === 'Escape' && selection && !selection.isCollapsed && selection.rangeCount > 0) {
+      clearSelection()
+    }
   }
 
   onMounted(() => {

@@ -39,6 +39,7 @@ describe('feature integration boundaries', () => {
     expect(semanticCopy).toContain('if (copied) clearSelection()')
     expect(semanticCopy).toContain("target.closest('[data-copy-exclude]')")
     expect(semanticCopy).toContain("event.key === 'Escape'")
+    expect(semanticCopy).toContain('selection.collapse(surface, 0)')
     expect(semanticCopy).toContain("document.addEventListener('pointerdown', onPointerDown, true)")
     expect(semanticCopy).toContain("document.removeEventListener('pointerdown', onPointerDown, true)")
     expect(semanticCopy).toContain("document.addEventListener('keydown', onKeyDown, true)")
