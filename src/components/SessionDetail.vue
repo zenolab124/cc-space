@@ -78,7 +78,7 @@ import SessionBackToBottom from './session/SessionBackToBottom.vue'
 import SessionTypingIndicator from './session/SessionTypingIndicator.vue'
 import SessionInteractionPanel from './session/SessionInteractionPanel.vue'
 import SessionReadonlyBar from './session/SessionReadonlyBar.vue'
-import SessionIdentityBar from './session/SessionIdentityBar.vue'
+import ArchiveSessionIdentityBar from './archive/ArchiveSessionIdentityBar.vue'
 import WorkbenchTargetButton from './workbench/WorkbenchTargetButton.vue'
 import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
@@ -3268,12 +3268,12 @@ async function onReload() {
     :file-root="currentSession.summary.cwd"
     @pointerdown.capture="activateRenderSurface"
   >
-    <SessionIdentityBar
+    <ArchiveSessionIdentityBar
       v-if="mode === 'archive'"
+      :session="currentSession.summary"
       engine-name="Claude Code"
       :title="archiveTitle"
       accent="claude"
-      :tags="getMeta(currentSession.summary.id)?.tags ?? []"
     />
     <!-- 会话顶栏(单行极简:标题由列头/列表承担,不重复显示) -->
     <SessionTopBar

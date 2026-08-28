@@ -34,6 +34,7 @@ mod workbench_capture;
 mod agent;
 mod automation;
 mod metadata;
+mod tag_registry;
 mod routines;
 pub mod routine_run;
 /// 主 App 与独立 runner 共用的 Routine CLI 命令构造。
@@ -350,6 +351,11 @@ pub fn run() {
             metadata::get_all_meta_v2,
             metadata::update_meta,
             metadata::update_meta_v2,
+            metadata::get_tag_registry,
+            metadata::update_session_tags,
+            metadata::rename_tag,
+            metadata::delete_tag,
+            metadata::set_tag_color,
             metadata::generate_title,
             metadata::generate_tags,
             metadata::generate_summary,

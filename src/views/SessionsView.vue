@@ -2,6 +2,7 @@
 import { ref, computed, onUnmounted } from 'vue'
 import ProjectSidebar from '@/components/ProjectSidebar.vue'
 import SessionList from '@/components/SessionList.vue'
+import TagManagerDialog from '@/components/archive/TagManagerDialog.vue'
 import UnifiedSessionDetail from '@/components/session/UnifiedSessionDetail.vue'
 import { useUiState } from '@/composables/useUiState'
 import { useProjects } from '@/composables/useProjects'
@@ -101,6 +102,7 @@ onUnmounted(() => {
         <UnifiedSessionDetail :session="selectedSession" :session-id="selectedSessionId" mode="archive" />
       </div>
     </main>
+    <TagManagerDialog />
   </div>
 </template>
 

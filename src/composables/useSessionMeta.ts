@@ -4,6 +4,7 @@ import type { SessionRef } from '@/engines/types'
 import { sessionUiId } from '@/engines/integration'
 import { resolveSessionRef } from '@/engines/directory'
 import { listEngines } from '@/engines/client'
+import { useTagRegistry } from '@/composables/useTagRegistry'
 
 export interface SessionMeta {
   title?: string
@@ -11,6 +12,7 @@ export interface SessionMeta {
   deletedAt?: string
   tags?: string[]
   starred?: boolean
+  tagsManual?: boolean
   titleManual?: boolean
   summary?: string
 }
@@ -57,10 +59,14 @@ async function refreshTitle(session: SessionRef) {
 
 async function refreshTags(session: SessionRef) {
   const sessionId = sessionUiId(session)
-  if (!shouldRefresh(sessionId)) return
+  if (!shouldRefresh(sessionId, 'tagsManual')) return
   try {
-    const tags = await invoke<string[]>('generate_tags', { session })
-    metaMap.value = { ...metaMap.value, [sessionId]: { ...metaMap.value[sessionId], tags } }
+    const result = await invoke<{ tags: string[], skipped: boolean }>('generate_tags', { session })
+    metaMap.value = {
+      ...metaMap.value,
+      [sessionId]: { ...metaMap.value[sessionId], tags: result.tags },
+    }
+    if (!result.skipped) void useTagRegistry().loadTags(true)
   } catch (e) {
     console.warn('[meta] 标签生成失败:', sessionId, e)
   }
@@ -98,16 +104,37 @@ export function useSessionMeta() {
   }
 
   async function updateMeta(sessionId: string, patch: SessionMeta, explicitSession?: SessionRef) {
-    if (patch.title !== undefined) {
-      patch.titleManual = true
+    const nextPatch = { ...patch }
+    if (nextPatch.title !== undefined) {
+      nextPatch.titleManual = true
     }
     const session = explicitSession ?? resolveSessionRef(sessionId)
     const updated = session
-      ? await invoke<SessionMeta>('update_meta_v2', { session, patch })
-      : await invoke<SessionMeta>('update_meta', { sessionId, patch })
+      ? await invoke<SessionMeta>('update_meta_v2', { session, patch: nextPatch })
+      : await invoke<SessionMeta>('update_meta', { sessionId, patch: nextPatch })
     metaMap.value = { ...metaMap.value, [sessionId]: updated }
+    if (nextPatch.tags !== undefined) void useTagRegistry().loadTags(true)
     return updated
   }
 
-  return { metaMap, getMeta, updateMeta, reloadMeta: loadAll, refreshTitle, refreshSummary, titleGenerating }
+  async function updateTags(sessionId: string, tags: string[], explicitSession?: SessionRef) {
+    const session = explicitSession ?? resolveSessionRef(sessionId)
+    if (!session) return updateMeta(sessionId, { tags })
+    const updated = await invoke<SessionMeta>('update_session_tags', { session, tags })
+    metaMap.value = { ...metaMap.value, [sessionId]: updated }
+    void useTagRegistry().loadTags(true)
+    return updated
+  }
+
+  return {
+    metaMap,
+    getMeta,
+    updateMeta,
+    updateTags,
+    reloadMeta: loadAll,
+    refreshTitle,
+    refreshTags,
+    refreshSummary,
+    titleGenerating,
+  }
 }

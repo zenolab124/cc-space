@@ -5,14 +5,16 @@ use serde::Serialize;
 
 use crate::config;
 use crate::engines::core::{
-    ConversationRecord, ConversationRole, EngineInstanceId, MetadataStore, Segment,
-    SessionMetadataEntry, SessionRef, TimelinePage,
+    normalize_tag_values, ConversationRecord, ConversationRole, EngineInstanceId, MetadataStore,
+    Segment, SessionMetadataEntry, SessionRef, TimelinePage,
 };
 use crate::engines::system;
+use crate::tag_registry::{validate_new_tag_name, TagRegistryStore};
 
 pub use crate::engines::core::SessionMetadata as SessionMeta;
 
 static STORE: Mutex<Option<MetadataStore>> = Mutex::new(None);
+static TAG_STORE: Mutex<Option<TagRegistryStore>> = Mutex::new(None);
 
 fn claude_instance() -> EngineInstanceId {
     EngineInstanceId::new("claude-code", "default").expect("static Claude engine id is valid")
@@ -28,10 +30,56 @@ where
 {
     let mut guard = STORE.lock().unwrap_or_else(|error| error.into_inner());
     if guard.is_none() {
-        *guard = Some(MetadataStore::open(config::data_dir(), &claude_instance())?);
+        let mut store = MetadataStore::open(config::data_dir(), &claude_instance())?;
+        store.normalize_all_tags()?;
+        *guard = Some(store);
     }
     let store = guard.as_mut().expect("metadata store was initialized");
     f(store)
+}
+
+fn with_tag_state<F, R>(f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut MetadataStore, &mut TagRegistryStore) -> Result<R, String>,
+{
+    let mut metadata_guard = STORE.lock().unwrap_or_else(|error| error.into_inner());
+    if metadata_guard.is_none() {
+        let mut store = MetadataStore::open(config::data_dir(), &claude_instance())?;
+        store.normalize_all_tags()?;
+        *metadata_guard = Some(store);
+    }
+    let metadata = metadata_guard
+        .as_mut()
+        .expect("metadata store was initialized");
+
+    let mut tag_guard = TAG_STORE.lock().unwrap_or_else(|error| error.into_inner());
+    if tag_guard.is_none() {
+        *tag_guard = Some(TagRegistryStore::open(
+            config::data_dir(),
+            &metadata.all_tags(),
+        )?);
+    }
+    let registry = tag_guard.as_mut().expect("tag registry was initialized");
+    registry.ensure_tags(metadata.all_tags())?;
+    f(metadata, registry)
+}
+
+fn update_manual_meta(session: &SessionRef, mut patch: SessionMeta) -> Result<SessionMeta, String> {
+    let Some(raw_tags) = patch.tags.take() else {
+        return with_store(|store| store.update(session, patch));
+    };
+    with_tag_state(|metadata, registry| {
+        let tags = normalize_tag_values(&raw_tags);
+        for tag in &tags {
+            if !registry.contains(tag) {
+                validate_new_tag_name(tag)?;
+            }
+        }
+        registry.ensure_tags(tags.iter().cloned())?;
+        patch.tags = Some(tags);
+        patch.tags_manual = Some(true);
+        metadata.update(session, patch)
+    })
 }
 
 #[tauri::command]
@@ -47,12 +95,98 @@ pub fn get_all_meta_v2() -> Result<Vec<SessionMetadataEntry>, String> {
 #[tauri::command]
 pub fn update_meta(session_id: String, patch: SessionMeta) -> Result<SessionMeta, String> {
     let session = claude_session(session_id)?;
-    with_store(|store| store.update(&session, patch))
+    update_manual_meta(&session, patch)
 }
 
 #[tauri::command]
 pub fn update_meta_v2(session: SessionRef, patch: SessionMeta) -> Result<SessionMeta, String> {
-    with_store(|store| store.update(&session, patch))
+    update_manual_meta(&session, patch)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagView {
+    name: String,
+    color: String,
+    created_at: String,
+    usage_count: usize,
+    total_usage_count: usize,
+}
+
+fn tag_views(metadata: &MetadataStore, registry: &TagRegistryStore) -> Vec<TagView> {
+    let visible_counts = metadata.tag_usage_counts(false);
+    let total_counts = metadata.tag_usage_counts(true);
+    let mut tags = registry
+        .definitions()
+        .iter()
+        .map(|tag| TagView {
+            name: tag.name.clone(),
+            color: tag.color.clone(),
+            created_at: tag.created_at.clone(),
+            usage_count: visible_counts.get(&tag.name).copied().unwrap_or_default(),
+            total_usage_count: total_counts.get(&tag.name).copied().unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    tags.sort_by(|left, right| {
+        right
+            .usage_count
+            .cmp(&left.usage_count)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    tags
+}
+
+#[tauri::command]
+pub fn get_tag_registry() -> Result<Vec<TagView>, String> {
+    with_tag_state(|metadata, registry| Ok(tag_views(metadata, registry)))
+}
+
+#[tauri::command]
+pub fn update_session_tags(session: SessionRef, tags: Vec<String>) -> Result<SessionMeta, String> {
+    update_manual_meta(
+        &session,
+        SessionMeta {
+            tags: Some(tags),
+            ..Default::default()
+        },
+    )
+}
+
+#[tauri::command]
+pub fn rename_tag(source: String, target: String) -> Result<Vec<TagView>, String> {
+    with_tag_state(|metadata, registry| {
+        if !registry.contains(&source) {
+            return Err("标签不存在".to_string());
+        }
+        let target = validate_new_tag_name(&target)?;
+        if source == target {
+            return Ok(tag_views(metadata, registry));
+        }
+        registry.ensure_renamed_target(&source, &target)?;
+        metadata.replace_tag(&source, &target)?;
+        registry.remove(&source)?;
+        Ok(tag_views(metadata, registry))
+    })
+}
+
+#[tauri::command]
+pub fn delete_tag(name: String) -> Result<Vec<TagView>, String> {
+    with_tag_state(|metadata, registry| {
+        if !registry.contains(&name) {
+            return Err("标签不存在".to_string());
+        }
+        metadata.remove_tag(&name)?;
+        registry.remove(&name)?;
+        Ok(tag_views(metadata, registry))
+    })
+}
+
+#[tauri::command]
+pub fn set_tag_color(name: String, color: String) -> Result<Vec<TagView>, String> {
+    with_tag_state(|metadata, registry| {
+        registry.set_color(&name, &color)?;
+        Ok(tag_views(metadata, registry))
+    })
 }
 
 /// 查询某会话是否已被软删除（discovery 过滤用）
@@ -171,14 +305,19 @@ pub async fn generate_title(session: SessionRef) -> Result<TitleResult, String> 
     .await
     .map_err(|e| e.to_string())??;
 
-    with_store(|store| {
+    let title = with_store(|store| {
+        let latest = store.get(&session).cloned().unwrap_or_default();
+        if latest.title_manual.unwrap_or(false) {
+            return Ok(latest.title.unwrap_or(title.clone()));
+        }
         store.update(
             &session,
             SessionMeta {
                 title: Some(title.clone()),
                 ..Default::default()
             },
-        )
+        )?;
+        Ok(title.clone())
     })?;
 
     Ok(TitleResult { title, turn_count })
@@ -199,37 +338,75 @@ pub async fn generate_permission_hint(
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagsResult {
+    tags: Vec<String>,
+    skipped: bool,
+}
+
 #[tauri::command]
-pub async fn generate_tags(session: SessionRef) -> Result<Vec<String>, String> {
+pub async fn generate_tags(session: SessionRef) -> Result<TagsResult, String> {
     if !crate::channels::is_agent_enabled("tags") {
         return Err("agent.tags 已禁用".to_string());
     }
-    let current_tags = metadata_for_ref(&session).and_then(|metadata| metadata.tags);
+    let (current_tags, preferred_tags, manual) = with_tag_state(|metadata, registry| {
+        let current = metadata.get(&session).cloned().unwrap_or_default();
+        let counts = metadata.tag_usage_counts(false);
+        let mut preferred = registry
+            .definitions()
+            .iter()
+            .map(|tag| {
+                (
+                    tag.name.clone(),
+                    counts.get(&tag.name).copied().unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+        preferred.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        Ok((
+            current.tags.unwrap_or_default(),
+            preferred
+                .into_iter()
+                .take(30)
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            current.tags_manual.unwrap_or(false),
+        ))
+    })?;
+    if manual {
+        return Ok(TagsResult {
+            tags: current_tags,
+            skipped: true,
+        });
+    }
     let (snippet, _) = extract_conversation_snippet(&session).await?;
 
+    let input_tags = current_tags.clone();
     let tags = tauri::async_runtime::spawn_blocking(move || {
-        let raw = crate::agent::generate_tags(&snippet, current_tags.as_deref())?;
-        let tags: Vec<String> = raw
-            .split(['，', ','])
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let raw = crate::agent::generate_tags(&snippet, Some(&input_tags), &preferred_tags)?;
+        let tags = normalize_tag_values(&[raw]);
         Ok::<_, String>(tags)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    with_store(|store| {
-        store.update(
-            &session,
-            SessionMeta {
-                tags: Some(tags.clone()),
-                ..Default::default()
-            },
-        )
-    })?;
-
-    Ok(tags)
+    let tags = if tags.is_empty() { current_tags } else { tags };
+    with_tag_state(|metadata, registry| {
+        let latest = metadata.get(&session).cloned().unwrap_or_default();
+        if latest.tags_manual.unwrap_or(false) {
+            return Ok(TagsResult {
+                tags: latest.tags.unwrap_or_default(),
+                skipped: true,
+            });
+        }
+        registry.ensure_tags(tags.iter().cloned())?;
+        metadata.update_tags(&session, tags.clone(), false)?;
+        Ok(TagsResult {
+            tags: tags.clone(),
+            skipped: false,
+        })
+    })
 }
 
 #[tauri::command]

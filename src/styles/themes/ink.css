@@ -26,6 +26,23 @@
 
   --tag: oklch(0.28 0.015 250);                 /* 石板蓝标签底 */
   --tag-foreground: oklch(0.68 0.03 250);
+  --star: oklch(0.78 0.13 82);
+  --tag-sage: oklch(0.72 0.09 145);
+  --tag-sage-wash: oklch(0.28 0.04 145);
+  --tag-clay: oklch(0.74 0.10 42);
+  --tag-clay-wash: oklch(0.29 0.04 42);
+  --tag-ocean: oklch(0.72 0.08 235);
+  --tag-ocean-wash: oklch(0.28 0.04 235);
+  --tag-lavender: oklch(0.73 0.08 300);
+  --tag-lavender-wash: oklch(0.29 0.04 300);
+  --tag-coral: oklch(0.72 0.12 20);
+  --tag-coral-wash: oklch(0.29 0.05 20);
+  --tag-sand: oklch(0.75 0.09 80);
+  --tag-sand-wash: oklch(0.29 0.04 80);
+  --tag-slate: oklch(0.70 0.04 250);
+  --tag-slate-wash: oklch(0.28 0.02 250);
+  --tag-ember: oklch(0.72 0.12 48);
+  --tag-ember-wash: oklch(0.29 0.05 48);
 
   --destructive: oklch(0.58 0.16 25);
   --destructive-foreground: oklch(0.95 0.003 80);

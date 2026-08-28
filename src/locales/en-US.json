@@ -228,7 +228,25 @@
     "noTitle": "(Untitled)",
     "generateSummary": "Generate summary",
     "refreshSummary": "Refresh summary",
-    "generatingSummary": "Generating…"
+    "generatingSummary": "Generating…",
+    "star": "Star",
+    "unstar": "Unstar",
+    "starredOnly": "Starred",
+    "starUpdateFailed": "Could not update star; the previous state was restored",
+    "tags": "Tags",
+    "editMetadata": "Edit title and tags",
+    "sessionTitle": "Session title",
+    "tagInputPlaceholder": "Type or select a tag, then press Enter",
+    "removeTag": "Remove tag {tag}",
+    "manageTags": "Manage tags",
+    "manageTagsHint": "Colors, renames, merges, and deletions apply to archived sessions across all engines.",
+    "noTags": "No tags yet",
+    "tagUsage": "{count} visible sessions",
+    "tagColor": "Tag color",
+    "setTagColor": "Set color to {color}",
+    "mergeTags": "Merge tags",
+    "mergeTagConfirm": "“{target}” already exists. Merge “{source}” across {count} sessions into it?",
+    "deleteTagConfirm": "Delete “{tag}” and remove it from {count} sessions?"
   },
   "subAgent": {
     "panel": "Sub Agent"

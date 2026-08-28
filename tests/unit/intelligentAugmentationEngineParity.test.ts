@@ -19,7 +19,8 @@ describe('intelligent augmentation engine parity', () => {
     expect(metadata).toMatch(/store\.update\(\s*&session,/)
     expect(metadata).not.toContain('projects_dir()')
     expect(sessionMeta).toContain("invoke<{ title: string, turnCount: number }>('generate_title', { session })")
-    expect(sessionMeta).toContain("invoke<string[]>('generate_tags', { session })")
+    expect(sessionMeta).toContain("invoke<{ tags: string[], skipped: boolean }>('generate_tags', { session })")
+    expect(sessionMeta).toContain("shouldRefresh(sessionId, 'tagsManual')")
     expect(sessionMeta).toContain("invoke<string>('generate_summary', { session })")
   })
 

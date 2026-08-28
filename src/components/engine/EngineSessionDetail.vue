@@ -30,7 +30,7 @@ import SessionTypingIndicator from '@/components/session/SessionTypingIndicator.
 import SessionInteractionPanel from '@/components/session/SessionInteractionPanel.vue'
 import SessionApprovalCard, { type SessionApprovalOption } from '@/components/session/SessionApprovalCard.vue'
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
-import SessionIdentityBar from '@/components/session/SessionIdentityBar.vue'
+import ArchiveSessionIdentityBar from '@/components/archive/ArchiveSessionIdentityBar.vue'
 import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
 import ConversationUserMessage from '@/components/session/ConversationUserMessage.vue'
 import SessionBannerOverlay from '@/components/session/SessionBannerOverlay.vue'
@@ -2203,12 +2203,12 @@ onUnmounted(() => {
 <template>
   <SessionSurface :root-ref="bindDetailRoot" :file-root="session.cwd">
     <template #topbar>
-      <SessionIdentityBar
+      <ArchiveSessionIdentityBar
         v-if="mode === 'archive'"
+        :session="session"
         :engine-name="enginePresentation.displayName"
         :title="resolvedTitle"
         :accent="engineAccent"
-        :tags="tags"
       />
 
       <SessionToolbar
@@ -2266,10 +2266,10 @@ onUnmounted(() => {
             <button type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="reloadFromMenu">
               <span class="i-carbon-renew h-3.5 w-3.5" />{{ t('topbar.refreshSession') }}
             </button>
-            <button type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="beginEditMeta">
+            <button v-if="mode !== 'archive'" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="beginEditMeta">
               <span class="i-carbon-edit h-3.5 w-3.5" />{{ t('engine.editMetadata') }}
             </button>
-            <button type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="toggleStar">
+            <button v-if="mode !== 'archive'" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="toggleStar">
               <span class="h-3.5 w-3.5" :class="starred ? 'i-carbon-star-filled text-primary' : 'i-carbon-star'" />{{ t('common.star') }}
             </button>
             <button v-if="actions?.openCwd.available" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="openCwd">
@@ -2281,7 +2281,7 @@ onUnmounted(() => {
         </template>
       </SessionToolbar>
 
-      <form v-if="editingMeta" class="shrink-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 border-b border-border bg-card px-3 py-2" @submit.prevent="saveMeta">
+      <form v-if="editingMeta && mode !== 'archive'" class="shrink-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2 border-b border-border bg-card px-3 py-2" @submit.prevent="saveMeta">
       <label class="min-w-0 text-[10px] text-muted-foreground">
         <span class="mb-1 block">{{ t('engine.metadataTitle') }}</span>
         <input v-model="titleDraft" class="w-full rounded border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-ring" />

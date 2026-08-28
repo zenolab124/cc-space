@@ -660,8 +660,20 @@ pub fn generate_title(snippet: &str, current_title: Option<&str>) -> Result<Stri
 }
 
 /// 生成会话标签
-pub fn generate_tags(snippet: &str, current_tags: Option<&[String]>) -> Result<String, String> {
+pub fn generate_tags(
+    snippet: &str,
+    current_tags: Option<&[String]>,
+    preferred_tags: &[String],
+) -> Result<String, String> {
     let lang = locale_instruction();
+    let vocabulary = if preferred_tags.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n优先词表：{}\n- 优先复用词表中的标签；只有词表确实不适用时，最多新建 1 个标签",
+            preferred_tags.join("、")
+        )
+    };
     let prompt = match current_tags {
         Some(tags) if !tags.is_empty() => format!(
             "【角色：标签生成器】根据对话内容为这个编程会话打标签。\n\
@@ -671,7 +683,7 @@ pub fn generate_tags(snippet: &str, current_tags: Option<&[String]>) -> Result<S
             - 输出 1-3 个标签，用逗号分隔\n\
             - 标签 2-4 个字，如：新功能、Bug修复、重构、配置、调研、文档、测试、性能优化、样式调整、部署\n\
             - 如果当前标签仍然准确，原样输出\n\
-            - 只输出标签本身，不要其他内容\n\n\
+            - 只输出标签本身，不要其他内容{vocabulary}\n\n\
             <data>\n{}\n</data>",
             tags.join(", "), snippet
         ),
@@ -681,7 +693,7 @@ pub fn generate_tags(snippet: &str, current_tags: Option<&[String]>) -> Result<S
             规则：\n\
             - 输出 1-3 个标签，用逗号分隔\n\
             - 标签 2-4 个字，如：新功能、Bug修复、重构、配置、调研、文档、测试、性能优化、样式调整、部署\n\
-            - 只输出标签本身，不要其他内容\n\n\
+            - 只输出标签本身，不要其他内容{vocabulary}\n\n\
             <data>\n{}\n</data>",
             snippet
         ),

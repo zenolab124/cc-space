@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,8 @@ pub struct SessionMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags_manual: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title_manual: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -44,6 +46,9 @@ impl SessionMetadata {
         if let Some(value) = patch.starred {
             self.starred = Some(value);
         }
+        if let Some(value) = patch.tags_manual {
+            self.tags_manual = Some(value);
+        }
         if let Some(value) = patch.title_manual {
             self.title_manual = Some(value);
         }
@@ -60,13 +65,13 @@ pub struct SessionMetadataEntry {
     pub metadata: SessionMetadata,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InstanceMetadata {
     sessions: BTreeMap<String, SessionMetadata>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MetadataDocument {
     schema_version: u32,
@@ -113,7 +118,7 @@ impl MetadataStore {
         }
 
         let store = Self { path, document };
-        store.save_and_validate()?;
+        store.save_and_validate(&store.document)?;
         Ok(store)
     }
 
@@ -156,8 +161,8 @@ impl MetadataStore {
         session: &SessionRef,
         patch: SessionMetadata,
     ) -> Result<SessionMetadata, String> {
-        let entry = self
-            .document
+        let mut next = self.document.clone();
+        let entry = next
             .instances
             .entry(session.engine().storage_key())
             .or_default()
@@ -166,20 +171,159 @@ impl MetadataStore {
             .or_default();
         entry.apply(patch);
         let result = entry.clone();
-        self.save_and_validate()?;
+        self.save_and_validate(&next)?;
+        self.document = next;
         Ok(result)
     }
 
-    fn save_and_validate(&self) -> Result<(), String> {
-        let json =
-            serde_json::to_string_pretty(&self.document).map_err(|error| error.to_string())?;
+    pub fn update_tags(
+        &mut self,
+        session: &SessionRef,
+        tags: Vec<String>,
+        manual: bool,
+    ) -> Result<SessionMetadata, String> {
+        self.update(
+            session,
+            SessionMetadata {
+                tags: Some(tags),
+                tags_manual: manual.then_some(true),
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn normalize_all_tags(&mut self) -> Result<bool, String> {
+        let mut next = self.document.clone();
+        let mut changed = false;
+        for instance in next.instances.values_mut() {
+            for metadata in instance.sessions.values_mut() {
+                let Some(tags) = metadata.tags.as_ref() else {
+                    continue;
+                };
+                let normalized = normalize_tag_values(tags);
+                if &normalized != tags {
+                    metadata.tags = Some(normalized);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.save_and_validate(&next)?;
+            self.document = next;
+        }
+        Ok(changed)
+    }
+
+    pub fn all_tags(&self) -> BTreeSet<String> {
+        self.document
+            .instances
+            .values()
+            .flat_map(|instance| instance.sessions.values())
+            .flat_map(|metadata| metadata.tags.iter().flatten())
+            .cloned()
+            .collect()
+    }
+
+    pub fn tag_usage_counts(&self, include_deleted: bool) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for metadata in self
+            .document
+            .instances
+            .values()
+            .flat_map(|instance| instance.sessions.values())
+        {
+            if !include_deleted && metadata.deleted.unwrap_or(false) {
+                continue;
+            }
+            for tag in metadata.tags.iter().flatten() {
+                *counts.entry(tag.clone()).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    pub fn replace_tag(&mut self, source: &str, target: &str) -> Result<(), String> {
+        if source == target {
+            return Ok(());
+        }
+        let mut next = self.document.clone();
+        let mut changed = false;
+        for metadata in next
+            .instances
+            .values_mut()
+            .flat_map(|instance| instance.sessions.values_mut())
+        {
+            let Some(tags) = metadata.tags.as_mut() else {
+                continue;
+            };
+            if !tags.iter().any(|tag| tag == source) {
+                continue;
+            }
+            let replaced = tags
+                .iter()
+                .map(|tag| {
+                    if tag == source {
+                        target.to_string()
+                    } else {
+                        tag.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            *tags = normalize_tag_values(&replaced);
+            changed = true;
+        }
+        if changed {
+            self.save_and_validate(&next)?;
+            self.document = next;
+        }
+        Ok(())
+    }
+
+    pub fn remove_tag(&mut self, name: &str) -> Result<(), String> {
+        let mut next = self.document.clone();
+        let mut changed = false;
+        for metadata in next
+            .instances
+            .values_mut()
+            .flat_map(|instance| instance.sessions.values_mut())
+        {
+            let Some(tags) = metadata.tags.as_mut() else {
+                continue;
+            };
+            let before = tags.len();
+            tags.retain(|tag| tag != name);
+            changed |= tags.len() != before;
+        }
+        if changed {
+            self.save_and_validate(&next)?;
+            self.document = next;
+        }
+        Ok(())
+    }
+
+    fn save_and_validate(&self, document: &MetadataDocument) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(document).map_err(|error| error.to_string())?;
         crate::config::atomic_write(&self.path, &json).map_err(|error| error.to_string())?;
         let reloaded = read_document(&self.path)?;
-        if entry_count(&reloaded) != entry_count(&self.document) {
+        if &reloaded != document {
             return Err("metadata v2 validation failed after write".into());
         }
         Ok(())
     }
+}
+
+pub fn normalize_tag_values(values: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for value in values {
+        for part in value.split(['，', ',', '、', ';', '；']) {
+            let tag = part.trim();
+            if !tag.is_empty() && seen.insert(tag.to_string()) {
+                normalized.push(tag.to_string());
+            }
+        }
+    }
+    normalized
 }
 
 fn read_document(path: &Path) -> Result<MetadataDocument, String> {
@@ -193,14 +337,6 @@ fn read_document(path: &Path) -> Result<MetadataDocument, String> {
         ));
     }
     Ok(document)
-}
-
-fn entry_count(document: &MetadataDocument) -> usize {
-    document
-        .instances
-        .values()
-        .map(|instance| instance.sessions.len())
-        .sum()
 }
 
 #[cfg(test)]
@@ -323,6 +459,56 @@ mod tests {
         assert_eq!(
             store.get(&codex_ref).unwrap().title.as_deref(),
             Some("Codex")
+        );
+    }
+
+    #[test]
+    fn normalizes_all_supported_tag_separators_in_stable_order() {
+        let values = vec![
+            " 代码生成、插件开发, 文档 ".to_string(),
+            "文档；测试;代码生成".to_string(),
+        ];
+        assert_eq!(
+            normalize_tag_values(&values),
+            vec!["代码生成", "插件开发", "文档", "测试"]
+        );
+    }
+
+    #[test]
+    fn failed_update_does_not_commit_the_in_memory_document() {
+        let root = TestDir::new();
+        let mut store = MetadataStore::open(&root.0, &instance("claude-code")).unwrap();
+        let session = SessionRef::new(instance("claude-code"), "session").unwrap();
+        store
+            .update(
+                &session,
+                SessionMetadata {
+                    title: Some("Before".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let blocked_path = root.0.join("blocked");
+        fs::create_dir(&blocked_path).unwrap();
+        store.path = blocked_path;
+        let result = store.update(
+            &session,
+            SessionMetadata {
+                title: Some("After".into()),
+                ..Default::default()
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            store.get(&session).unwrap().title.as_deref(),
+            Some("Before")
+        );
+        let reopened = MetadataStore::open(&root.0, &instance("claude-code")).unwrap();
+        assert_eq!(
+            reopened.get(&session).unwrap().title.as_deref(),
+            Some("Before")
         );
     }
 

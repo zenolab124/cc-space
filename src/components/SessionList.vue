@@ -16,9 +16,12 @@ import type { SessionSummary } from '@/types'
 import { useRunners } from '@/composables/useRunners'
 import { resolveEnginePresentation } from '@/engines/presentation'
 import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
+import TagChip from '@/components/archive/TagChip.vue'
+import { useTagRegistry } from '@/composables/useTagRegistry'
 
 const { t } = useI18n()
-const { getMeta } = useSessionMeta()
+const { metaMap, getMeta, updateMeta } = useSessionMeta()
+const { tags: registryTags, openManager } = useTagRegistry()
 
 const { filteredSessions, sessionStats, loadProjects, engineOptions, selectedEngineIds, toggleEngine } = useProjects()
 const {
@@ -26,9 +29,13 @@ const {
   sortOrder,
   selectedTimeRange,
   selectedModel,
+  selectedTags,
+  starredOnly,
   filterAndSort,
   extractFilterOptions,
   selectSession,
+  toggleTagFilter,
+  clearTagFilters,
 } = useSessions()
 const sortedSessions = computed(() => filterAndSort(filteredSessions.value))
 const filterOptions = computed(() => extractFilterOptions(filteredSessions.value))
@@ -48,6 +55,8 @@ const timeLabels = computed<Record<TimeRange, string>>(() => ({
 
 // 筛选下拉
 const showModelDropdown = ref(false)
+const showTagDropdown = ref(false)
+const pendingStars = ref<Record<string, boolean>>({})
 
 function engineBadgeClass(session: SessionSummary): string {
   const accent = resolveEnginePresentation(session.engine?.engineId, session.engine_name).accent
@@ -74,13 +83,46 @@ function pickModel(model: string) {
   showModelDropdown.value = false
 }
 
-// ====== 虚拟滚动（两档高度） ======
+// ====== 虚拟滚动（标题 / 标签 / 摘要四档组合高度） ======
 const ITEM_H = 60
-const ITEM_H_SUMMARY = 96
+const ITEM_H_EXTRA = 20
 const OVERSCAN = 5
 
 function itemHeight(session: SessionSummary) {
-  return getMeta(session.id)?.summary ? ITEM_H_SUMMARY : ITEM_H
+  const meta = getMeta(session.id)
+  return ITEM_H + (meta?.tags?.length ? ITEM_H_EXTRA : 0) + (meta?.summary ? ITEM_H_EXTRA : 0)
+}
+
+async function toggleSessionStar(event: MouseEvent, session: SessionSummary) {
+  event.stopPropagation()
+  const previous = !!getMeta(session.id)?.starred
+  const next = !previous
+  pendingStars.value = { ...pendingStars.value, [session.id]: next }
+  metaMap.value = {
+    ...metaMap.value,
+    [session.id]: { ...metaMap.value[session.id], starred: next },
+  }
+  try {
+    await updateMeta(session.id, { starred: next }, session.reference)
+  } catch (cause) {
+    metaMap.value = {
+      ...metaMap.value,
+      [session.id]: { ...metaMap.value[session.id], starred: previous },
+    }
+    useNotifications().notifyTransient(t('archive.starUpdateFailed'), String(cause))
+  } finally {
+    const pending = { ...pendingStars.value }
+    delete pending[session.id]
+    pendingStars.value = pending
+  }
+}
+
+function sessionStarred(sessionId: string) {
+  return pendingStars.value[sessionId] ?? !!getMeta(sessionId)?.starred
+}
+
+function pickTag(tag: string) {
+  toggleTagFilter(tag)
 }
 
 const scrollContainer = ref<HTMLElement | null>(null)
@@ -326,6 +368,56 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
           </button>
         </div>
       </div>
+
+      <!-- 星标 -->
+      <button
+        type="button"
+        class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors"
+        :class="starredOnly ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'"
+        :aria-pressed="starredOnly"
+        @click="starredOnly = !starredOnly"
+      >
+        <span class="h-3 w-3" :class="starredOnly ? 'i-carbon-star-filled' : 'i-carbon-star'" :style="starredOnly ? { color: 'var(--star)' } : undefined" />
+        {{ $t('archive.starredOnly') }}
+      </button>
+
+      <!-- 标签下拉 -->
+      <div class="relative">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors"
+          :class="selectedTags.size ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          :aria-expanded="showTagDropdown"
+          @click.stop="showTagDropdown = !showTagDropdown"
+        >
+          {{ $t('archive.tags') }}
+          <span v-if="selectedTags.size" class="tabular-nums">{{ selectedTags.size }}</span>
+          <span class="i-carbon-chevron-down h-3 w-3" />
+        </button>
+        <div v-if="showTagDropdown" class="absolute left-0 top-full z-20 mt-1 w-56 rounded-md border border-border bg-popover p-2 shadow-paper-lifted">
+          <div class="flex max-h-48 flex-col gap-1 overflow-y-auto">
+            <div
+              v-for="tag in registryTags"
+              :key="tag.name"
+              class="flex min-w-0 items-center justify-between gap-2"
+            >
+              <TagChip
+                :name="tag.name"
+                :active="selectedTags.has(tag.name)"
+                clickable
+                compact
+                @click="pickTag(tag.name)"
+              />
+              <span class="shrink-0 text-[9px] tabular-nums text-muted-foreground">{{ tag.usageCount }}</span>
+            </div>
+            <span v-if="!registryTags.length" class="px-1 py-2 text-[10px] text-muted-foreground">{{ $t('archive.noTags') }}</span>
+          </div>
+          <div class="mt-2 flex items-center justify-between border-t border-border pt-2">
+            <button type="button" class="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-40" :disabled="!selectedTags.size" @click="clearTagFilters">{{ $t('common.clear') }}</button>
+            <button type="button" class="text-[10px] text-primary hover:underline" @click="showTagDropdown = false; openManager()">{{ $t('archive.manageTags') }}</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 会话列表（虚拟滚动） -->
@@ -357,6 +449,18 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               <div class="min-w-0 flex-1 truncate text-sm text-foreground">
                 {{ displayTitle(session, getMeta(session.id)?.title) }}
               </div>
+              <button
+                type="button"
+                class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-[opacity,color,background] hover:bg-muted group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :class="sessionStarred(session.id) ? '!opacity-100' : ''"
+                :style="sessionStarred(session.id) ? { color: 'var(--star)' } : undefined"
+                :title="sessionStarred(session.id) ? $t('archive.unstar') : $t('archive.star')"
+                :aria-pressed="sessionStarred(session.id)"
+                :disabled="pendingStars[session.id] !== undefined"
+                @click="toggleSessionStar($event, session)"
+              >
+                <span class="h-3.5 w-3.5" :class="sessionStarred(session.id) ? 'i-carbon-star-filled' : 'i-carbon-star'" />
+              </button>
               <WorkbenchTargetButton :session-id="session.id" variant="secondary" compact />
             </div>
             <div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
@@ -376,8 +480,20 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               <span v-if="session.model">·</span>
               <span v-if="session.model" class="text-muted-foreground">{{ shortModel(session.model) }}</span>
             </div>
+            <div v-if="getMeta(session.id)?.tags?.length" class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
+              <TagChip
+                v-for="tag in getMeta(session.id)!.tags!.slice(0, 2)"
+                :key="tag"
+                :name="tag"
+                :active="selectedTags.has(tag)"
+                clickable
+                compact
+                @click.stop="pickTag(tag)"
+              />
+              <span v-if="getMeta(session.id)!.tags!.length > 2" class="shrink-0 text-[9px] text-muted-foreground">+{{ getMeta(session.id)!.tags!.length - 2 }}</span>
+            </div>
             <!-- 摘要（仅展示） -->
-            <div v-if="getMeta(session.id)?.summary" v-tooltip="getMeta(session.id)!.summary" class="text-[11px] text-muted-foreground/70 mt-1 line-clamp-2 leading-relaxed">
+            <div v-if="getMeta(session.id)?.summary" v-tooltip="getMeta(session.id)!.summary" class="mt-1 line-clamp-1 text-[11px] leading-relaxed text-muted-foreground/70">
               {{ getMeta(session.id)!.summary }}
             </div>
           </div>

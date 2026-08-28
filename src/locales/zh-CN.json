@@ -228,7 +228,25 @@
     "noTitle": "(无标题)",
     "generateSummary": "生成摘要",
     "refreshSummary": "刷新摘要",
-    "generatingSummary": "正在生成…"
+    "generatingSummary": "正在生成…",
+    "star": "加星标",
+    "unstar": "取消星标",
+    "starredOnly": "星标",
+    "starUpdateFailed": "星标更新失败，已恢复原状态",
+    "tags": "标签",
+    "editMetadata": "编辑标题与标签",
+    "sessionTitle": "会话标题",
+    "tagInputPlaceholder": "输入或选择标签，回车添加",
+    "removeTag": "移除标签 {tag}",
+    "manageTags": "管理标签",
+    "manageTagsHint": "颜色、重命名、合并和删除会同步应用到所有引擎的档案会话。",
+    "noTags": "暂无标签",
+    "tagUsage": "{count} 个可见会话",
+    "tagColor": "标签颜色",
+    "setTagColor": "设为 {color}",
+    "mergeTags": "合并标签",
+    "mergeTagConfirm": "“{target}”已存在。将“{source}”涉及的 {count} 个会话合并到该标签？",
+    "deleteTagConfirm": "删除标签“{tag}”并从 {count} 个会话中移除？"
   },
   "subAgent": {
     "panel": "子 Agent"

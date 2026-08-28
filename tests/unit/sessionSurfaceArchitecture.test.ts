@@ -54,9 +54,21 @@ describe('unified session surface architecture', () => {
     }
   })
 
+  it('keeps archive tag drafts synchronized with global governance and opens filters into visible space', () => {
+    const identity = source('../../src/components/archive/ArchiveSessionIdentityBar.vue')
+    const sessionList = source('../../src/components/SessionList.vue')
+
+    expect(identity).toContain('const baselineTags = ref<string[]>([])')
+    expect(identity).toContain('const pendingAdditions = draftTags.value.filter(tag => !baseline.has(tag))')
+    expect(identity).toContain('draftTags.value = [...new Set([...nextTags, ...pendingAdditions])]')
+    expect(sessionList).toContain('absolute left-0 top-full z-20')
+    expect(sessionList).not.toContain('absolute right-0 top-full z-20')
+  })
+
   it('renders native and standard records through the same visual shells', () => {
     const nativeController = source('../../src/components/SessionDetail.vue')
     const standardController = source('../../src/components/engine/EngineSessionDetail.vue')
+    const archiveIdentity = source('../../src/components/archive/ArchiveSessionIdentityBar.vue')
     const nativeToolbar = source('../../src/components/topbar/SessionTopBar.vue')
     const nativeTurns = source('../../src/components/MessageGroup.vue')
     const standardTurns = source('../../src/components/engine/EngineConversationGroup.vue')
@@ -90,8 +102,10 @@ describe('unified session surface architecture', () => {
 
     expect(nativeController).toContain('<SessionSurface')
     expect(standardController).toContain('<SessionSurface')
-    expect(nativeController).toContain('<SessionIdentityBar')
-    expect(standardController).toContain('<SessionIdentityBar')
+    expect(nativeController).toContain('<ArchiveSessionIdentityBar')
+    expect(standardController).toContain('<ArchiveSessionIdentityBar')
+    expect(archiveIdentity).toContain('useSessionMeta()')
+    expect(archiveIdentity).toContain('useTagRegistry()')
     expect(nativeToolbar).toContain('<SessionToolbar')
     expect(standardController).toContain('<SessionToolbar')
     expect(nativeToolbar).toContain('<RunConfigCapsule')
