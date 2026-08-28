@@ -20,6 +20,13 @@ body {
   overflow: hidden;
 }
 
+/* WebKit 原生选区偶发残留在列表 marker 与跨列空白区；保留一帧不可选状态以刷新绘制。 */
+html.selection-paint-reset .session-surface,
+html.selection-paint-reset .session-surface * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
 /* 工作台横向全景导出：临时扩宽真实布局，保留当前纵向视口。 */
 .workbench-capture-active,
 .workbench-capture-active *,

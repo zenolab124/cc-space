@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, type ComputedRef } from 'vue'
+import { computed, inject, nextTick, ref, watch, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ContentBlock } from '@/types'
 import type { ToolResultAttachment } from '@/engines/types'
@@ -15,6 +15,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const expanded = ref(false)
+const rail = ref<HTMLElement | null>(null)
 const context = inject(TOOL_EXECUTION_CONTEXT, null)
 const legacyResults = inject<ComputedRef<Map<string, ToolResultData>>>('toolResultMap')
 
@@ -63,17 +64,55 @@ const entries = computed<ImageEntry[]>(() => props.tools.flatMap(tool => {
   return [...inline, ...attachments]
 }))
 
-function stackStyle(index: number): Record<string, string> {
-  const fullDepth = entries.value.length - index - 1
+interface DisplayEntry {
+  entry: ImageEntry
+  chronologicalIndex: number
+}
+
+const EXPANDED_POSES = [
+  { tilt: -0.8, offsetY: 1 },
+  { tilt: 0.45, offsetY: -1 },
+  { tilt: -0.25, offsetY: 2 },
+  { tilt: 0.75, offsetY: 0 },
+  { tilt: -0.55, offsetY: -2 },
+  { tilt: 0.2, offsetY: 1 },
+] as const
+
+const displayEntries = computed<DisplayEntry[]>(() => {
+  const allEntries = entries.value.map((entry, chronologicalIndex) => ({
+    entry,
+    chronologicalIndex,
+  }))
+  // 折叠时只有最上层（最后出现）的图片需要真实挂载；其余纸片由 CSS 绘制。
+  // 展开时再挂载完整时间线，收起后 Vue 会卸载其余图片并释放对象 URL。
+  return expanded.value ? allEntries : allEntries.slice(-1)
+})
+
+watch([expanded, () => entries.value.length], async ([isExpanded]) => {
+  if (!isExpanded) return
+  await nextTick()
+  if (rail.value) rail.value.scrollLeft = rail.value.scrollWidth
+}, { flush: 'post' })
+
+function stackStyle(chronologicalIndex: number): Record<string, string> {
+  if (expanded.value) {
+    // 姿态按时间序号循环，而不是按折叠深度计算。这样即使前面的图片原先在
+    // 横向视口之外，滚动出现时也仍有稳定且参差的纸片姿态。
+    const pose = EXPANDED_POSES[chronologicalIndex % EXPANDED_POSES.length]!
+    return {
+      'transform': `translateY(${pose.offsetY}px) rotate(${pose.tilt}deg)`,
+      'z-index': String(chronologicalIndex + 1),
+    }
+  }
+
+  const fullDepth = entries.value.length - chronologicalIndex - 1
   const depth = Math.min(fullDepth, 4)
   const tilt = `${depth % 2 === 0 ? depth * -0.45 : depth * 0.45}deg`
   return {
     '--stack-depth': String(depth),
     '--stack-tilt': tilt,
-    'transform': expanded.value
-      ? `rotate(${tilt})`
-      : `translate(${-depth * 4}px, ${depth * 4}px) rotate(${tilt})`,
-    'z-index': String(index + 1),
+    'transform': `translate(${-depth * 4}px, ${depth * 4}px) rotate(${tilt})`,
+    'z-index': String(chronologicalIndex + 1),
   }
 }
 </script>
@@ -82,38 +121,49 @@ function stackStyle(index: number): Record<string, string> {
   <div
     v-if="entries.length"
     class="tool-image-stack"
-    :class="{ 'is-expanded': expanded }"
+    :class="{
+      'is-expanded': expanded,
+      'has-multiple': entries.length > 1,
+      'has-many': entries.length > 2,
+    }"
     role="group"
     :aria-label="t('block.toolFold.imageCount', { count: entries.length })"
     @keydown.esc.stop="expanded = false"
   >
     <div
-      v-for="(entry, index) in entries"
-      :key="entry.key"
-      class="tool-image-stack-card"
-      :style="stackStyle(index)"
+      ref="rail"
+      class="tool-image-stack-rail"
+      :tabindex="expanded ? 0 : undefined"
     >
-      <BlockImage
-        v-if="entry.kind === 'inline'"
-        :block="entry.image"
-        :record-uuid="entry.recordUuid"
-      />
-      <EngineAssetImage
-        v-else
-        :attachment="entry.attachment"
-        auto-load
-        compact
-      />
+      <div
+        v-for="item in displayEntries"
+        :key="item.entry.key"
+        class="tool-image-stack-card"
+        :style="stackStyle(item.chronologicalIndex)"
+      >
+        <BlockImage
+          v-if="item.entry.kind === 'inline'"
+          :block="item.entry.image"
+          :record-uuid="item.entry.recordUuid"
+        />
+        <EngineAssetImage
+          v-else
+          :attachment="item.entry.attachment"
+          auto-load
+          compact
+        />
+      </div>
     </div>
     <button
-      v-if="!expanded"
+      v-if="!expanded && entries.length > 1"
       type="button"
-      class="tool-image-stack-open"
+      class="tool-image-stack-expand"
       :aria-expanded="false"
       :aria-label="`${t('common.expand')} · ${t('block.toolFold.imageCount', { count: entries.length })}`"
-      @click="expanded = true"
+      @click.stop="expanded = true"
     >
-      <span class="tool-image-stack-count-badge">{{ entries.length }}</span>
+      <span class="i-carbon-expand-all h-3 w-3" aria-hidden="true" />
+      <span>{{ entries.length }}</span>
     </button>
     <button
       v-else
@@ -141,13 +191,50 @@ function stackStyle(index: number): Record<string, string> {
   isolation: isolate;
 }
 .tool-image-stack.is-expanded {
+  top: -80px;
   left: 6px;
   z-index: 80;
-  display: flex;
   width: auto;
+  height: 126px;
+}
+.tool-image-stack-rail {
+  position: absolute;
+  inset: 0;
+}
+.tool-image-stack.has-multiple:not(.is-expanded) .tool-image-stack-rail::after,
+.tool-image-stack.has-many:not(.is-expanded) .tool-image-stack-rail::before {
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, var(--foreground) 14%);
+  border-radius: 4px;
+  background: var(--card);
+  box-shadow: var(--shadow-paper);
+  content: '';
+  pointer-events: none;
+}
+.tool-image-stack:not(.is-expanded) .tool-image-stack-rail::before {
+  transform: translate(-8px, 8px) rotate(-1.2deg);
+}
+.tool-image-stack:not(.is-expanded) .tool-image-stack-rail::after {
+  transform: translate(-4px, 4px) rotate(0.75deg);
+}
+.tool-image-stack.is-expanded .tool-image-stack-rail {
+  display: flex;
+  box-sizing: border-box;
   align-items: stretch;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 12px 18px;
+  -ms-overflow-style: none;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+.tool-image-stack.is-expanded .tool-image-stack-rail::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 .tool-image-stack-card {
   position: absolute;
@@ -175,20 +262,26 @@ function stackStyle(index: number): Record<string, string> {
 .tool-image-stack.is-expanded .tool-image-stack-card {
   position: relative;
   inset: auto;
-  width: auto;
-  min-width: 42px;
+  width: 150px;
+  min-width: 150px;
   max-width: 150px;
-  flex: 1 1 150px;
+  flex: 0 0 150px;
   overflow: visible;
   box-shadow:
     0 1px 1px color-mix(in srgb, var(--foreground) 14%, transparent),
     0 7px 18px color-mix(in srgb, var(--foreground) 18%, transparent),
     var(--shadow-paper);
 }
+.tool-image-stack.is-expanded .tool-image-stack-card:first-child {
+  margin-inline-start: auto;
+}
 .tool-image-stack-card:focus-within {
   box-shadow: 0 0 0 2px var(--ring), var(--shadow-paper);
 }
-.tool-image-stack:not(.is-expanded) .tool-image-stack-card { pointer-events: none; }
+.tool-image-stack-rail:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .tool-image-stack-card :deep(> div),
 .tool-image-stack-card :deep(.engine-asset-image),
 .tool-image-stack-card :deep(.engine-asset-image-open) {
@@ -221,38 +314,37 @@ function stackStyle(index: number): Record<string, string> {
   color: var(--muted-foreground);
   text-overflow: ellipsis;
 }
-.tool-image-stack-open {
+.tool-image-stack-expand {
   position: absolute;
-  inset: -5px;
+  right: -6px;
+  bottom: -7px;
   z-index: 10001;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  cursor: zoom-in;
-}
-.tool-image-stack-open:focus-visible,
-.tool-image-stack-count:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-.tool-image-stack-count-badge {
-  position: absolute;
-  right: -1px;
-  bottom: -2px;
   display: inline-flex;
-  min-width: 18px;
-  height: 18px;
+  min-width: 30px;
+  height: 22px;
   align-items: center;
   justify-content: center;
+  gap: 3px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0 5px;
+  padding: 0 6px;
   color: var(--foreground);
   background: color-mix(in srgb, var(--card) 94%, transparent);
   box-shadow: var(--shadow-paper);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  cursor: pointer;
+  transition: box-shadow 160ms ease, transform 160ms ease;
+}
+.tool-image-stack-expand:hover {
+  box-shadow: var(--shadow-paper-lifted);
+  transform: translateY(-1px);
+}
+.tool-image-stack-expand:focus-visible,
+.tool-image-stack-count:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 .tool-image-stack-count {
   position: absolute;
@@ -277,7 +369,8 @@ function stackStyle(index: number): Record<string, string> {
   cursor: pointer;
 }
 @media (prefers-reduced-motion: reduce) {
-  .tool-image-stack-card { transition: none; }
+  .tool-image-stack-card,
+  .tool-image-stack-expand { transition: none; }
 }
 @container (max-width: 420px) {
   .tool-image-stack {

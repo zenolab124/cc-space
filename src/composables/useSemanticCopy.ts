@@ -11,6 +11,71 @@ interface CopyToolbarPosition {
   top: number
 }
 
+let selectionPaintFrame = 0
+let pointerSelectionSurface: HTMLElement | null = null
+
+function sessionSurfaceOf(node: Node | null): HTMLElement | null {
+  const element = node instanceof Element ? node : node?.parentElement
+  return element?.closest<HTMLElement>('.session-surface') ?? null
+}
+
+function eventSessionSurface(target: EventTarget | null): HTMLElement | null {
+  return target instanceof Element ? target.closest<HTMLElement>('.session-surface') : null
+}
+
+function selectionSpansSessionSurfaces(selection: Selection): boolean {
+  if (selection.isCollapsed || selection.rangeCount === 0) return false
+  const anchorSurface = sessionSurfaceOf(selection.anchorNode)
+  const focusSurface = sessionSurfaceOf(selection.focusNode)
+  if (anchorSurface && focusSurface && anchorSurface !== focusSurface) return true
+
+  const surfaces = document.querySelectorAll<HTMLElement>('.session-surface')
+  const touchedSurfaces = new Set<HTMLElement>()
+  for (let rangeIndex = 0; rangeIndex < selection.rangeCount; rangeIndex += 1) {
+    const range = selection.getRangeAt(rangeIndex)
+    const commonSurface = sessionSurfaceOf(range.commonAncestorContainer)
+    if (commonSurface) {
+      touchedSurfaces.add(commonSurface)
+    } else {
+      for (const surface of surfaces) {
+        try {
+          if (range.intersectsNode(surface)) touchedSurfaces.add(surface)
+        } catch {
+          // 流式更新可能让节点在检查期间脱离 DOM，下一次 selectionchange/pointerup 会重验。
+        }
+      }
+    }
+    if (touchedSurfaces.size > 1) return true
+  }
+  return false
+}
+
+/** WebKit 偶尔会在 Range 清空后保留 marker/空白区的选区绘制，强制全会话重绘一帧。 */
+function repaintSelectionSurfaces() {
+  const documentElement = document.documentElement
+  documentElement.classList.add('selection-paint-reset')
+  void documentElement.offsetHeight
+  if (selectionPaintFrame) window.cancelAnimationFrame(selectionPaintFrame)
+  selectionPaintFrame = window.requestAnimationFrame(() => {
+    selectionPaintFrame = window.requestAnimationFrame(() => {
+      selectionPaintFrame = 0
+      documentElement.classList.remove('selection-paint-reset')
+    })
+  })
+}
+
+function removeNativeSelection(selection: Selection) {
+  if (selection.rangeCount === 0) return
+  try {
+    // 折叠到真实 Range 末端，不能折叠到任意会话根节点，否则会把残影带到其他常驻会话。
+    selection.collapseToEnd()
+  } catch {
+    // Range 可能在流式 DOM 更新中失效，removeAllRanges 仍可安全兜底。
+  }
+  selection.removeAllRanges()
+  repaintSelectionSurfaces()
+}
+
 function selectionRangeWithin(root: HTMLElement): Range | null {
   const selection = window.getSelection()
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
@@ -39,15 +104,18 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
 
   function clearSelection() {
     const selection = window.getSelection()
-    const surface = root.value
-    if (selection?.rangeCount && surface) selection.collapse(surface, 0)
-    if (selection?.rangeCount) selection.removeAllRanges()
+    if (selection) removeNativeSelection(selection)
     savedRange = null
     requestedMode = null
     hideToolbar()
   }
 
   function updateSelection() {
+    const selection = window.getSelection()
+    if (selection && selectionSpansSessionSurfaces(selection)) {
+      clearSelection()
+      return
+    }
     if (selectionFrame) window.cancelAnimationFrame(selectionFrame)
     selectionFrame = window.requestAnimationFrame(() => {
       selectionFrame = 0
@@ -148,10 +216,18 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
   }
 
   function onPointerDown(event: PointerEvent) {
+    pointerSelectionSurface = event.button === 0 ? eventSessionSurface(event.target) : null
     const selection = window.getSelection()
     if (event.button !== 0 || !selection || selection.isCollapsed || selection.rangeCount === 0) return
     const target = event.target
     if (target instanceof Element && target.closest('[data-copy-exclude]')) return
+    clearSelection()
+  }
+
+  function onPointerMove(event: PointerEvent) {
+    if ((event.buttons & 1) === 0 || !pointerSelectionSurface) return
+    if (eventSessionSurface(event.target) === pointerSelectionSurface) return
+    event.preventDefault()
     clearSelection()
   }
 
@@ -162,10 +238,21 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
     }
   }
 
+  function onPointerUp(event: PointerEvent) {
+    if (event.button !== 0) return
+    const selection = window.getSelection()
+    const crossedBoundary = !!pointerSelectionSurface
+      && eventSessionSurface(event.target) !== pointerSelectionSurface
+    pointerSelectionSurface = null
+    if (crossedBoundary || (selection && selectionSpansSessionSurfaces(selection))) clearSelection()
+  }
+
   onMounted(() => {
     document.addEventListener('selectionchange', updateSelection)
     document.addEventListener('copy', onCopy, true)
     document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('pointermove', onPointerMove, true)
+    document.addEventListener('pointerup', onPointerUp, true)
     document.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('resize', updateSelection)
     window.addEventListener('scroll', updateSelection, true)
@@ -176,6 +263,8 @@ export function useSemanticCopy(root: Ref<HTMLElement | null>) {
     document.removeEventListener('selectionchange', updateSelection)
     document.removeEventListener('copy', onCopy, true)
     document.removeEventListener('pointerdown', onPointerDown, true)
+    document.removeEventListener('pointermove', onPointerMove, true)
+    document.removeEventListener('pointerup', onPointerUp, true)
     document.removeEventListener('keydown', onKeyDown, true)
     window.removeEventListener('resize', updateSelection)
     window.removeEventListener('scroll', updateSelection, true)

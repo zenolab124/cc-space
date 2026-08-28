@@ -91,7 +91,7 @@ async function chooseTarget() {
     >
       <span
         class="h-3.5 w-3.5"
-        :class="existing ? 'i-carbon-launch' : 'i-carbon-add-alt'"
+        :class="existing ? 'i-carbon-launch' : 'i-carbon-add'"
         aria-hidden="true"
       />
     </button>

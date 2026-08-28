@@ -42,11 +42,15 @@ function onKeydown(e: KeyboardEvent) {
       :alt="$t('block.image', { mime: block.source.media_type, size: block.source.data?.length ?? '?' })"
       class="block-image-thumb"
       :class="{ 'block-image-loading': !loaded && !block.source.data }"
+      role="button"
+      tabindex="0"
       loading="lazy"
       decoding="async"
       @load="loaded = true"
       @error="loaded = true"
       @click="expanded = true"
+      @keydown.enter.prevent="expanded = true"
+      @keydown.space.prevent="expanded = true"
     />
     <Teleport to="body">
       <div

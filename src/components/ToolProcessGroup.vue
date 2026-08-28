@@ -3,6 +3,7 @@ import { computed, inject, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolResultData } from '@/utils/toolPair'
 import type { ContentBlock } from '@/types'
+import { latestChronologicalItem, newestFirst } from '@/utils/chronological'
 import {
   summarizeToolProcess,
   toolDisplayTitle,
@@ -51,12 +52,12 @@ function stateOf(tool: ToolUseBlock): ToolVisualState {
 }
 
 const states = computed(() => props.tools.map(stateOf))
-const latestTool = computed(() => props.tools[props.tools.length - 1] ?? null)
+const latestTool = computed(() => latestChronologicalItem(props.tools))
 const historyTools = computed(() => props.latestOnly
-  ? props.tools.slice(0, -1).reverse()
+  ? newestFirst(props.tools.slice(0, -1))
   : props.tools)
 const groupState = computed<ToolVisualState>(() => {
-  if (props.latestOnly && states.value.length > 0) return states.value[states.value.length - 1]
+  if (props.latestOnly) return latestChronologicalItem(states.value) ?? 'unknown'
   const priority: ToolVisualState[] = ['permission', 'error', 'interrupted', 'running', 'background', 'unknown', 'done']
   return priority.find(state => states.value.includes(state)) ?? 'unknown'
 })

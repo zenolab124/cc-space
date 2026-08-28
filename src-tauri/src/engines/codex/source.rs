@@ -23,6 +23,7 @@ const ASSET_MAX_BYTES: usize = 32 * 1024 * 1024;
 const USER_INPUT_ASSET_MARKER: &str = ":user-input:";
 const TOOL_RESULT_ASSET_MARKER: &str = ":tool-result:";
 const MCP_RESULT_ASSET_MARKER: &str = ":mcp-result:";
+const CONTENT_IMAGE_ASSET_PREFIX: &str = "content-image:";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -595,6 +596,7 @@ impl SessionSource for CodexSource {
             }
             let user_input = parse_user_input_asset_id(&asset.native_id);
             let tool_result = parse_tool_result_asset_id(&asset.native_id);
+            let content_image = parse_content_image_asset_id(&asset.native_id);
             for thread in threads {
                 for turn in thread.turns {
                     for item in turn.items {
@@ -624,6 +626,13 @@ impl SessionSource for CodexSource {
                                 media_type: media_type_for_path(path).to_string(),
                                 bytes,
                             });
+                        }
+                        if let Some((fingerprint, input_index)) = content_image {
+                            if let Some(url) =
+                                matching_content_image_url(&item, fingerprint, input_index)
+                            {
+                                return decode_data_url_asset(url);
+                            }
                         }
                         if let Some((item_id, input_index)) = &user_input {
                             if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
@@ -1025,17 +1034,21 @@ fn map_user_input_segment(
                 phase: None,
             }),
         Some("image" | "input_image") => {
-            let media_type = input
+            let url = input
                 .get("url")
                 .or_else(|| input.get("image_url"))
                 .and_then(Value::as_str)
+                .filter(|url| url.starts_with("data:image/"));
+            let media_type = url
                 .and_then(data_url_media_type)
                 .unwrap_or("image/*")
                 .to_string();
             Some(Segment::Attachment {
                 asset: AssetRef {
                     session: session.clone(),
-                    native_id: user_input_asset_id(item_id, index),
+                    native_id: url
+                        .map(|url| content_image_asset_id(url, index))
+                        .unwrap_or_else(|| user_input_asset_id(item_id, index)),
                 },
                 media_type,
                 title: None,
@@ -1058,10 +1071,6 @@ fn parse_user_input_asset_id(asset_id: &str) -> Option<(String, usize)> {
     Some((item_id.to_string(), input_index.parse().ok()?))
 }
 
-fn tool_result_asset_id(item_id: &str, input_index: usize) -> String {
-    format!("{item_id}{TOOL_RESULT_ASSET_MARKER}{input_index}")
-}
-
 fn parse_tool_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
     let (item_id, input_index) = asset_id.rsplit_once(TOOL_RESULT_ASSET_MARKER)?;
     Some((item_id.to_string(), input_index.parse().ok()?))
@@ -1074,6 +1083,41 @@ fn mcp_result_asset_id(item_id: &str, input_index: usize) -> String {
 fn parse_mcp_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
     let (item_id, input_index) = asset_id.rsplit_once(MCP_RESULT_ASSET_MARKER)?;
     Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
+fn stable_image_fingerprint(value: &str) -> u128 {
+    // FNV-1a 128：这里只需要跨 App Server / rollout 生成稳定定位符，不用于安全校验。
+    value
+        .as_bytes()
+        .iter()
+        .fold(0x6c62272e07bb014262b821756295c58d_u128, |hash, byte| {
+            (hash ^ u128::from(*byte)).wrapping_mul(0x0000000001000000000000000000013b)
+        })
+}
+
+fn content_image_asset_id(url: &str, input_index: usize) -> String {
+    format!(
+        "{CONTENT_IMAGE_ASSET_PREFIX}{:032x}:{input_index}",
+        stable_image_fingerprint(url)
+    )
+}
+
+fn parse_content_image_asset_id(asset_id: &str) -> Option<(u128, usize)> {
+    let value = asset_id.strip_prefix(CONTENT_IMAGE_ASSET_PREFIX)?;
+    let (fingerprint, input_index) = value.rsplit_once(':')?;
+    Some((
+        u128::from_str_radix(fingerprint, 16).ok()?,
+        input_index.parse().ok()?,
+    ))
+}
+
+fn matching_content_image_url(item: &Value, fingerprint: u128, input_index: usize) -> Option<&str> {
+    let url = item
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.get(input_index))
+        .and_then(tool_result_image_url)?;
+    (stable_image_fingerprint(url) == fingerprint).then_some(url)
 }
 
 fn programmatic_tool_title(input: &Value) -> Option<String> {
@@ -1171,7 +1215,7 @@ fn tool_result_image_url(value: &Value) -> Option<&str> {
 
 fn split_tool_result_content(
     session: &SessionRef,
-    item_id: &str,
+    _item_id: &str,
     content: &Value,
 ) -> (Value, Vec<ToolResultAttachment>) {
     let Value::Array(items) = content else {
@@ -1187,7 +1231,7 @@ fn split_tool_result_content(
         attachments.push(ToolResultAttachment {
             asset: AssetRef {
                 session: session.clone(),
-                native_id: tool_result_asset_id(item_id, index),
+                native_id: content_image_asset_id(url, index),
             },
             media_type: data_url_media_type(url).unwrap_or("image/*").to_string(),
             title: None,
@@ -1718,7 +1762,10 @@ mod tests {
             .unwrap()
             .as_slice(),
             [Segment::Attachment { asset, media_type, .. }]
-                if asset.native_id == "user:user-input:0" && media_type == "image/png"
+                if asset.native_id == content_image_asset_id(
+                    "data:image/png;base64,aW1hZ2U=",
+                    0,
+                ) && media_type == "image/png"
         ));
         let asset = decode_data_url_asset("data:image/png;base64,aW1hZ2U=").unwrap();
         assert_eq!(asset.media_type, "image/png");
@@ -2132,8 +2179,44 @@ mod tests {
                 if content.as_array().is_some_and(|items| items.len() == 1)
                     && attachments.len() == 1
                     && attachments[0].media_type == "image/png"
-                    && attachments[0].asset.native_id == "result-1:tool-result:1"
+                    && attachments[0].asset.native_id == content_image_asset_id(
+                        "data:image/png;base64,aW1hZ2U=",
+                        1,
+                    )
         ));
+    }
+
+    #[test]
+    fn content_image_asset_ids_survive_source_item_id_changes() {
+        let url = "data:image/png;base64,aW1hZ2U=";
+        let asset_id = content_image_asset_id(url, 1);
+        let (fingerprint, input_index) = parse_content_image_asset_id(&asset_id).unwrap();
+        let app_server_item = json!({
+            "id": "item-117",
+            "type": "userMessage",
+            "content": [
+                { "type": "text", "text": "screenshot" },
+                { "type": "image", "url": url }
+            ]
+        });
+        let rollout_item = json!({
+            "id": "msg-stable-id",
+            "type": "userMessage",
+            "content": [
+                { "type": "text", "text": "screenshot" },
+                { "type": "input_image", "image_url": url }
+            ]
+        });
+
+        assert_eq!(input_index, 1);
+        assert_eq!(
+            matching_content_image_url(&app_server_item, fingerprint, input_index),
+            Some(url),
+        );
+        assert_eq!(
+            matching_content_image_url(&rollout_item, fingerprint, input_index),
+            Some(url),
+        );
     }
 
     #[test]
