@@ -1,6 +1,6 @@
 {
   "name": "monet-tauri",
-  "version": "2.2.2",
+  "version": "2.2.8",
   "private": true,
   "description": "Monet — Multi-engine mission control for coding agents (Claude Code and Codex today)",
   "type": "module",
