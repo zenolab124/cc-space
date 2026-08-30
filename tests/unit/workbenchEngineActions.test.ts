@@ -7,6 +7,7 @@ function runtime(overrides: Partial<NonNullable<EngineCapabilities['runtime']>>)
     create: false,
     resume: true,
     fork: false,
+    forkWithCwd: false,
     sendWhileRunning: false,
     interrupt: true,
     streaming: { text: 'delta', reasoning: 'delta', toolProgress: 'delta' },

@@ -71,13 +71,16 @@ describe('artifact previews and local file links', () => {
   it('allows artifact previews outside the workspace after canonicalization', () => {
     expect(backend).toContain('let root = root')
     expect(backend).toContain('.canonicalize()')
-    expect(backend).toContain('let resolved = resolve_local_file(Path::new(&root), Path::new(&path))?')
+    expect(backend).toContain('return resolve_local_file(root, requested)')
+    expect(backend).toContain('let resolved = resolve_local_file_with_fallback(')
     expect(backend).not.toContain('candidate.starts_with(&canonical_root)')
   })
 
   it('opens Markdown file links outside the workspace after canonicalization', () => {
-    expect(blockText).toContain("invoke('open_local_file', { root, path })")
-    expect(backend).toContain('pub fn open_local_file(root: String, path: String)')
+    expect(blockText).toContain("await invoke('open_local_file', {")
+    expect(blockText).toContain('fallbackRoot: sessionFileFallbackRoot?.value ?? null')
+    expect(backend).toContain('pub fn open_local_file(')
+    expect(backend).toContain('fallback_root: Option<String>')
     expect(backend).toContain('if !candidate.is_file()')
   })
 })

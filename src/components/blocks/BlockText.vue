@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import type { ContentBlock } from '@/types'
 import { renderMarkdownPlain, renderMarkdownCached, renderMarkdownDeferred } from '@/composables/useMarkdown'
 import { useNotifications } from '@/composables/useNotifications'
-import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
+import { SESSION_FILE_FALLBACK_ROOT, SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
 import { openExternalUrl } from '@/composables/useFileOpener'
 import { normalizeLocalFileLink } from '@/features/artifact-preview/detectArtifacts'
 import { createStreamSplitter } from '@/lib/stream-markdown/findSafeSplit'
@@ -26,6 +26,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const { notifyTransient } = useNotifications()
 const sessionFileRoot = inject(SESSION_FILE_ROOT, null)
+const sessionFileFallbackRoot = inject(SESSION_FILE_FALLBACK_ROOT, null)
 
 const expanded = ref(false)
 const isLargeText = computed(() => props.block.text.length > TEXT_TRUNCATE_LEN)
@@ -116,7 +117,11 @@ async function openMarkdownLink(href: string) {
     const path = normalizeLocalFileLink(href)
     const root = sessionFileRoot?.value
     if (!path || !root) throw new Error(t('artifactPreview.fileLinkUnavailable'))
-    await invoke('open_local_file', { root, path })
+    await invoke('open_local_file', {
+      root,
+      path,
+      fallbackRoot: sessionFileFallbackRoot?.value ?? null,
+    })
   } catch (cause) {
     notifyTransient(t('common.openFailed'), String(cause))
   }

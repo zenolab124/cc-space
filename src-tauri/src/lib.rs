@@ -35,6 +35,7 @@ mod agent;
 mod automation;
 mod metadata;
 mod tag_registry;
+mod workspace;
 mod routines;
 pub mod routine_run;
 /// 主 App 与独立 runner 共用的 Routine CLI 命令构造。
@@ -347,6 +348,7 @@ pub fn run() {
             commands::read_local_image,
             artifact_preview::read_artifact_preview,
             artifact_preview::open_local_file,
+            workspace::resolve_workspace_contexts,
             metadata::get_all_meta,
             metadata::get_all_meta_v2,
             metadata::update_meta,

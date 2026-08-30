@@ -40,6 +40,7 @@ impl FixtureEngine {
                     create: true,
                     resume: true,
                     fork: false,
+                    fork_with_cwd: false,
                     send_while_running: true,
                     interrupt: true,
                     streaming: StreamingCapabilities {

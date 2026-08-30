@@ -32,6 +32,7 @@ impl ClaudeEngine {
                     create: true,
                     resume: true,
                     fork: true,
+                    fork_with_cwd: false,
                     send_while_running: false,
                     interrupt: true,
                     streaming: StreamingCapabilities {

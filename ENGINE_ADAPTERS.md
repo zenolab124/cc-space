@@ -51,6 +51,8 @@ The standard surface consumes only descriptors, `SessionActions`, the neutral ti
 
 `sendWhileRunning` only says whether the upper layer can keep accepting user input during an active turn; it does not prescribe delivery. An adapter may inject the input into the active turn or queue it for the next turn. Shared UI always presents this as “Send” and must not expose provider protocol terminology.
 
+Declare `forkWithCwd` only when the adapter can create a new session from existing history and reliably run that new session in a caller-specified cwd. Plain `fork` does not imply cross-directory support.
+
 Engine activation belongs to Monet settings. A disabled adapter remains visible in the engine catalog, but it is not constructed and cannot subscribe to a source, start a watcher, poll, or launch a resident process; enabling it takes effect after an app restart. If an adapter receives changes from an external legacy watcher, route them through `EngineAdapter::notify_source_change` and the adapter's own `subscribe_changes` channel instead of emitting a top-level Tauri event from the watcher.
 
 For new user-visible text, update only `src/locales/zh-CN.json` and `src/locales/en-US.json`. Engine brand names plus installation and native-configuration guides come from descriptors; capability names and generic states use i18n.

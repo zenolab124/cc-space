@@ -24,6 +24,7 @@ export interface EngineCapabilities {
     create: boolean
     resume: boolean
     fork: boolean
+    forkWithCwd: boolean
     sendWhileRunning: boolean
     interrupt: boolean
     streaming: {

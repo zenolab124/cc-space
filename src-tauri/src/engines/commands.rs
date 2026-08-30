@@ -181,11 +181,13 @@ pub async fn engine_load_timeline(
 
 #[tauri::command]
 pub async fn engine_session_actions(session: SessionRef) -> EngineResult<SessionActions> {
-    system::get()?
+    let mut actions = system::get()?
         .registry()
         .source_for(&session)?
-        .session_actions(session)
-        .await
+        .session_actions(session.clone())
+        .await?;
+    crate::workspace::restrict_session_actions(&session, &mut actions);
+    Ok(actions)
 }
 
 #[tauri::command]

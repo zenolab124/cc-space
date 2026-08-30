@@ -18,10 +18,13 @@ import { resolveEnginePresentation } from '@/engines/presentation'
 import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
 import TagChip from '@/components/archive/TagChip.vue'
 import { useTagRegistry } from '@/composables/useTagRegistry'
+import { useWorkspaceContexts } from '@/composables/useWorkspaceContexts'
+import WorkspaceBadge from '@/components/archive/WorkspaceBadge.vue'
 
 const { t } = useI18n()
 const { metaMap, getMeta, updateMeta } = useSessionMeta()
 const { tags: registryTags, openManager } = useTagRegistry()
+const { workspaceCwd, workspaceFileRoot, workspaceForSession, workspaceUnavailable } = useWorkspaceContexts()
 
 const { filteredSessions, sessionStats, loadProjects, engineOptions, selectedEngineIds, toggleEngine } = useProjects()
 const {
@@ -125,6 +128,11 @@ function pickTag(tag: string) {
   toggleTagFilter(tag)
 }
 
+function showSessionBranch(session: SessionSummary) {
+  const workspace = workspaceForSession(session)
+  return !!session.git_branch && !(workspace?.kind === 'linked' && workspace.branch)
+}
+
 const scrollContainer = ref<HTMLElement | null>(null)
 const scrollTop = ref(0)
 const containerHeight = ref(0)
@@ -213,16 +221,19 @@ import { resolveChannel, refreshChannels } from '@/composables/useChannels'
 async function onContextMenu(e: MouseEvent, session: SessionSummary) {
   e.preventDefault()
 
-  const items: Array<{ text: string; action: () => void }> = []
+  const items: Array<{ text: string; action: () => void; enabled?: boolean }> = []
 
-  if (session.cwd) {
+  if (workspaceFileRoot(session)) {
     items.push({
       text: t('archive.resumeInTerminal'),
+      enabled: !workspaceUnavailable(session),
       action: async () => {
         await refreshChannels()
         const channel = resolveChannel(readStoredChannelId(session.id))
         try {
-          await invoke('resume_in_terminal', { cwd: session.cwd!, sessionId: session.id, channel })
+          const cwd = workspaceCwd(session)
+          if (!cwd) return
+          await invoke('resume_in_terminal', { cwd, sessionId: session.id, channel })
         } catch (err) {
           const { notifyTransient } = useNotifications()
           const denied = String(err).includes('AUTOMATION_DENIED')
@@ -263,6 +274,7 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
   const menu = await Menu.new({
     items: items.map(item => ({
       text: item.text,
+      enabled: item.enabled ?? true,
       action: item.action,
     })),
   })
@@ -461,7 +473,13 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
               >
                 <span class="h-3.5 w-3.5" :class="sessionStarred(session.id) ? 'i-carbon-star-filled' : 'i-carbon-star'" />
               </button>
-              <WorkbenchTargetButton :session-id="session.id" variant="secondary" compact />
+              <WorkbenchTargetButton
+                :session-id="session.id"
+                variant="secondary"
+                compact
+                :disabled="workspaceUnavailable(session)"
+                :title="workspaceUnavailable(session) ? $t('worktreeSession.cwdUnavailable') : ''"
+              />
             </div>
             <div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5 truncate">
               <span
@@ -472,8 +490,9 @@ async function onContextMenu(e: MouseEvent, session: SessionSummary) {
                 <span class="w-1 h-1 rounded-full bg-current" />
                 {{ session.engine_name }}
               </span>
-              <span v-if="session.git_branch">{{ session.git_branch }}</span>
-              <span v-if="session.git_branch">·</span>
+              <WorkspaceBadge v-if="workspaceForSession(session)" :context="workspaceForSession(session)!" />
+              <span v-if="showSessionBranch(session)">{{ session.git_branch }}</span>
+              <span v-if="showSessionBranch(session)">·</span>
               <span>{{ relativeTime(session.last_modified) }}</span>
               <span>·</span>
               <span>{{ formatTokens(tokenTotal(session.total_tokens)) }}</span>

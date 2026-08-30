@@ -248,6 +248,18 @@
     "mergeTagConfirm": "“{target}” already exists. Merge “{source}” across {count} sessions into it?",
     "deleteTagConfirm": "Delete “{tag}” and remove it from {count} sessions?"
   },
+  "worktreeSession": {
+    "linked": "Worktree",
+    "linkedTooltip": "Source worktree: {name} · Branch: {branch}\n{path}",
+    "deleted": "Original workspace removed",
+    "deletedTooltip": "The original worktree is unavailable. Session history remains readable and searchable.\n{path}",
+    "cwdUnavailable": "The original worktree was removed; actions that depend on it are unavailable",
+    "continueInMain": "Continue in main workspace",
+    "continuing": "Continuing…",
+    "continueUnsupported": "This engine cannot create a session in another workspace from historical context",
+    "mainUnavailable": "The repository's main workspace is unavailable",
+    "continueFailed": "Could not continue in the main workspace"
+  },
   "subAgent": {
     "panel": "Sub Agent"
   },

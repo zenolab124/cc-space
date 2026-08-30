@@ -70,6 +70,7 @@ pub struct RuntimeCapabilities {
     pub create: bool,
     pub resume: bool,
     pub fork: bool,
+    pub fork_with_cwd: bool,
     pub send_while_running: bool,
     pub interrupt: bool,
     pub streaming: StreamingCapabilities,
@@ -239,6 +240,7 @@ mod tests {
             create: true,
             resume: true,
             fork: true,
+            fork_with_cwd: true,
             send_while_running: true,
             interrupt: true,
             streaming: StreamingCapabilities {
@@ -255,6 +257,7 @@ mod tests {
             value.get("sendWhileRunning"),
             Some(&serde_json::json!(true))
         );
+        assert_eq!(value.get("forkWithCwd"), Some(&serde_json::json!(true)));
         assert!(value.get("steer").is_none());
 
         let actions = serde_json::to_value(SessionActions {

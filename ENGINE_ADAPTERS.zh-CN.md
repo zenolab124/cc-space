@@ -51,6 +51,8 @@ ui: EngineUiIntegration {
 
 `sendWhileRunning` 只表示上层能否在运行中继续接收用户输入，不规定投递方式。adapter 可以把输入注入当前 turn，也可以排队到下一 turn；共享 UI 统一呈现为“发送”，不得暴露供应商协议术语。
 
+`forkWithCwd` 仅在 adapter 能从既有历史创建新会话、并可靠地把新会话运行目录设为调用方指定的 cwd 时声明。普通 `fork` 不隐含跨目录能力。
+
 引擎启用状态存于 Monet 自身设置。关闭的 adapter 仍出现在引擎清单中，但不会被构造，也不会订阅 source、启动 watcher、轮询或拉起常驻进程；重新启用在应用重启后生效。若 adapter 的变化来自外部旧 watcher，通过 `EngineAdapter::notify_source_change` 送回 adapter 自身的 `subscribe_changes` 通道，不要从 watcher 直接发顶层 Tauri 事件。
 
 新增用户可见文本只需同步 `src/locales/zh-CN.json` 与 `src/locales/en-US.json`。引擎品牌名与安装/原生配置指引来自 descriptor，能力名和通用状态走 i18n。

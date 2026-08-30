@@ -34,6 +34,17 @@ export function shouldReplaceUsage(
   return true
 }
 
+export interface WorkspaceContext {
+  kind: 'primary' | 'linked' | 'legacy'
+  worktreeRoot: string
+  mainRoot: string | null
+  name: string | null
+  branch: string | null
+  available: boolean
+  mainAvailable: boolean
+  detectedBy: 'git' | 'persisted' | 'convention'
+}
+
 export interface SessionSummary {
   id: string
   title: string | null
@@ -59,6 +70,8 @@ export interface SessionSummary {
   native_id?: string
   /** 引擎原生摘要元数据（例如 Codex modelProvider）；只读透传。 */
   source_meta?: Record<string, unknown>
+  /** Monet 派生的 Git workspace 关系；不改变原始会话身份与 cwd。 */
+  workspace_context?: WorkspaceContext
 }
 
 export interface Project {

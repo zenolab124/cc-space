@@ -6,6 +6,8 @@ import type { SessionSummary } from '@/types'
 import { useSessionMeta } from '@/composables/useSessionMeta'
 import { useTagRegistry } from '@/composables/useTagRegistry'
 import TagChip from './TagChip.vue'
+import WorkspaceBadge from './WorkspaceBadge.vue'
+import { useWorkspaceContexts } from '@/composables/useWorkspaceContexts'
 
 const props = withDefaults(defineProps<{
   session: SessionSummary
@@ -17,6 +19,7 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const { getMeta, updateMeta } = useSessionMeta()
 const { tags: registryTags, openManager } = useTagRegistry()
+const { workspaceForSession } = useWorkspaceContexts()
 const editing = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -104,6 +107,7 @@ async function toggleStar() {
           background: `color-mix(in srgb, ${accentColor} 10%, transparent)`,
         }"
       >{{ engineName }}</span>
+      <WorkspaceBadge v-if="workspaceForSession(session)" :context="workspaceForSession(session)!" />
       <div class="min-w-0 flex-1 truncate text-xs font-semibold">{{ title }}</div>
       <div v-if="tags.length" class="hidden min-w-0 items-center gap-1 xl:flex">
         <TagChip v-for="tag in tags.slice(0, 3)" :key="tag" :name="tag" compact />

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import { formatBytes } from '@/types'
@@ -22,6 +22,7 @@ import {
   type ScrollAxis,
 } from '@/lib/scrollGestureCoordinator'
 import { showImageContextMenu } from '@/composables/useImageActions'
+import { SESSION_FILE_FALLBACK_ROOT } from '@/composables/useSessionFileLinks'
 
 interface LoadedArtifact {
   fileName: string
@@ -39,6 +40,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const sessionFileFallbackRoot = inject(SESSION_FILE_FALLBACK_ROOT, null)
 const cardRef = ref<HTMLElement | null>(null)
 const stageRef = ref<HTMLElement | null>(null)
 const frameRef = ref<HTMLIFrameElement | null>(null)
@@ -117,6 +119,7 @@ async function loadPreview() {
     const loaded = await invoke<LoadedArtifact>('read_artifact_preview', {
       root: props.root,
       path: props.candidate.path,
+      fallbackRoot: sessionFileFallbackRoot?.value ?? null,
     })
     if (revision !== loadRevision) return
     artifactScriptsAllowed.value = false

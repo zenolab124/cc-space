@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
@@ -85,6 +85,77 @@ fn resolve_local_file(root: &Path, requested: &Path) -> Result<PathBuf, String> 
     Ok(candidate)
 }
 
+fn resolve_local_file_with_fallback(
+    root: &Path,
+    requested: &Path,
+    fallback_root: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let Some(fallback_root) = fallback_root else {
+        return resolve_local_file(root, requested);
+    };
+    let relative = if requested.is_absolute() {
+        relative_within_root(root, requested)?
+    } else {
+        requested.to_path_buf()
+    };
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err("文件路径超出原 Worktree 范围".to_string());
+    }
+    if let Ok(path) = resolve_local_file(root, requested) {
+        return Ok(path);
+    }
+    let fallback_root = fallback_root
+        .canonicalize()
+        .map_err(|error| format!("无法访问仓库主目录: {error}"))?;
+    let candidate = fallback_root
+        .join(&relative)
+        .canonicalize()
+        .map_err(|_| "主目录中未找到对应文件".to_string())?;
+    if !candidate.starts_with(&fallback_root) {
+        return Err("映射后的文件路径超出仓库主目录".to_string());
+    }
+    if !candidate.is_file() {
+        return Err("主目录中的映射目标不是普通文件".to_string());
+    }
+    Ok(candidate)
+}
+
+#[cfg(not(windows))]
+fn relative_within_root(root: &Path, requested: &Path) -> Result<PathBuf, String> {
+    requested
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .map_err(|_| "文件路径超出原 Worktree 范围".to_string())
+}
+
+#[cfg(windows)]
+fn relative_within_root(root: &Path, requested: &Path) -> Result<PathBuf, String> {
+    let root_components = root.components().collect::<Vec<_>>();
+    let requested_components = requested.components().collect::<Vec<_>>();
+    if requested_components.len() < root_components.len()
+        || !root_components
+            .iter()
+            .zip(&requested_components)
+            .all(|(left, right)| {
+                left.as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+            })
+    {
+        return Err("文件路径超出原 Worktree 范围".to_string());
+    }
+    let mut relative = PathBuf::new();
+    for component in &requested_components[root_components.len()..] {
+        relative.push(component.as_os_str());
+    }
+    Ok(relative)
+}
+
 fn validate_image_bytes(media_type: &str, bytes: &[u8]) -> bool {
     match media_type {
         "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -100,8 +171,16 @@ fn validate_image_bytes(media_type: &str, bytes: &[u8]) -> bool {
 }
 
 #[tauri::command]
-pub fn read_artifact_preview(root: String, path: String) -> Result<ArtifactPreview, String> {
-    let resolved = resolve_local_file(Path::new(&root), Path::new(&path))?;
+pub fn read_artifact_preview(
+    root: String,
+    path: String,
+    fallback_root: Option<String>,
+) -> Result<ArtifactPreview, String> {
+    let resolved = resolve_local_file_with_fallback(
+        Path::new(&root),
+        Path::new(&path),
+        fallback_root.as_deref().map(Path::new),
+    )?;
     let format = artifact_format(&resolved).ok_or_else(|| "不支持预览此文件格式".to_string())?;
     let metadata = fs::metadata(&resolved).map_err(|error| error.to_string())?;
     if metadata.len() > format.max_bytes {
@@ -138,8 +217,16 @@ pub fn read_artifact_preview(root: String, path: String) -> Result<ArtifactPrevi
 }
 
 #[tauri::command]
-pub fn open_local_file(root: String, path: String) -> Result<(), String> {
-    let resolved = resolve_local_file(Path::new(&root), Path::new(&path))?;
+pub fn open_local_file(
+    root: String,
+    path: String,
+    fallback_root: Option<String>,
+) -> Result<(), String> {
+    let resolved = resolve_local_file_with_fallback(
+        Path::new(&root),
+        Path::new(&path),
+        fallback_root.as_deref().map(Path::new),
+    )?;
     crate::file_opener::open_path(&resolved, false)
 }
 
@@ -197,6 +284,7 @@ mod tests {
         assert!(read_artifact_preview(
             root.to_string_lossy().into_owned(),
             outside_file.to_string_lossy().into_owned(),
+            None,
         )
         .is_ok());
 
@@ -229,9 +317,12 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("demo.html"), "<!doctype html><h1>demo</h1>").unwrap();
 
-        let preview =
-            read_artifact_preview(root.to_string_lossy().into_owned(), "demo.html".to_string())
-                .unwrap();
+        let preview = read_artifact_preview(
+            root.to_string_lossy().into_owned(),
+            "demo.html".to_string(),
+            None,
+        )
+        .unwrap();
         assert_eq!(preview.kind, "html");
         assert_eq!(
             preview.text.as_deref(),
@@ -248,9 +339,12 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("fake.gif"), "not a gif").unwrap();
 
-        let error =
-            read_artifact_preview(root.to_string_lossy().into_owned(), "fake.gif".to_string())
-                .unwrap_err();
+        let error = read_artifact_preview(
+            root.to_string_lossy().into_owned(),
+            "fake.gif".to_string(),
+            None,
+        )
+        .unwrap_err();
         assert!(error.contains("内容与扩展名不匹配"));
 
         fs::remove_dir_all(root).unwrap();

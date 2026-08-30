@@ -248,6 +248,18 @@
     "mergeTagConfirm": "“{target}”已存在。将“{source}”涉及的 {count} 个会话合并到该标签？",
     "deleteTagConfirm": "删除标签“{tag}”并从 {count} 个会话中移除？"
   },
+  "worktreeSession": {
+    "linked": "Worktree",
+    "linkedTooltip": "来源 Worktree：{name} · 分支：{branch}\n{path}",
+    "deleted": "原工作区已删除",
+    "deletedTooltip": "原 Worktree 已不可用，会话历史仍可阅读和检索。\n{path}",
+    "cwdUnavailable": "原 Worktree 已删除，依赖该目录的操作不可用",
+    "continueInMain": "在主目录续写",
+    "continuing": "正在续写…",
+    "continueUnsupported": "当前引擎不支持从历史上下文在新目录创建会话",
+    "mainUnavailable": "仓库主目录当前不可用",
+    "continueFailed": "无法在主目录续写"
+  },
   "subAgent": {
     "panel": "子 Agent"
   },

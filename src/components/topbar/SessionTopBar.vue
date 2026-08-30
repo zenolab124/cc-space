@@ -31,6 +31,8 @@ const props = defineProps<{
   projectId: string
   /** session.cwd(终端/VSCode 打开用) */
   cwd: string | null
+  /** cwd 已失效时保留动作但禁用，并展示原因。 */
+  cwdUnavailableReason?: string
   /** git 分支 */
   gitBranch: string | null
   /** 真实跑过的最近 assistant 消息的 model 字符串(jsonl 里 message.model;含 [1m] 后缀如有) */
@@ -162,7 +164,7 @@ function onReload() {
 
 async function openInFinder() {
   menuOpen.value = false
-  if (!props.cwd) return
+  if (!props.cwd || props.cwdUnavailableReason) return
   try {
     await invoke('open_in_finder', { path: props.cwd })
   } catch (e) {
@@ -172,7 +174,7 @@ async function openInFinder() {
 
 async function openInTerminal() {
   menuOpen.value = false
-  if (!props.cwd) return
+  if (!props.cwd || props.cwdUnavailableReason) return
   try {
     // 带上会话渠道(--settings <渠道文件>),终端恢复不静默回落官方
     await invoke('resume_in_terminal', {
@@ -191,7 +193,7 @@ async function openInTerminal() {
 
 async function openInVscode() {
   menuOpen.value = false
-  if (!props.cwd) return
+  if (!props.cwd || props.cwdUnavailableReason) return
   try {
     await invoke('resume_in_vscode', { cwd: props.cwd })
   } catch (e) {
@@ -305,13 +307,13 @@ function onPermissionModeChange(mode: PermissionMode | null) {
           <button class="menu-item" @click="onReload">
             <span class="i-carbon-renew w-3.5 h-3.5" />{{ $t('topbar.refreshSession') }}
           </button>
-          <button v-if="cwd" class="menu-item" @click="openInFinder">
+          <button v-if="cwd" class="menu-item" :disabled="!!cwdUnavailableReason" :title="cwdUnavailableReason" @click="openInFinder">
             <span class="i-carbon-folder w-3.5 h-3.5" />{{ $t('topbar.openInFinder') }}
           </button>
-          <button v-if="cwd" class="menu-item" @click="openInTerminal">
+          <button v-if="cwd" class="menu-item" :disabled="!!cwdUnavailableReason" :title="cwdUnavailableReason" @click="openInTerminal">
             <span class="i-carbon-terminal w-3.5 h-3.5" />{{ $t('topbar.openInTerminal') }}
           </button>
-          <button v-if="cwd" class="menu-item" @click="openInVscode">
+          <button v-if="cwd" class="menu-item" :disabled="!!cwdUnavailableReason" :title="cwdUnavailableReason" @click="openInVscode">
             <span class="i-carbon-code w-3.5 h-3.5" />{{ $t('topbar.openInVscode') }}
           </button>
           <button class="menu-item text-destructive! hover:bg-destructive/10" @click="onDelete">
@@ -336,5 +338,12 @@ function onPermissionModeChange(mode: PermissionMode | null) {
 }
 .menu-item:hover {
   background: var(--muted);
+}
+.menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.menu-item:disabled:hover {
+  background: transparent;
 }
 </style>

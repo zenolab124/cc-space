@@ -9,6 +9,7 @@ import type { EngineDescriptor, EngineProject, EngineSessionSummary } from '@/en
 import { indexEngineSessions } from '@/engines/directory'
 import { usesNativeSessionSurface } from '@/engines/integration'
 import type { SourceChangeEnvelope } from '@/engines/events'
+import { useWorkspaceContexts } from '@/composables/useWorkspaceContexts'
 
 const projects = ref<Project[]>([])
 /** 数据修订号:全量与增量刷新后都 +1。增量路径原地 mutate 不换 projects 引用,
@@ -19,6 +20,8 @@ const selectedEngineIds = ref<Set<string>>(new Set())
 const loading = ref(false)
 const error = ref<string | null>(null)
 let watcherSetup = false
+let workspaceFocusSetup = false
+const { refreshWorkspaceContexts, workspaceForSession } = useWorkspaceContexts()
 
 /** 档案馆按真实项目路径合并后的展示项；底层引擎项目仍保留在 projects 中。 */
 interface ArchiveProject {
@@ -47,6 +50,7 @@ async function loadProjects() {
   try {
     projects.value = await loadEngineProjects()
     projectsRevision.value++
+    scheduleWorkspaceRefresh()
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -68,6 +72,10 @@ async function loadProjects() {
     listen<SourceChangeEnvelope>('engine-source-change', event => {
       if (!usesNativeSessionSurface(event.payload.instance)) reloadProjectsSilently()
     })
+  }
+  if (!workspaceFocusSetup) {
+    workspaceFocusSetup = true
+    window.addEventListener('focus', scheduleWorkspaceRefresh)
   }
 }
 
@@ -144,10 +152,10 @@ function mapSession(descriptor: EngineDescriptor, session: EngineSessionSummary)
   }
 }
 
-function archiveProjectKey(project: Project): string {
-  const sourcePath = project.source_path?.trim()
+function archiveSessionKey(project: Project, session: SessionSummary): string {
+  const context = workspaceForSession(session)
+  const sourcePath = context?.mainRoot?.trim() || project.source_path?.trim()
   if (sourcePath) return `path:${sourcePath.replace(/[\\/]+$/, '')}`
-  // 没有可靠真实路径的引擎项目不能按展示名合并，避免多个未分类项目撞桶。
   return `source:${project.id}`
 }
 
@@ -155,27 +163,45 @@ const archiveProjects = computed<ArchiveProject[]>(() => {
   const groups = new Map<string, ArchiveProject>()
 
   for (const project of projects.value) {
-    const key = archiveProjectKey(project)
-    const current = groups.get(key)
-    if (current) {
-      current.sessions.push(...project.sessions)
-      current.session_count += project.session_count
-      current.last_active = Math.max(current.last_active ?? 0, project.last_active ?? 0) || null
-      continue
-    }
+    for (const session of project.sessions) {
+      const key = archiveSessionKey(project, session)
+      const current = groups.get(key)
+      if (current) {
+        current.sessions.push(session)
+        current.session_count++
+        current.last_active = Math.max(current.last_active ?? 0, session.last_modified ?? 0) || null
+        continue
+      }
 
-    groups.set(key, {
-      // 该 ID 只用于档案馆选择态，不参与任何引擎 IPC。
-      id: `archive.${key}`,
-      display_path: project.source_path ?? project.display_path,
-      sessions: [...project.sessions],
-      session_count: project.session_count,
-      last_active: project.last_active,
-    })
+      groups.set(key, {
+        // 该 ID 只用于档案馆选择态，不参与任何引擎 IPC。
+        id: `archive.${key}`,
+        display_path: workspaceForSession(session)?.mainRoot
+          ?? project.source_path
+          ?? project.display_path,
+        sessions: [session],
+        session_count: 1,
+        last_active: session.last_modified || project.last_active,
+      })
+    }
   }
 
   return [...groups.values()].sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
 })
+
+function scheduleWorkspaceRefresh() {
+  const snapshot = projects.value
+  void refreshWorkspaceContexts(snapshot).then(() => {
+    if (projects.value !== snapshot) return
+    const validIds = new Set(archiveProjects.value.map(project => project.id))
+    if ([...selectedProjectIds.value].some(id => !validIds.has(id))) {
+      selectedProjectIds.value = new Set()
+    }
+    projectsRevision.value++
+  }).catch(() => {
+    // Workspace 解析是档案增强能力，失败时保持现有项目分桶。
+  })
+}
 
 function numericMeta(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
@@ -214,6 +240,7 @@ async function reloadProjectsSilently() {
       projects.value = result
     }
     projectsRevision.value++
+    scheduleWorkspaceRefresh()
   } catch (_) {
     // 静默失败
   }
@@ -279,6 +306,7 @@ async function applySessionChanges(changes: SessionChange[]) {
   }
   projects.value.sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
   projectsRevision.value++
+  scheduleWorkspaceRefresh()
 }
 
 /** 切换项目选中状态(单选：点已选中的取消，点未选中的替换) */

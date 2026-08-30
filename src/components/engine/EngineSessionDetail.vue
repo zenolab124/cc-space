@@ -32,6 +32,7 @@ import SessionApprovalCard, { type SessionApprovalOption } from '@/components/se
 import SessionReadonlyBar from '@/components/session/SessionReadonlyBar.vue'
 import ArchiveSessionIdentityBar from '@/components/archive/ArchiveSessionIdentityBar.vue'
 import WorkbenchTargetButton from '@/components/workbench/WorkbenchTargetButton.vue'
+import ContinueInMainButton from '@/components/archive/ContinueInMainButton.vue'
 import ConversationUserMessage from '@/components/session/ConversationUserMessage.vue'
 import SessionBannerOverlay from '@/components/session/SessionBannerOverlay.vue'
 import SessionToolbar from '@/components/topbar/SessionToolbar.vue'
@@ -47,7 +48,8 @@ import { useNotifications } from '@/composables/useNotifications'
 import { useRuntimeDeltaShaper } from '@/composables/useRuntimeDeltaShaper'
 import { useImageInput, type PendingImage } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
-import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
+import { SESSION_FILE_FALLBACK_ROOT, SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
+import { useWorkspaceContexts } from '@/composables/useWorkspaceContexts'
 import { useStickyUserPrompt } from '@/composables/useStickyUserPrompt'
 import { TOOL_FOLD_INTERACTION, provideToolFoldState, useToolDisplayMode } from '@/composables/useToolDisplay'
 import { engineRunConfig, inheritEngineRunConfig, isFastServiceTierUnavailableError, resolveFastServiceTier, resolveInitialEngineChannel, setEngineRunConfig, type EngineCapsuleConfig } from '@/engines/runConfig'
@@ -83,7 +85,14 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (event: 'findStatus', status: SessionFindStatus): void
 }>()
-provide(SESSION_FILE_ROOT, computed(() => props.session.cwd))
+const { workspaceCwd, workspaceFileRoot, workspaceForSession, workspaceUnavailable } = useWorkspaceContexts()
+const sessionFileRoot = computed(() => workspaceFileRoot(props.session))
+provide(SESSION_FILE_ROOT, sessionFileRoot)
+provide(SESSION_FILE_FALLBACK_ROOT, computed(() => {
+  if (!workspaceUnavailable(props.session)) return null
+  const workspace = workspaceForSession(props.session)
+  return workspace?.mainAvailable ? workspace.mainRoot : null
+}))
 
 const { t, locale } = useI18n()
 const records = ref<ConversationRecord[]>([])
@@ -281,7 +290,7 @@ const commandEngineInstance = computed(() => props.session.engine ?? {
   engineId: sessionEngineId.value,
   instanceId: 'default',
 })
-const commandCwd = computed(() => props.session.cwd ?? engineDraft(props.session.id)?.cwd ?? null)
+const commandCwd = computed(() => workspaceCwd(props.session) ?? engineDraft(props.session.id)?.cwd ?? null)
 const commandCatalogContext = computed(() => ({
   engineId: sessionEngineId.value,
   cwd: commandCwd.value,
@@ -684,13 +693,16 @@ const { matchingGroupIndexes: findMatchingGroupIndexes, activeGroupIndex: findAc
   revealFindGroup,
   status => emit('findStatus', status),
 )
-const interactive = computed(() => props.mode === 'workbench' && !!reference.value)
+const interactive = computed(() => props.mode === 'workbench'
+  && !!reference.value
+  && !workspaceUnavailable(props.session))
 const canSend = computed(() => interactive.value && actions.value?.send.available === true)
 const imageDropArea = computed<HTMLElement | null | undefined>(() =>
   interactive.value && !props.hideInput ? detailRootRef.value : null,
 )
 const imageInput = useImageInput({ pasteTarget: textareaRef, dropTarget: imageDropArea })
 const runtimeUnavailableReason = computed(() => {
+  if (workspaceUnavailable(props.session)) return t('worktreeSession.cwdUnavailable')
   const reason = actions.value?.send.reasonCode ?? actions.value?.resume.reasonCode
   return reason ? t(reason, t('common.runtimeUnavailable')) : t('common.runtimeUnavailable')
 })
@@ -1017,9 +1029,10 @@ async function saveMeta() {
 
 async function openCwd() {
   menuOpen.value = false
-  if (!props.session.cwd || actions.value?.openCwd.available !== true) return
+  const cwd = workspaceCwd(props.session)
+  if (!cwd || actions.value?.openCwd.available !== true) return
   try {
-    await invoke('open_in_finder', { path: props.session.cwd })
+    await invoke('open_in_finder', { path: cwd })
   } catch (cause) {
     error.value = causeMessage(cause)
   }
@@ -1417,7 +1430,7 @@ async function forkAndSend(inputItems: RuntimeInputItem[]): Promise<boolean> {
   const source = reference.value
   const draft = engineDraft(props.session.id)
   const project = props.session.project_reference ?? draft?.project
-  const cwd = props.session.cwd ?? draft?.cwd
+  const cwd = workspaceCwd(props.session) ?? draft?.cwd
   if (!source || !project || !cwd) {
     error.value = t('common.forkSessionFailed')
     return false
@@ -2201,7 +2214,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <SessionSurface :root-ref="bindDetailRoot" :file-root="session.cwd">
+  <SessionSurface :root-ref="bindDetailRoot" :file-root="sessionFileRoot">
     <template #topbar>
       <ArchiveSessionIdentityBar
         v-if="mode === 'archive'"
@@ -2272,7 +2285,14 @@ onUnmounted(() => {
             <button v-if="mode !== 'archive'" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="toggleStar">
               <span class="h-3.5 w-3.5" :class="starred ? 'i-carbon-star-filled text-primary' : 'i-carbon-star'" />{{ t('common.star') }}
             </button>
-            <button v-if="actions?.openCwd.available" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted" @click="openCwd">
+            <button
+              v-if="actions"
+              type="button"
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45"
+              :disabled="actions.openCwd.available !== true"
+              :title="actions.openCwd.available ? '' : t(actions.openCwd.reasonCode || 'common.runtimeUnavailable')"
+              @click="openCwd"
+            >
               <span class="i-carbon-folder h-3.5 w-3.5" />{{ t('engine.openCwd') }}
             </button>
             <button v-if="mode === 'archive'" type="button" class="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-destructive hover:bg-muted" @click="softDelete">
@@ -2303,7 +2323,7 @@ onUnmounted(() => {
           :visible="interactive && sessionBannerVisible"
           :session-id="nativeSessionId"
           :resumed="sessionBannerResumed"
-          :cwd="session.cwd || ''"
+          :cwd="workspaceCwd(session) || ''"
           :model="selectedModel"
           :effort="selectedEffort"
           :features="htmlVisualEnabled ? [t('settings.htmlVisual')] : []"
@@ -2386,7 +2406,7 @@ onUnmounted(() => {
               :show-thought-process="enginePresentation.showThoughtProcess"
               :day-label="historicalGroups[virtualItem.index].dayLabel"
               :streaming="isTurnStreaming(historicalGroups[virtualItem.index].turnId)"
-              :artifact-root="session.cwd"
+              :artifact-root="sessionFileRoot"
             />
           </div>
         </div>
@@ -2410,7 +2430,7 @@ onUnmounted(() => {
               :show-thought-process="enginePresentation.showThoughtProcess"
               :day-label="group.dayLabel"
               :streaming="isTurnStreaming(group.turnId)"
-              :artifact-root="session.cwd"
+              :artifact-root="sessionFileRoot"
             />
           </div>
         </div>
@@ -2438,7 +2458,7 @@ onUnmounted(() => {
             :show-thought-process="enginePresentation.showThoughtProcess"
             :day-label="lastConversationGroup.dayLabel"
             :streaming="isTurnStreaming(lastConversationGroup.turnId)"
-            :artifact-root="session.cwd"
+            :artifact-root="sessionFileRoot"
             :auto-open-artifact="!isTurnStreaming(lastConversationGroup.turnId)"
           />
         </div>
@@ -2562,10 +2582,11 @@ onUnmounted(() => {
           <span v-else class="i-carbon-text-short-paragraph mr-1 h-3 w-3" />
           {{ currentSummary ? t('archive.refreshSummary') : t('archive.generateSummary') }}
         </button>
+        <ContinueInMainButton :session="props.session" />
         <WorkbenchTargetButton
           :session-id="props.session.id"
-          :disabled="actions?.resume.available !== true"
-          :title="actions?.resume.available === true ? '' : resumeUnavailableReason"
+          :disabled="workspaceUnavailable(props.session) || actions?.resume.available !== true"
+          :title="workspaceUnavailable(props.session) ? t('worktreeSession.cwdUnavailable') : (actions?.resume.available === true ? '' : resumeUnavailableReason)"
         />
       </SessionReadonlyBar>
     </template>

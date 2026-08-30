@@ -35,6 +35,7 @@ impl CodexEngine {
                     create: true,
                     resume: true,
                     fork: true,
+                    fork_with_cwd: true,
                     send_while_running: true,
                     interrupt: true,
                     streaming: StreamingCapabilities {

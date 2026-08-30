@@ -80,10 +80,12 @@ import SessionInteractionPanel from './session/SessionInteractionPanel.vue'
 import SessionReadonlyBar from './session/SessionReadonlyBar.vue'
 import ArchiveSessionIdentityBar from './archive/ArchiveSessionIdentityBar.vue'
 import WorkbenchTargetButton from './workbench/WorkbenchTargetButton.vue'
+import ContinueInMainButton from './archive/ContinueInMainButton.vue'
+import { useWorkspaceContexts } from '@/composables/useWorkspaceContexts'
 import ConversationUserMessage from './session/ConversationUserMessage.vue'
 import { useImageInput } from '@/composables/useImageInput'
 import { useSessionSidePanelHost } from '@/composables/useSessionSidePanelHost'
-import { SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
+import { SESSION_FILE_FALLBACK_ROOT, SESSION_FILE_ROOT } from '@/composables/useSessionFileLinks'
 import { useHtmlVisual } from '@/features'
 import SessionBannerOverlay from './session/SessionBannerOverlay.vue'
 import SessionAnchorNav, { type AnchorItem } from './SessionAnchorNav.vue'
@@ -144,6 +146,7 @@ const props = defineProps<{
   /** 工作台列实例自己的会话内查找状态；档案馆实例不传。 */
   findRequest?: SessionFindRequest | null
 }>()
+const { workspaceCwd, workspaceFileRoot, workspaceForSession, workspaceUnavailable } = useWorkspaceContexts()
 
 const emit = defineEmits<{
   (event: 'findStatus', status: SessionFindStatus): void
@@ -153,7 +156,8 @@ const { t, locale } = useI18n()
 const { confirm: confirmDialog } = useConfirm()
 
 /** 是否可交互(输入/权限决策只存在于工作台,FR-009 档案馆移除渲染而非隐藏) */
-const interactive = computed(() => props.mode === 'workbench')
+const interactive = computed(() => props.mode === 'workbench'
+  && (!currentSession.value || !workspaceUnavailable(currentSession.value.summary)))
 
 const { projects, loadProjects } = useProjects()
 const { selectedSessionId, selectSession } = useSessions()
@@ -948,10 +952,24 @@ const currentSession = computed<{ summary: SessionSummary; projectId: string } |
   if (cwd) return { summary: draftSummary(sid, cwd), projectId: cwdToProjectId(cwd) }
   return null
 })
-provide(SESSION_FILE_ROOT, computed(() => currentSession.value?.summary.cwd))
+const sessionFileRoot = computed(() => currentSession.value
+  ? workspaceFileRoot(currentSession.value.summary)
+  : null)
+provide(SESSION_FILE_ROOT, sessionFileRoot)
+provide(SESSION_FILE_FALLBACK_ROOT, computed(() => {
+  const session = currentSession.value?.summary
+  if (!session || !workspaceUnavailable(session)) return null
+  const workspace = workspaceForSession(session)
+  return workspace?.mainAvailable ? workspace.mainRoot : null
+}))
+const cwdUnavailableReason = computed(() => currentSession.value && workspaceUnavailable(currentSession.value.summary)
+  ? t('worktreeSession.cwdUnavailable')
+  : '')
 
 const claudeEngineInstance = computed(() => ({ engineId: 'claude-code', instanceId: 'default' }))
-const composerCwd = computed(() => currentSession.value?.summary.cwd ?? null)
+const composerCwd = computed(() => currentSession.value
+  ? workspaceCwd(currentSession.value.summary)
+  : null)
 const composerCommandContext = computed(() => ({
   engineId: 'claude-code',
   cwd: composerCwd.value,
@@ -1072,7 +1090,7 @@ function activateRenderSurface() {
 
 onUnmounted(detachRenderSurface)
 const imageDropArea = computed<HTMLElement | null | undefined>(() =>
-  interactive.value && !props.hideInput && currentSession.value?.summary.cwd
+  interactive.value && !props.hideInput && composerCwd.value
     ? detailRootRef.value
     : null,
 )
@@ -2060,7 +2078,8 @@ async function handleSend() {
   let text = inputText.value.trim()
   if ((!text && !imageInput.images.value.length) || !currentSession.value) return
   const cs = currentSession.value
-  if (!cs.summary.cwd) return
+  const cwd = workspaceCwd(cs.summary)
+  if (!cwd) return
 
   if (composerPrefix(text) && !composerCommandsReady.value) {
     await refreshComposerCommands()
@@ -2094,7 +2113,7 @@ async function handleSend() {
     inputText.value = ''
     if (textareaRef.value) textareaRef.value.style.height = 'auto'
     try {
-      await invoke('run_slash_in_terminal', { cwd: cs.summary.cwd, command: cmdName })
+      await invoke('run_slash_in_terminal', { cwd, command: cmdName })
       slashNotice.value = t('session.slashOpenedInTerminal', { cmd: `/${cmdName}` })
     } catch (e) {
       const msg = String(e)
@@ -2173,7 +2192,7 @@ async function handleSend() {
     enqueuePendingQueueItem(cs.summary.id, text, opts)
     return
   }
-  await sendMessage(cs.summary.id, cs.summary.cwd, text, opts)
+  await sendMessage(cs.summary.id, cwd, text, opts)
   scrollToBottom(sendFollowToken)
 }
 
@@ -2951,11 +2970,13 @@ watch(() => stream.value.streaming, async (val, oldVal) => {
 function maybeConsumeQueue() {
   if (stream.value.streaming || externalRunning.value || ownProcessBusy.value) return
   const cs = currentSession.value
-  if (!cs?.summary.cwd) return
+  if (!cs) return
+  const cwd = workspaceCwd(cs.summary)
+  if (!cwd) return
   // settle 在途:换树完成前发送会清掉未落账的上一轮 turns(丢内容),
   // 由 settle watcher 尾部的 maybeConsumeQueue 补发
   if (settlingSessions.has(cs.summary.id)) return
-  consumePendingQueue(cs.summary.id, cs.summary.cwd)
+  consumePendingQueue(cs.summary.id, cwd)
 }
 
 // 忙态翻空闲即消费:自发轮落账摘除(live 清空)、进程退出清 live 等一切翻 false
@@ -3265,7 +3286,7 @@ async function onReload() {
   <SessionSurface
     v-else
     :root-ref="bindDetailRoot"
-    :file-root="currentSession.summary.cwd"
+    :file-root="sessionFileRoot"
     @pointerdown.capture="activateRenderSurface"
   >
     <ArchiveSessionIdentityBar
@@ -3280,7 +3301,8 @@ async function onReload() {
       :session-id="currentSession.summary.id"
       :short-id-value="shortId(currentSession.summary.id)"
       :project-id="currentSession.projectId"
-      :cwd="currentSession.summary.cwd"
+      :cwd="cwdUnavailableReason ? sessionFileRoot : composerCwd"
+      :cwd-unavailable-reason="cwdUnavailableReason"
       :git-branch="currentSession.summary.git_branch"
       :model-string="displayModelString"
       :used-context-tokens="stream.realUsedTokens ?? lastAssistantContextSize"
@@ -3595,9 +3617,9 @@ async function onReload() {
             />
           </div>
           <ArtifactPreviewList
-            v-if="currentSession?.summary.cwd"
+            v-if="sessionFileRoot"
             :candidates="streamingArtifactCandidates"
-            :root="currentSession.summary.cwd"
+            :root="sessionFileRoot"
             :auto-open="!!streamResponseCompletedAt"
           />
         </AssistantResponseFrame>
@@ -3646,7 +3668,7 @@ async function onReload() {
 
     <!-- 工作台列:输入栏 + 斜杠命令面板(档案馆只读化:整块不渲染;赛马模式由共享输入替代) -->
     <SessionComposer
-      v-if="interactive && !hideInput && currentSession.summary.cwd"
+      v-if="interactive && !hideInput && composerCwd"
       :dragging="imageInput.isDragging.value"
       :busy="stream.streaming || externalRunning || ownProcessBusy"
       :has-content="!!inputText.trim() || !!imageInput.images.value.length"
@@ -3738,7 +3760,13 @@ async function onReload() {
         <span v-else class="i-carbon-text-short-paragraph w-3 h-3" />
         {{ currentSummary ? $t('archive.refreshSummary') : $t('archive.generateSummary') }}
       </button>
-      <WorkbenchTargetButton v-if="effectiveSessionId" :session-id="effectiveSessionId" />
+      <ContinueInMainButton v-if="currentSession" :session="currentSession.summary" />
+      <WorkbenchTargetButton
+        v-if="effectiveSessionId"
+        :session-id="effectiveSessionId"
+        :disabled="!!cwdUnavailableReason"
+        :title="cwdUnavailableReason"
+      />
     </SessionReadonlyBar>
     
     <!-- Runner 悬浮面板：列内 absolute，随列滚动/缩放天然跟随 -->
@@ -3751,7 +3779,7 @@ async function onReload() {
       <RunnerPanel
         mode="float"
         :session-id="currentSession?.summary.id ?? ''"
-        :session-cwd="currentSession?.summary.cwd ?? ''"
+        :session-cwd="composerCwd ?? ''"
         :project-name="currentSession?.projectId ?? ''"
         @close="closeRunnerPanel"
         @toggle-pin="toggleRunnerPin"
@@ -3785,7 +3813,7 @@ async function onReload() {
         ref="ledgerPanelRef"
         :modified="ledgerModified"
         :read-only="ledgerReadOnly"
-        :cwd="currentSession?.summary.cwd ?? null"
+        :cwd="composerCwd"
         :session-id="currentSession?.summary.id ?? null"
         @close="ledgerPanelOpen = false"
         @locate="locateToolUse"
@@ -3794,7 +3822,7 @@ async function onReload() {
         v-if="runnerDockOpen"
         mode="dock"
         :session-id="currentSession?.summary.id ?? ''"
-        :session-cwd="currentSession?.summary.cwd ?? ''"
+        :session-cwd="composerCwd ?? ''"
         :project-name="currentSession?.projectId ?? ''"
         @close="closeRunnerPanel"
         @toggle-pin="toggleRunnerPin"
