@@ -1173,6 +1173,19 @@
       "runtimeCacheWarning": "The selected runtime {runtime} differs from the current model cache {cache}. The first initialization after restart may take about 5 seconds longer.",
       "runtimeRestartHint": "The runtime selection is saved. Restart Monet to switch.",
       "runtimeSaved": "Runtime selection saved.",
+      "computerUseTitle": "Computer Use",
+      "computerUseStatus": {
+        "ready": "Basic check passed",
+        "unavailable": "Not detected",
+        "needsSetup": "Setup needed",
+        "needsRefresh": "Update needed"
+      },
+      "computerUseHint": {
+        "ready": "The plugin and local service versions match. Monet reconnects automatically before the next turn when the Codex runtime changes.",
+        "unavailable": "The Computer Use plugin was not detected.",
+        "needsSetup": "The local service is incomplete. Initialize Computer Use once in ChatGPT.",
+        "needsRefresh": "Plugin {plugin} and local service {helper} do not match. Reopen ChatGPT and Monet, then refresh."
+      },
       "versionUnknown": "Version unknown",
       "refresh": "Refresh"
     },

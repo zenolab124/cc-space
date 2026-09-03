@@ -35,6 +35,24 @@ pub struct CodexEnvInfo {
     pub runtime_selection_suggested: bool,
     pub cache_version: Option<String>,
     pub cache_version_mismatch: bool,
+    pub computer_use: Option<ComputerUseEnvInfo>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ComputerUseEnvStatus {
+    Ready,
+    Unavailable,
+    NeedsSetup,
+    NeedsRefresh,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUseEnvInfo {
+    pub status: ComputerUseEnvStatus,
+    pub plugin_version: Option<String>,
+    pub helper_version: Option<String>,
 }
 
 fn emit_install_progress(app: &AppHandle, phase: &str) {
@@ -194,6 +212,100 @@ fn read_cache_version() -> Option<String> {
         .map(str::to_string)
 }
 
+#[cfg(target_os = "macos")]
+fn plist_string(path: &Path, key: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let after_key = contents.split_once(&format!("<key>{key}</key>"))?.1;
+    let after_open = after_key.split_once("<string>")?.1;
+    Some(after_open.split_once("</string>")?.0.trim().to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn latest_computer_use_plugin_version(home: &Path) -> Option<String> {
+    std::fs::read_dir(
+        home.join("plugins")
+            .join("cache")
+            .join("openai-bundled")
+            .join("computer-use"),
+    )
+    .ok()?
+    .filter_map(Result::ok)
+    .filter_map(|entry| {
+        let manifest =
+            std::fs::read(entry.path().join(".codex-plugin").join("plugin.json")).ok()?;
+        serde_json::from_slice::<serde_json::Value>(&manifest)
+            .ok()?
+            .get("version")?
+            .as_str()
+            .map(str::to_string)
+    })
+    .max_by(|left, right| {
+        version_parts(left)
+            .map(|parts| parts.0)
+            .cmp(&version_parts(right).map(|parts| parts.0))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn computer_use_status(
+    plugin_version: Option<&str>,
+    helper_version: Option<&str>,
+    helper_complete: bool,
+) -> ComputerUseEnvStatus {
+    let Some(plugin_version) = plugin_version else {
+        return ComputerUseEnvStatus::Unavailable;
+    };
+    if !helper_complete {
+        return ComputerUseEnvStatus::NeedsSetup;
+    }
+    let expected_build = plugin_version
+        .split_once('-')
+        .map_or(plugin_version, |(core, _)| core)
+        .rsplit('.')
+        .next();
+    if helper_version != expected_build {
+        return ComputerUseEnvStatus::NeedsRefresh;
+    }
+    ComputerUseEnvStatus::Ready
+}
+
+#[cfg(target_os = "macos")]
+fn computer_use_env_info() -> Option<ComputerUseEnvInfo> {
+    let home = codex_home()?;
+    let plugin_version = latest_computer_use_plugin_version(&home);
+    let helper = home.join("computer-use").join("Codex Computer Use.app");
+    let service = helper
+        .join("Contents")
+        .join("MacOS")
+        .join("SkyComputerUseService");
+    let client = helper
+        .join("Contents")
+        .join("SharedSupport")
+        .join("SkyComputerUseClient.app")
+        .join("Contents")
+        .join("MacOS")
+        .join("SkyComputerUseClient");
+    let helper_version = plist_string(
+        &helper.join("Contents").join("Info.plist"),
+        "CFBundleVersion",
+    );
+    let status = computer_use_status(
+        plugin_version.as_deref(),
+        helper_version.as_deref(),
+        service.is_file() && client.is_file(),
+    );
+    Some(ComputerUseEnvInfo {
+        status,
+        plugin_version,
+        helper_version,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn computer_use_env_info() -> Option<ComputerUseEnvInfo> {
+    None
+}
+
 fn tail(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.len() <= OUTPUT_TAIL {
@@ -257,6 +369,7 @@ fn codex_env_check_sync() -> CodexEnvInfo {
         runtime_selection_suggested,
         cache_version,
         cache_version_mismatch,
+        computer_use: computer_use_env_info(),
     }
 }
 
@@ -383,5 +496,26 @@ mod tests {
         assert!(!should_suggest_runtime_selection(
             true, false, true, true, false
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn classifies_computer_use_component_state() {
+        assert_eq!(
+            computer_use_status(Some("1.0.1000919"), Some("1000919"), true),
+            ComputerUseEnvStatus::Ready
+        );
+        assert_eq!(
+            computer_use_status(Some("1.0.1000920"), Some("1000919"), true),
+            ComputerUseEnvStatus::NeedsRefresh
+        );
+        assert_eq!(
+            computer_use_status(Some("1.0.1000919"), Some("1000919"), false),
+            ComputerUseEnvStatus::NeedsSetup
+        );
+        assert_eq!(
+            computer_use_status(None, Some("1000919"), true),
+            ComputerUseEnvStatus::Unavailable
+        );
     }
 }

@@ -1173,6 +1173,19 @@
       "runtimeCacheWarning": "所选运行时 {runtime} 与当前模型缓存 {cache} 不一致；重启后的首次初始化可能额外等待约 5 秒。",
       "runtimeRestartHint": "运行时选择已保存，需重启 Monet 切换。",
       "runtimeSaved": "运行时选择已保存。",
+      "computerUseTitle": "Computer Use",
+      "computerUseStatus": {
+        "ready": "基础检查正常",
+        "unavailable": "未检测到",
+        "needsSetup": "待初始化",
+        "needsRefresh": "组件需更新"
+      },
+      "computerUseHint": {
+        "ready": "插件与本地服务版本一致；Codex 运行时换代后会在下一轮任务前自动重连。",
+        "unavailable": "当前未检测到 Computer Use 插件。",
+        "needsSetup": "本地服务组件不完整，请先在 ChatGPT 中完成一次 Computer Use 初始化。",
+        "needsRefresh": "插件 {plugin} 与本地服务 {helper} 不一致，请重新打开 ChatGPT 与 Monet 后刷新。"
+      },
       "versionUnknown": "版本未知",
       "refresh": "刷新"
     },

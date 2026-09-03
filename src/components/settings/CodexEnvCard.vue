@@ -57,6 +57,20 @@ function normalizeVersion(version: string) {
 const selectedCacheMismatch = computed(() => !!configuredRuntimeVersion.value
   && !!info.value?.cacheVersion
   && normalizeVersion(configuredRuntimeVersion.value) !== normalizeVersion(info.value.cacheVersion))
+const computerUseStatusKey = computed(() => {
+  const status = info.value?.computerUse?.status ?? 'unavailable'
+  return `settings.codexEnv.computerUseStatus.${status}`
+})
+const computerUseHintKey = computed(() => {
+  const status = info.value?.computerUse?.status ?? 'unavailable'
+  return `settings.codexEnv.computerUseHint.${status}`
+})
+const computerUseBadgeClass = computed(() => {
+  const status = info.value?.computerUse?.status
+  if (status === 'ready') return 'ok'
+  if (status === 'unavailable') return 'info'
+  return 'warn'
+})
 
 const installOptions = computed(() => {
   if (isWindows) {
@@ -174,6 +188,24 @@ onUnmounted(() => {
     <p v-if="info?.binaryPath && !info.latestVersion" class="mt-0.5 text-[10px] text-muted-foreground">
       {{ t('settings.codexEnv.latestUnknown') }}
     </p>
+
+    <div v-if="info?.computerUse" class="mt-2 flex items-start gap-2 border-t border-border pt-2">
+      <span class="i-carbon-application-web mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <div class="min-w-0 flex-1">
+        <p class="text-[10.5px] font-medium text-foreground">
+          {{ t('settings.codexEnv.computerUseTitle') }}
+        </p>
+        <p class="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+          {{ t(computerUseHintKey, {
+            plugin: info.computerUse.pluginVersion ?? '?',
+            helper: info.computerUse.helperVersion ?? '?',
+          }) }}
+        </p>
+      </div>
+      <span :class="['env-badge', computerUseBadgeClass]">
+        {{ t(computerUseStatusKey) }}
+      </span>
+    </div>
 
     <div
       v-if="info?.cacheVersionMismatch && !showRuntimeSelector"

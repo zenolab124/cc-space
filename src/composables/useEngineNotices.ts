@@ -16,9 +16,17 @@ export interface CodexEnvInfo {
   runtimeSelectionSuggested: boolean
   cacheVersion: string | null
   cacheVersionMismatch: boolean
+  computerUse: ComputerUseEnvInfo | null
 }
 
 export type CodexRuntimeSource = 'standalone' | 'desktop'
+export type ComputerUseEnvStatus = 'ready' | 'unavailable' | 'needsSetup' | 'needsRefresh'
+
+export interface ComputerUseEnvInfo {
+  status: ComputerUseEnvStatus
+  pluginVersion: string | null
+  helperVersion: string | null
+}
 
 const codexInfo = ref<CodexEnvInfo | null>(null)
 const checking = ref(false)

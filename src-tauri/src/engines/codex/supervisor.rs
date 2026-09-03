@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -63,6 +64,15 @@ struct Connection {
     commands: SyncSender<ActorCommand>,
     epoch: u64,
     alive: Arc<AtomicBool>,
+    active_turns: Arc<AtomicU64>,
+    runtime_identity: Option<RuntimeIdentity>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RuntimeIdentity {
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
 }
 
 struct ConnectionLiveness(Arc<AtomicBool>);
@@ -125,6 +135,7 @@ impl CodexSupervisor {
     }
 
     pub fn ensure_ready(&self) -> EngineResult<()> {
+        let mut restart_connection = false;
         loop {
             let mut readiness = self
                 .readiness
@@ -142,12 +153,18 @@ impl CodexSupervisor {
                         .unwrap_or_else(|error| error.into_inner());
                     drop(readiness);
                 }
-                ReadinessState::Ready { runtime_version }
-                    if crate::codex_env::cache_matches_version(runtime_version.as_deref()) =>
-                {
-                    return Ok(());
-                }
-                ReadinessState::Ready { .. } => {
+                ReadinessState::Ready { runtime_version } => {
+                    let runtime_current = self.connection_uses_current_runtime();
+                    if runtime_current
+                        && crate::codex_env::cache_matches_version(runtime_version.as_deref())
+                    {
+                        return Ok(());
+                    }
+                    // 不打断正在输出的轮次；轮次结束后的下一次 readiness 检查会换代。
+                    if !runtime_current && self.connection_has_active_turns() {
+                        return Ok(());
+                    }
+                    restart_connection = !runtime_current;
                     *readiness = ReadinessState::Warming;
                     break;
                 }
@@ -168,6 +185,10 @@ impl CodexSupervisor {
             phase: CodexReadinessPhase::Warming,
             error: None,
         });
+        if restart_connection {
+            log::info!("Codex runtime changed on disk; reconnecting App Server");
+            self.disconnect();
+        }
         let runtime_version = crate::codex_env::current_runtime_version();
         let result = self
             .request("model/list", json!({ "cursor": null, "limit": 1 }))
@@ -269,6 +290,36 @@ impl CodexSupervisor {
         }
     }
 
+    fn connection_uses_current_runtime(&self) -> bool {
+        let current = crate::codex_locator::locate()
+            .ok()
+            .as_deref()
+            .and_then(runtime_identity);
+        let guard = self
+            .connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(connection) = guard
+            .as_ref()
+            .filter(|connection| connection.alive.load(Ordering::Acquire))
+        else {
+            return false;
+        };
+        matches!(
+            (&connection.runtime_identity, current),
+            (Some(existing), Some(current)) if existing == &current
+        )
+    }
+
+    fn connection_has_active_turns(&self) -> bool {
+        self.connection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .filter(|connection| connection.alive.load(Ordering::Acquire))
+            .is_some_and(|connection| connection.active_turns.load(Ordering::Acquire) > 0)
+    }
+
     fn request_once(&self, id: u64, method: &str, params: Value) -> EngineResult<(Value, u64)> {
         let connection = self.connection()?;
         let (response_tx, response_rx) = mpsc::channel();
@@ -313,6 +364,7 @@ impl CodexSupervisor {
         let binary = crate::codex_locator::locate().map_err(|_| {
             EngineError::new(EngineErrorKind::Unavailable, "Codex CLI is not installed")
         })?;
+        let runtime_identity = runtime_identity(&binary);
         let mut client = AppServerClient::spawn(&binary).map_err(map_transport_error)?;
         let deadline = Instant::now() + CONNECT_TIMEOUT;
         client
@@ -338,14 +390,18 @@ impl CodexSupervisor {
         let sinks = Arc::clone(&self.sinks);
         let alive = Arc::new(AtomicBool::new(true));
         let actor_alive = Arc::clone(&alive);
+        let active_turns = Arc::new(AtomicU64::new(0));
+        let actor_active_turns = Arc::clone(&active_turns);
         std::thread::spawn(move || {
             let _liveness = ConnectionLiveness(actor_alive);
-            actor_loop(client, receiver, sinks);
+            actor_loop(client, receiver, sinks, actor_active_turns);
         });
         let connection = Connection {
             commands,
             epoch: self.next_connection_epoch.fetch_add(1, Ordering::Relaxed),
             alive,
+            active_turns,
+            runtime_identity,
         };
         *guard = Some(connection.clone());
         Ok(connection)
@@ -369,8 +425,10 @@ fn actor_loop(
     mut client: AppServerClient,
     commands: Receiver<ActorCommand>,
     sinks: Arc<Mutex<Vec<CodexProtocolSink>>>,
+    active_turns: Arc<AtomicU64>,
 ) {
     let mut pending: BTreeMap<RequestId, Sender<EngineResult<Value>>> = BTreeMap::new();
+    let mut pending_turn_starts = BTreeSet::new();
     let mut active_turn = false;
     loop {
         let command_wait = if active_turn || !pending.is_empty() {
@@ -387,12 +445,17 @@ fn actor_loop(
             }) => {
                 if method == "turn/start" {
                     active_turn = true;
+                    active_turns.fetch_add(1, Ordering::AcqRel);
+                    pending_turn_starts.insert(RequestId::Number(id));
                 }
                 match client.send_request(id, &method, params) {
                     Ok(()) => {
                         pending.insert(RequestId::Number(id), response);
                     }
                     Err(error) => {
+                        if pending_turn_starts.remove(&RequestId::Number(id)) {
+                            decrement_active_turns(&active_turns);
+                        }
                         let _ = response.send(Err(map_transport_error(error)));
                     }
                 }
@@ -413,21 +476,28 @@ fn actor_loop(
         loop {
             match client.receive(Duration::from_millis(1)) {
                 Ok(IncomingMessage::Response { id, result }) => {
+                    pending_turn_starts.remove(&id);
                     if let Some(response) = pending.remove(&id) {
                         let _ = response.send(Ok(result));
                     }
                 }
                 Ok(IncomingMessage::ErrorResponse { id, error }) => {
+                    if pending_turn_starts.remove(&id) {
+                        decrement_active_turns(&active_turns);
+                    }
                     if let Some(response) = pending.remove(&id) {
                         let _ = response.send(Err(map_rpc_error(error)));
                     }
                 }
                 Ok(message) => {
-                    if matches!(
-                        &message,
-                        IncomingMessage::Notification { method, .. } if method == "turn/completed"
-                    ) {
-                        active_turn = false;
+                    if let IncomingMessage::Notification { method, .. } = &message {
+                        match method.as_str() {
+                            "turn/completed" => {
+                                active_turn = false;
+                                decrement_active_turns(&active_turns);
+                            }
+                            _ => {}
+                        }
                     }
                     let callbacks = sinks
                         .lock()
@@ -448,6 +518,22 @@ fn actor_loop(
             }
         }
     }
+}
+
+fn decrement_active_turns(active_turns: &AtomicU64) {
+    let _ = active_turns.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+        Some(count.saturating_sub(1))
+    });
+}
+
+fn runtime_identity(path: &Path) -> Option<RuntimeIdentity> {
+    let path = path.canonicalize().ok()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    Some(RuntimeIdentity {
+        path,
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
 }
 
 fn map_rpc_error(error: RpcError) -> EngineError {
@@ -560,5 +646,23 @@ mod tests {
     fn retry_delay_is_bounded_and_jittered() {
         assert_ne!(retry_delay(1, 0), retry_delay(2, 0));
         assert!(retry_delay(42, 20) <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn runtime_identity_detects_an_in_place_binary_change() {
+        let path = std::env::temp_dir().join(format!(
+            "monet-codex-runtime-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"old").unwrap();
+        let before = runtime_identity(&path).unwrap();
+        std::fs::write(&path, b"new-runtime").unwrap();
+        let after = runtime_identity(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_ne!(before, after);
     }
 }
