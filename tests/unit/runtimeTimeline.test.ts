@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  anchorOptimisticUserRecord,
   bindOptimisticUserTurn,
   composeRuntimeTimeline,
+  createOptimisticUserRecord,
   hasLiveTurn,
   optimisticUserSourceMeta,
   reconcileLiveRecords,
@@ -278,6 +280,65 @@ describe('live history reconciliation', () => {
       'assistant-1',
       'pending-user-2',
       'assistant-2',
+    ])
+  })
+
+  it('keeps an immediately interrupted prompt before later persisted turns', () => {
+    const previousUser = record({ id: 'user-1', role: 'user', turnId: 'turn-1' })
+    const previousResponse = record({ id: 'assistant-1', turnId: 'turn-1' })
+    const interrupted = createOptimisticUserRecord(session, 'pending-user-2', 'mistyped')
+    interrupted.turnId = 'turn-2'
+    anchorOptimisticUserRecord(interrupted, previousResponse)
+    const laterUser = record({ id: 'user-3', role: 'user', turnId: 'turn-3' })
+    const laterResponse = record({ id: 'assistant-3', turnId: 'turn-3' })
+
+    expect(composeRuntimeTimeline(
+      [previousUser, previousResponse, laterUser, laterResponse],
+      [interrupted],
+    ).map(item => item.id)).toEqual([
+      'user-1',
+      'assistant-1',
+      'pending-user-2',
+      'user-3',
+      'assistant-3',
+    ])
+  })
+
+  it('keeps an immediately interrupted first prompt at the timeline start', () => {
+    const interrupted = createOptimisticUserRecord(session, 'pending-user-1', 'mistyped')
+    interrupted.turnId = 'turn-1'
+    anchorOptimisticUserRecord(interrupted, null)
+    const laterUser = record({ id: 'user-2', role: 'user', turnId: 'turn-2' })
+    const laterResponse = record({ id: 'assistant-2', turnId: 'turn-2' })
+
+    expect(composeRuntimeTimeline(
+      [laterUser, laterResponse],
+      [interrupted],
+    ).map(item => item.id)).toEqual([
+      'pending-user-1',
+      'user-2',
+      'assistant-2',
+    ])
+  })
+
+  it('preserves the order of consecutive immediately interrupted prompts', () => {
+    const previous = record({ id: 'assistant-0', turnId: 'turn-0' })
+    const firstInterrupted = createOptimisticUserRecord(session, 'pending-user-1', 'first')
+    firstInterrupted.turnId = 'turn-1'
+    anchorOptimisticUserRecord(firstInterrupted, previous)
+    const secondInterrupted = createOptimisticUserRecord(session, 'pending-user-2', 'second')
+    secondInterrupted.turnId = 'turn-2'
+    anchorOptimisticUserRecord(secondInterrupted, firstInterrupted)
+    const later = record({ id: 'assistant-3', turnId: 'turn-3' })
+
+    expect(composeRuntimeTimeline(
+      [previous, later],
+      [firstInterrupted, secondInterrupted],
+    ).map(item => item.id)).toEqual([
+      'assistant-0',
+      'pending-user-1',
+      'pending-user-2',
+      'assistant-3',
     ])
   })
 

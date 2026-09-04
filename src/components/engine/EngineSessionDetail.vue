@@ -11,7 +11,7 @@ import { sameInstance } from '@/engines/identity'
 import { sessionUiId } from '@/engines/integration'
 import { buildEngineAsyncTasks } from '@/engines/asyncTasks'
 import { resolveEnginePresentation } from '@/engines/presentation'
-import { bindOptimisticUserTurn, composeRuntimeTimeline, createOptimisticUserRecord, hasLiveTurn, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, runtimeVisualReconciliationDecision, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
+import { anchorOptimisticUserRecord, bindOptimisticUserTurn, composeRuntimeTimeline, createOptimisticUserRecord, hasLiveTurn, reconcileLiveRecords, reduceRuntimeTimeline, reduceRuntimeVisualActivity, runtimeVisualReconciliationDecision, syncRuntimeVisualActivity } from '@/engines/runtimeTimeline'
 import { bindLatestRuntimeOptimisticInput, reconcileRuntimeOptimisticInputs, useRuntimeOptimisticInputs } from '@/engines/runtimeOptimisticInput'
 import EngineConversationGroup from './EngineConversationGroup.vue'
 import EngineSegmentBlock from './EngineSegmentBlock.vue'
@@ -1607,13 +1607,17 @@ async function submitRuntimeInput(item: QueuedRuntimeInput, restoreDraft: boolea
   sending.value = true
   error.value = null
   const optimisticId = `pending-user-${Date.now()}`
+  const currentTimeline = allRecords.value
+  const predecessor = currentTimeline.length ? currentTimeline[currentTimeline.length - 1] : null
   // startTurn 每次创建新 turn；不能继承可能滞后的运行时快照。
-  liveRecords.value.push(createOptimisticUserRecord(
+  const optimisticRecord = createOptimisticUserRecord(
     reference.value,
     optimisticId,
     item.text,
     item.images,
-  ))
+  )
+  anchorOptimisticUserRecord(optimisticRecord, predecessor)
+  liveRecords.value.push(optimisticRecord)
   try {
     const turn = await startTurnWithFastFallback(reference.value, item.input, item.config)
     liveRecords.value = bindOptimisticUserTurn(

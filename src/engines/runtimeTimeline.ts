@@ -9,6 +9,8 @@ import type {
 } from './types'
 
 const OPTIMISTIC_RECORD = 'optimistic'
+const OPTIMISTIC_PREDECESSOR_TURN = 'optimisticPredecessorTurnId'
+const OPTIMISTIC_PREDECESSOR_RECORD = 'optimisticPredecessorRecordId'
 
 export interface RuntimeTimelineEffect {
   records: ConversationRecord[]
@@ -288,6 +290,18 @@ export function createOptimisticUserRecord(
   }
 }
 
+/**
+ * 记录乐观输入创建时的时间线前驱。若输入在落盘前被立即中断，历史源可能不会
+ * 返回该 turn；前驱仍可把这条仅存于内存的输入固定在原位置，避免后续刷新时沉底。
+ */
+export function anchorOptimisticUserRecord(
+  record: ConversationRecord,
+  predecessor: ConversationRecord | null,
+): void {
+  record.sourceMeta[OPTIMISTIC_PREDECESSOR_TURN] = predecessor?.turnId ?? null
+  record.sourceMeta[OPTIMISTIC_PREDECESSOR_RECORD] = predecessor?.id ?? null
+}
+
 /** 用 turn/start 的权威返回值收口乐观用户消息，避免依赖通知与 source reload 的先后。 */
 export function bindOptimisticUserTurn(
   records: ConversationRecord[],
@@ -331,6 +345,31 @@ export function composeRuntimeTimeline(
       if (merged[index].turnId === record.turnId) sameTurnIndexes.push(index)
     }
     if (sameTurnIndexes.length === 0) {
+      const hasPredecessor = Object.prototype.hasOwnProperty.call(
+        record.sourceMeta,
+        OPTIMISTIC_PREDECESSOR_TURN,
+      )
+      if (record.sourceMeta[OPTIMISTIC_RECORD] === true && hasPredecessor) {
+        const predecessorTurnId = record.sourceMeta[OPTIMISTIC_PREDECESSOR_TURN]
+        const predecessorRecordId = record.sourceMeta[OPTIMISTIC_PREDECESSOR_RECORD]
+        let predecessorIndex = -1
+        if (typeof predecessorTurnId === 'string') {
+          for (let index = merged.length - 1; index >= 0; index--) {
+            if (merged[index].turnId === predecessorTurnId) {
+              predecessorIndex = index
+              break
+            }
+          }
+        }
+        if (predecessorIndex < 0 && typeof predecessorRecordId === 'string') {
+          predecessorIndex = merged.findIndex(item => item.id === predecessorRecordId)
+        }
+        const startsTimeline = predecessorTurnId === null && predecessorRecordId === null
+        if (predecessorIndex >= 0 || startsTimeline) {
+          merged.splice(predecessorIndex + 1, 0, record)
+          continue
+        }
+      }
       merged.push(record)
       continue
     }
