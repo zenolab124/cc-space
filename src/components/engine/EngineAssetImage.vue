@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { resolveAsset } from '@/engines/client'
+import { resolveAssetLimited } from '@/engines/assetLoader'
 import type { ToolResultAttachment } from '@/engines/types'
 import { errorMessage } from '@/utils/errorMessage'
 import { showImageContextMenu } from '@/composables/useImageActions'
@@ -35,7 +35,7 @@ async function loadAsset() {
   loadingAsset.value = true
   assetError.value = null
   try {
-    const result = await resolveAsset(
+    const result = await resolveAssetLimited(
       props.attachment.asset.session,
       props.attachment.asset.nativeId,
       true,
@@ -60,7 +60,7 @@ async function openLightbox() {
   loadingFullAsset.value = true
   assetError.value = null
   try {
-    const result = await resolveAsset(
+    const result = await resolveAssetLimited(
       props.attachment.asset.session,
       props.attachment.asset.nativeId,
     )

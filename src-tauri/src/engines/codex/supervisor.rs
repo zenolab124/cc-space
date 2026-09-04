@@ -21,6 +21,7 @@ pub const CODEX_READINESS_EVENT: &str = "codex-readiness-changed";
 
 pub type CodexProtocolSink = Arc<dyn Fn(IncomingMessage) + Send + Sync>;
 pub type CodexReadinessSink = Arc<dyn Fn(CodexReadinessSnapshot) + Send + Sync>;
+pub type CodexConnectionClosedSink = Arc<dyn Fn(u64) + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +41,7 @@ pub struct CodexReadinessSnapshot {
 pub struct CodexSupervisor {
     connection: Mutex<Option<Connection>>,
     sinks: Arc<Mutex<Vec<CodexProtocolSink>>>,
+    connection_closed_sinks: Arc<Mutex<Vec<CodexConnectionClosedSink>>>,
     readiness: Mutex<ReadinessState>,
     readiness_changed: Condvar,
     readiness_sinks: Mutex<Vec<CodexReadinessSink>>,
@@ -103,6 +105,7 @@ impl CodexSupervisor {
         Arc::new(Self {
             connection: Mutex::new(None),
             sinks: Arc::new(Mutex::new(Vec::new())),
+            connection_closed_sinks: Arc::new(Mutex::new(Vec::new())),
             readiness: Mutex::new(ReadinessState::Idle),
             readiness_changed: Condvar::new(),
             readiness_sinks: Mutex::new(Vec::new()),
@@ -120,6 +123,13 @@ impl CodexSupervisor {
 
     pub fn subscribe_readiness(&self, sink: CodexReadinessSink) {
         self.readiness_sinks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(sink);
+    }
+
+    pub fn subscribe_connection_closed(&self, sink: CodexConnectionClosedSink) {
+        self.connection_closed_sinks
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(sink);
@@ -246,6 +256,17 @@ impl CodexSupervisor {
         self.request_once(id, method, params.clone())
             .or_else(|error| {
                 if !error.retryable {
+                    return Err(error);
+                }
+                // 历史读取、资源解析和运行中轮次共享同一条 App Server 连接。
+                // 活跃轮次存在时，辅助请求超时只能让该请求失败，不能通过重连
+                // 杀掉仍在输出的轮次。连接若已真正退出，liveness 会使这里返回
+                // false，后续请求仍可正常重建连接。
+                if self.connection_has_active_turns() {
+                    log::warn!(
+                        "Codex App Server request failed during an active turn; preserving connection method={method} errorKind={:?}",
+                        error.kind
+                    );
                     return Err(error);
                 }
                 self.disconnect();
@@ -388,17 +409,27 @@ impl CodexSupervisor {
 
         let (commands, receiver) = mpsc::sync_channel(256);
         let sinks = Arc::clone(&self.sinks);
+        let connection_closed_sinks = Arc::clone(&self.connection_closed_sinks);
         let alive = Arc::new(AtomicBool::new(true));
         let actor_alive = Arc::clone(&alive);
         let active_turns = Arc::new(AtomicU64::new(0));
         let actor_active_turns = Arc::clone(&active_turns);
+        let epoch = self.next_connection_epoch.fetch_add(1, Ordering::Relaxed);
         std::thread::spawn(move || {
-            let _liveness = ConnectionLiveness(actor_alive);
+            let liveness = ConnectionLiveness(actor_alive);
             actor_loop(client, receiver, sinks, actor_active_turns);
+            drop(liveness);
+            let callbacks = connection_closed_sinks
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            for callback in callbacks {
+                callback(epoch);
+            }
         });
         let connection = Connection {
             commands,
-            epoch: self.next_connection_epoch.fetch_add(1, Ordering::Relaxed),
+            epoch,
             alive,
             active_turns,
             runtime_identity,

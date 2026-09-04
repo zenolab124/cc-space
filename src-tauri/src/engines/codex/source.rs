@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -74,11 +74,31 @@ pub(super) struct CodexTurn {
 
 type ThreadCache = Arc<Mutex<Option<(Instant, Vec<CodexThread>)>>>;
 
+#[derive(Clone, Copy, Debug)]
+struct RolloutAssetLocator {
+    offset: u64,
+    length: usize,
+    line_number: usize,
+}
+
+#[derive(Debug)]
+struct CachedRolloutAssetIndex {
+    path: PathBuf,
+    file_length: u64,
+    processed_length: u64,
+    processed_lines: usize,
+    modified: Option<SystemTime>,
+    locators: HashMap<String, RolloutAssetLocator>,
+}
+
+type RolloutAssetCache = Arc<Mutex<HashMap<String, CachedRolloutAssetIndex>>>;
+
 pub struct CodexSource {
     instance: EngineInstanceId,
     supervisor: Arc<CodexSupervisor>,
     change_sinks: Arc<Mutex<Vec<SourceChangeSink>>>,
     thread_cache: ThreadCache,
+    rollout_asset_cache: RolloutAssetCache,
 }
 
 impl CodexSource {
@@ -132,6 +152,7 @@ impl CodexSource {
             supervisor,
             change_sinks,
             thread_cache,
+            rollout_asset_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -316,6 +337,34 @@ impl CodexSource {
             super::file_source::thread_path(&thread.id)
                 .map(|path| path.to_string_lossy().into_owned())
         });
+    }
+
+    fn resolve_local_rollout_asset(&self, asset: &AssetRef) -> EngineResult<Option<ResolvedAsset>> {
+        self.owns_session(&asset.session)?;
+        let thread_id = asset.session.native_id();
+        let cached_path = self
+            .rollout_asset_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(thread_id)
+            .map(|entry| entry.path.clone());
+        let Some(path) = cached_path
+            .filter(|path| path.is_file())
+            .or_else(|| super::file_source::thread_path(thread_id))
+        else {
+            return Ok(None);
+        };
+        let Some(locator) = rollout_asset_locator(
+            &self.rollout_asset_cache,
+            thread_id,
+            &path,
+            &asset.native_id,
+        )?
+        else {
+            return Ok(None);
+        };
+        let row = read_rollout_row(&path, locator)?;
+        resolve_asset_from_rollout_row(&row, locator.line_number, &asset.native_id)
     }
 
     fn project_native_id(thread: &CodexThread) -> String {
@@ -579,130 +628,15 @@ impl SessionSource for CodexSource {
 
     fn resolve_asset(&self, asset: AssetRef) -> EngineFuture<'_, ResolvedAsset> {
         Box::pin(async move {
-            let mcp_result = parse_mcp_result_asset_id(&asset.native_id);
-            if let Some((item_id, input_index)) = &mcp_result {
-                if let Some(image) = super::file_source::read_mcp_result_content_item(
-                    asset.session.native_id(),
-                    item_id,
-                    *input_index,
-                ) {
-                    return decode_mcp_result_image(&image);
-                }
+            if let Some(resolved) = self.resolve_local_rollout_asset(&asset)? {
+                return Ok(resolved);
             }
-            let primary_thread = self.read_thread_with_turns(&asset.session)?;
-            let mut threads = vec![primary_thread];
-            if let Ok(file_thread) = super::file_source::read_thread(asset.session.native_id()) {
-                threads.push(file_thread);
-            }
-            let user_input = parse_user_input_asset_id(&asset.native_id);
-            let tool_result = parse_tool_result_asset_id(&asset.native_id);
-            let content_image = parse_content_image_asset_id(&asset.native_id);
-            for thread in threads {
-                for turn in thread.turns {
-                    for item in turn.items {
-                        if item.get("id").and_then(Value::as_str) == Some(&asset.native_id)
-                            && item.get("type").and_then(Value::as_str) == Some("imageView")
-                        {
-                            let path =
-                                item.get("path").and_then(Value::as_str).ok_or_else(|| {
-                                    EngineError::new(
-                                        EngineErrorKind::Protocol,
-                                        "Codex image item has no path",
-                                    )
-                                })?;
-                            let metadata = fs::metadata(path).map_err(|error| {
-                                EngineError::new(EngineErrorKind::Io, error.to_string())
-                            })?;
-                            if metadata.len() > ASSET_MAX_BYTES as u64 {
-                                return Err(EngineError::new(
-                                    EngineErrorKind::Protocol,
-                                    "Codex asset exceeds the transfer size limit",
-                                ));
-                            }
-                            let bytes = fs::read(path).map_err(|error| {
-                                EngineError::new(EngineErrorKind::Io, error.to_string())
-                            })?;
-                            return Ok(ResolvedAsset {
-                                media_type: media_type_for_path(path).to_string(),
-                                bytes,
-                            });
-                        }
-                        if let Some((fingerprint, input_index)) = content_image {
-                            if let Some(url) =
-                                matching_content_image_url(&item, fingerprint, input_index)
-                            {
-                                return decode_data_url_asset(url);
-                            }
-                        }
-                        if let Some((item_id, input_index)) = &user_input {
-                            if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
-                                || item.get("type").and_then(Value::as_str) != Some("userMessage")
-                            {
-                                continue;
-                            }
-                            let url = item
-                                .get("content")
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.get(*input_index))
-                                .and_then(|input| {
-                                    input
-                                        .get("url")
-                                        .or_else(|| input.get("image_url"))
-                                        .and_then(Value::as_str)
-                                })
-                                .ok_or_else(|| {
-                                    EngineError::new(
-                                        EngineErrorKind::Protocol,
-                                        "Codex image input has no data URL",
-                                    )
-                                })?;
-                            return decode_data_url_asset(url);
-                        }
-                        if let Some((item_id, input_index)) = &tool_result {
-                            if item.get("id").and_then(Value::as_str) != Some(item_id.as_str())
-                                || item.get("type").and_then(Value::as_str) != Some("toolResult")
-                            {
-                                continue;
-                            }
-                            let url = item
-                                .get("content")
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.get(*input_index))
-                                .and_then(tool_result_image_url)
-                                .ok_or_else(|| {
-                                    EngineError::new(
-                                        EngineErrorKind::Protocol,
-                                        "Codex tool result has no image data URL",
-                                    )
-                                })?;
-                            return decode_data_url_asset(url);
-                        }
-                        if let Some((item_id, input_index)) = &mcp_result {
-                            let matches_item =
-                                item.get("id").and_then(Value::as_str) == Some(item_id.as_str());
-                            let matches_call = item
-                                .get("callId")
-                                .or_else(|| item.get("call_id"))
-                                .and_then(Value::as_str)
-                                == Some(item_id.as_str());
-                            if (!matches_item && !matches_call)
-                                || item.get("type").and_then(Value::as_str) != Some("mcpToolCall")
-                            {
-                                continue;
-                            }
-                            let image = item
-                                .get("result")
-                                .and_then(|result| result.get("content"))
-                                .and_then(Value::as_array)
-                                .and_then(|content| content.get(*input_index))
-                                .ok_or_else(|| {
-                                    EngineError::new(
-                                        EngineErrorKind::Protocol,
-                                        "Codex MCP result has no image content",
-                                    )
-                                })?;
-                            return decode_mcp_result_image(image);
-                        }
+
+            let primary_thread = self.read_app_server_thread(&asset.session, true)?;
+            for turn in primary_thread.turns {
+                for item in turn.items {
+                    if let Some(resolved) = resolve_asset_from_item(&asset.native_id, &item)? {
+                        return Ok(resolved);
                     }
                 }
             }
@@ -737,6 +671,336 @@ impl SessionSource for CodexSource {
             })
         })
     }
+}
+
+fn rollout_asset_locator(
+    cache: &RolloutAssetCache,
+    thread_id: &str,
+    path: &Path,
+    asset_id: &str,
+) -> EngineResult<Option<RolloutAssetLocator>> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+    let file_length = metadata.len();
+    let modified = metadata.modified().ok();
+    let mut cache = cache.lock().unwrap_or_else(|error| error.into_inner());
+    let rebuild = cache.get(thread_id).map_or(true, |entry| {
+        entry.path != path
+            || file_length < entry.processed_length
+            || (file_length == entry.file_length && modified != entry.modified)
+    });
+    if rebuild {
+        if cache.len() >= 12 && !cache.contains_key(thread_id) {
+            if let Some(stale) = cache.keys().next().cloned() {
+                cache.remove(&stale);
+            }
+        }
+        cache.insert(
+            thread_id.to_string(),
+            CachedRolloutAssetIndex {
+                path: path.to_path_buf(),
+                file_length: 0,
+                processed_length: 0,
+                processed_lines: 0,
+                modified: None,
+                locators: HashMap::new(),
+            },
+        );
+    }
+    let entry = cache
+        .get_mut(thread_id)
+        .expect("rollout asset cache entry should exist");
+    if entry.file_length != file_length
+        || entry.modified != modified
+        || entry.processed_length < file_length
+    {
+        let file = fs::File::open(path)
+            .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+        let mut reader = BufReader::new(file);
+        reader
+            .seek(SeekFrom::Start(entry.processed_length))
+            .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let offset = entry.processed_length;
+            let length = reader
+                .read_line(&mut line)
+                .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+            if length == 0 {
+                break;
+            }
+            // Codex 可能正在追加最后一行。未完成行不进入索引，下一次文件
+            // 增长后从同一偏移重试，避免缓存暂时性的 JSON 解析失败。
+            if !line.ends_with('\n') {
+                break;
+            }
+            let line_number = entry.processed_lines + 1;
+            if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
+                for id in rollout_asset_ids(&value, line_number) {
+                    entry.locators.insert(
+                        id,
+                        RolloutAssetLocator {
+                            offset,
+                            length,
+                            line_number,
+                        },
+                    );
+                }
+            }
+            entry.processed_length = entry.processed_length.saturating_add(length as u64);
+            entry.processed_lines += 1;
+        }
+        entry.file_length = file_length;
+        entry.modified = modified;
+    }
+    Ok(entry.locators.get(asset_id).copied())
+}
+
+fn rollout_asset_ids(value: &Value, line_number: usize) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some((call_id, content)) = rollout_mcp_result_content(value) {
+        for (index, item) in content.iter().enumerate() {
+            if mcp_result_image(item).is_some() || tool_result_image_url(item).is_some() {
+                ids.push(mcp_result_asset_id(call_id, index));
+            }
+        }
+    }
+    if value.get("type").and_then(Value::as_str) == Some("event_msg") {
+        let payload = value.get("payload").unwrap_or(value);
+        if let Some(item) = super::file_source::normalize_user_message_event(payload, line_number) {
+            collect_item_asset_ids(&item, &mut ids);
+        }
+    }
+    if value.get("type").and_then(Value::as_str) == Some("response_item") {
+        let payload = value.get("payload").unwrap_or(value);
+        if let Some(item) = super::file_source::normalize_response_item(payload, line_number) {
+            collect_item_asset_ids(&item, &mut ids);
+        }
+    }
+    ids
+}
+
+fn collect_item_asset_ids(item: &Value, ids: &mut Vec<String>) {
+    let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+    match item.get("type").and_then(Value::as_str) {
+        Some("imageView") if !item_id.is_empty() => ids.push(item_id.to_string()),
+        Some("userMessage") => {
+            for (index, input) in item
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                if let Some(url) = tool_result_image_url(input) {
+                    ids.push(content_image_asset_id(url, index));
+                    if !item_id.is_empty() {
+                        ids.push(user_input_asset_id(item_id, index));
+                    }
+                }
+            }
+        }
+        Some("toolResult") => {
+            for (index, input) in item
+                .get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                if let Some(url) = tool_result_image_url(input) {
+                    ids.push(content_image_asset_id(url, index));
+                    if !item_id.is_empty() {
+                        ids.push(tool_result_asset_id(item_id, index));
+                    }
+                }
+            }
+        }
+        Some("mcpToolCall") => {
+            let call_id = item
+                .get("callId")
+                .or_else(|| item.get("call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or(item_id);
+            if let Some(content) = item
+                .get("result")
+                .and_then(|result| result.get("content"))
+                .and_then(Value::as_array)
+            {
+                for (index, image) in content.iter().enumerate() {
+                    if mcp_result_image(image).is_some() || tool_result_image_url(image).is_some() {
+                        ids.push(mcp_result_asset_id(call_id, index));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rollout_mcp_result_content(value: &Value) -> Option<(&str, &[Value])> {
+    if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+        return None;
+    }
+    let payload = value.get("payload").unwrap_or(value);
+    if payload.get("type").and_then(Value::as_str) != Some("mcp_tool_call_end") {
+        return None;
+    }
+    let call_id = payload.get("call_id").and_then(Value::as_str)?;
+    let result = payload.get("result")?;
+    let result = result.get("Ok").unwrap_or(result);
+    let content = result.get("content").and_then(Value::as_array)?;
+    Some((call_id, content.as_slice()))
+}
+
+fn read_rollout_row(path: &Path, locator: RolloutAssetLocator) -> EngineResult<Value> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+    file.seek(SeekFrom::Start(locator.offset))
+        .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+    let mut bytes = vec![0; locator.length];
+    file.read_exact(&mut bytes)
+        .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+    let row = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    let row = row.strip_suffix(b"\r").unwrap_or(row);
+    serde_json::from_slice(row).map_err(|error| {
+        EngineError::new(
+            EngineErrorKind::Protocol,
+            format!("Codex rollout asset row is invalid: {error}"),
+        )
+    })
+}
+
+fn resolve_asset_from_rollout_row(
+    value: &Value,
+    line_number: usize,
+    asset_id: &str,
+) -> EngineResult<Option<ResolvedAsset>> {
+    if let Some((item_id, input_index)) = parse_mcp_result_asset_id(asset_id) {
+        if let Some((call_id, content)) = rollout_mcp_result_content(value) {
+            if call_id == item_id {
+                let image = content.get(input_index).ok_or_else(|| {
+                    EngineError::new(
+                        EngineErrorKind::Protocol,
+                        "Codex MCP result has no image content",
+                    )
+                })?;
+                return decode_mcp_result_image(image).map(Some);
+            }
+        }
+    }
+    if value.get("type").and_then(Value::as_str) == Some("event_msg") {
+        let payload = value.get("payload").unwrap_or(value);
+        if let Some(item) = super::file_source::normalize_user_message_event(payload, line_number) {
+            if let Some(resolved) = resolve_asset_from_item(asset_id, &item)? {
+                return Ok(Some(resolved));
+            }
+        }
+    }
+    if value.get("type").and_then(Value::as_str) != Some("response_item") {
+        return Ok(None);
+    }
+    let payload = value.get("payload").unwrap_or(value);
+    let Some(item) = super::file_source::normalize_response_item(payload, line_number) else {
+        return Ok(None);
+    };
+    resolve_asset_from_item(asset_id, &item)
+}
+
+fn resolve_asset_from_item(asset_id: &str, item: &Value) -> EngineResult<Option<ResolvedAsset>> {
+    if item.get("id").and_then(Value::as_str) == Some(asset_id)
+        && item.get("type").and_then(Value::as_str) == Some("imageView")
+    {
+        let path = item.get("path").and_then(Value::as_str).ok_or_else(|| {
+            EngineError::new(EngineErrorKind::Protocol, "Codex image item has no path")
+        })?;
+        let metadata = fs::metadata(path)
+            .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+        if metadata.len() > ASSET_MAX_BYTES as u64 {
+            return Err(EngineError::new(
+                EngineErrorKind::Protocol,
+                "Codex asset exceeds the transfer size limit",
+            ));
+        }
+        let bytes = fs::read(path)
+            .map_err(|error| EngineError::new(EngineErrorKind::Io, error.to_string()))?;
+        return Ok(Some(ResolvedAsset {
+            media_type: media_type_for_path(path).to_string(),
+            bytes,
+        }));
+    }
+    if let Some((fingerprint, input_index)) = parse_content_image_asset_id(asset_id) {
+        if let Some(url) = matching_content_image_url(item, fingerprint, input_index) {
+            return decode_data_url_asset(url).map(Some);
+        }
+    }
+    if let Some((item_id, input_index)) = parse_user_input_asset_id(asset_id) {
+        if item.get("id").and_then(Value::as_str) == Some(item_id.as_str())
+            && item.get("type").and_then(Value::as_str) == Some("userMessage")
+        {
+            let url = item
+                .get("content")
+                .and_then(Value::as_array)
+                .and_then(|content| content.get(input_index))
+                .and_then(|input| {
+                    input
+                        .get("url")
+                        .or_else(|| input.get("image_url"))
+                        .and_then(Value::as_str)
+                })
+                .ok_or_else(|| {
+                    EngineError::new(
+                        EngineErrorKind::Protocol,
+                        "Codex image input has no data URL",
+                    )
+                })?;
+            return decode_data_url_asset(url).map(Some);
+        }
+    }
+    if let Some((item_id, input_index)) = parse_tool_result_asset_id(asset_id) {
+        if item.get("id").and_then(Value::as_str) == Some(item_id.as_str())
+            && item.get("type").and_then(Value::as_str) == Some("toolResult")
+        {
+            let url = item
+                .get("content")
+                .and_then(Value::as_array)
+                .and_then(|content| content.get(input_index))
+                .and_then(tool_result_image_url)
+                .ok_or_else(|| {
+                    EngineError::new(
+                        EngineErrorKind::Protocol,
+                        "Codex tool result has no image data URL",
+                    )
+                })?;
+            return decode_data_url_asset(url).map(Some);
+        }
+    }
+    if let Some((item_id, input_index)) = parse_mcp_result_asset_id(asset_id) {
+        let matches_item = item.get("id").and_then(Value::as_str) == Some(item_id.as_str());
+        let matches_call = item
+            .get("callId")
+            .or_else(|| item.get("call_id"))
+            .and_then(Value::as_str)
+            == Some(item_id.as_str());
+        if (matches_item || matches_call)
+            && item.get("type").and_then(Value::as_str) == Some("mcpToolCall")
+        {
+            let image = item
+                .get("result")
+                .and_then(|result| result.get("content"))
+                .and_then(Value::as_array)
+                .and_then(|content| content.get(input_index))
+                .ok_or_else(|| {
+                    EngineError::new(
+                        EngineErrorKind::Protocol,
+                        "Codex MCP result has no image content",
+                    )
+                })?;
+            return decode_mcp_result_image(image).map(Some);
+        }
+    }
+    Ok(None)
 }
 
 fn map_item(
@@ -1069,6 +1333,10 @@ fn user_input_asset_id(item_id: &str, input_index: usize) -> String {
 fn parse_user_input_asset_id(asset_id: &str) -> Option<(String, usize)> {
     let (item_id, input_index) = asset_id.rsplit_once(USER_INPUT_ASSET_MARKER)?;
     Some((item_id.to_string(), input_index.parse().ok()?))
+}
+
+fn tool_result_asset_id(item_id: &str, input_index: usize) -> String {
+    format!("{item_id}{TOOL_RESULT_ASSET_MARKER}{input_index}")
 }
 
 fn parse_tool_result_asset_id(asset_id: &str) -> Option<(String, usize)> {
@@ -1692,6 +1960,7 @@ fn inherit_local_thread_path(thread: &mut CodexThread, local: Option<&CodexThrea
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::io::Write as _;
     use std::task::{Context, Poll, Wake, Waker};
 
     use super::*;
@@ -1770,6 +2039,92 @@ mod tests {
         let asset = decode_data_url_asset("data:image/png;base64,aW1hZ2U=").unwrap();
         assert_eq!(asset.media_type, "image/png");
         assert_eq!(asset.bytes, b"image");
+    }
+
+    #[test]
+    fn rollout_asset_index_resolves_images_and_only_scans_appended_rows() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "monet-codex-asset-index-{}-{unique}.jsonl",
+            std::process::id()
+        ));
+        let user_url = "data:image/png;base64,aW1hZ2U=";
+        let user_row = json!({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "id": "user-image",
+                "role": "user",
+                "content": [{ "type": "input_image", "image_url": user_url }]
+            }
+        });
+        fs::write(&path, format!("{user_row}\n")).unwrap();
+
+        let cache: RolloutAssetCache = Arc::new(Mutex::new(HashMap::new()));
+        let user_asset_id = content_image_asset_id(user_url, 0);
+        let user_locator = rollout_asset_locator(
+            &cache,
+            "thread",
+            &path,
+            &user_asset_id,
+        )
+        .unwrap()
+        .unwrap();
+        let user_asset = resolve_asset_from_rollout_row(
+            &read_rollout_row(&path, user_locator).unwrap(),
+            user_locator.line_number,
+            &user_asset_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(user_asset.bytes, b"image");
+        let scanned_before_append = cache
+            .lock()
+            .unwrap()
+            .get("thread")
+            .unwrap()
+            .processed_length;
+
+        let mcp_row = json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "mcp_tool_call_end",
+                "call_id": "exec-image-1",
+                "result": {
+                    "Ok": {
+                        "content": [
+                            { "type": "text", "text": "done" },
+                            { "type": "image", "mimeType": "image/png", "data": "bWNw" }
+                        ]
+                    }
+                }
+            }
+        });
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{mcp_row}").unwrap();
+        drop(file);
+
+        let mcp_asset_id = mcp_result_asset_id("exec-image-1", 1);
+        let mcp_locator =
+            rollout_asset_locator(&cache, "thread", &path, &mcp_asset_id)
+                .unwrap()
+                .unwrap();
+        assert!(mcp_locator.offset >= scanned_before_append);
+        let mcp_asset = resolve_asset_from_rollout_row(
+            &read_rollout_row(&path, mcp_locator).unwrap(),
+            mcp_locator.line_number,
+            &mcp_asset_id,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(mcp_asset.bytes, b"mcp");
+        assert!(rollout_asset_locator(&cache, "thread", &path, &user_asset_id)
+            .unwrap()
+            .is_some());
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -2275,6 +2630,35 @@ mod tests {
         if let Some(thread) = threads.first() {
             let session = SessionRef::new(default_instance().unwrap(), &thread.id).unwrap();
             let _records = source.timeline(&session).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an installed Codex CLI and explicit MONET_CODEX_ASSET_SMOKE_SESSION"]
+    fn installed_source_resolves_app_server_assets_from_the_local_rollout() {
+        let thread_id = std::env::var("MONET_CODEX_ASSET_SMOKE_SESSION")
+            .expect("set MONET_CODEX_ASSET_SMOKE_SESSION to a Codex thread id");
+        let source = CodexSource::new(CodexSupervisor::new()).unwrap();
+        let session = SessionRef::new(default_instance().unwrap(), thread_id).unwrap();
+        let records = source.timeline(&session).unwrap();
+        let assets: Vec<_> = records
+            .into_iter()
+            .flat_map(|record| record.segments)
+            .flat_map(|segment| match segment {
+                Segment::Attachment { asset, .. } => vec![asset],
+                Segment::ToolResult { attachments, .. } => {
+                    attachments.into_iter().map(|item| item.asset).collect()
+                }
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(!assets.is_empty(), "smoke-test thread has no image assets");
+        for asset in assets {
+            assert!(
+                source.resolve_local_rollout_asset(&asset).unwrap().is_some(),
+                "asset should resolve without another App Server thread/read: {}",
+                asset.native_id
+            );
         }
     }
 

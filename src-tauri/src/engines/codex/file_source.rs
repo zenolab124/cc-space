@@ -65,48 +65,6 @@ pub(super) fn thread_path(id: &str) -> Option<PathBuf> {
     None
 }
 
-/// 从 rollout 的 MCP 完成事件中按调用 ID 读取单个结果块。
-/// 这条路径不依赖 App Server，供历史图片按需恢复使用。
-pub(super) fn read_mcp_result_content_item(
-    thread_id: &str,
-    call_id: &str,
-    content_index: usize,
-) -> Option<Value> {
-    let path = thread_path(thread_id)?;
-    read_mcp_result_content_item_from_path(&path, call_id, content_index)
-}
-
-fn read_mcp_result_content_item_from_path(
-    path: &Path,
-    call_id: &str,
-    content_index: usize,
-) -> Option<Value> {
-    let file = File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    for line in reader.lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if value.get("type").and_then(Value::as_str) != Some("event_msg") {
-            continue;
-        }
-        let payload = value.get("payload").unwrap_or(&value);
-        if payload.get("type").and_then(Value::as_str) != Some("mcp_tool_call_end")
-            || payload.get("call_id").and_then(Value::as_str) != Some(call_id)
-        {
-            continue;
-        }
-        let result = payload.get("result")?;
-        let result = result.get("Ok").unwrap_or(result);
-        return result
-            .get("content")
-            .and_then(Value::as_array)
-            .and_then(|content| content.get(content_index))
-            .cloned();
-    }
-    None
-}
-
 pub(super) fn codex_home() -> Option<PathBuf> {
     std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
@@ -348,18 +306,7 @@ impl ThreadBuilder {
                 }
             }
             Some("user_message") => {
-                let text = payload
-                    .get("message")
-                    .and_then(text_value)
-                    .or_else(|| payload.get("text").and_then(text_value));
-                if let Some(text) = text.filter(|text| !text.is_empty()) {
-                    let id = format!("event-user-{line_number}");
-                    let item = json!({
-                        "id": id,
-                        "type": "userMessage",
-                        "content": [{"type": "text", "text": text}],
-                        "canonicalUserMessage": true
-                    });
+                if let Some(item) = normalize_user_message_event(payload, line_number) {
                     let turn_id = self.current_turn_id();
                     self.add_item(&turn_id, item);
                 }
@@ -542,7 +489,11 @@ fn canonicalize_user_messages(items: &mut Vec<Value>) {
             .get_mut("content")
             .and_then(Value::as_array_mut)
         {
-            content.extend(images);
+            for image in images {
+                if !content.contains(&image) {
+                    content.push(image);
+                }
+            }
         }
     }
 
@@ -606,7 +557,7 @@ fn clear_internal_message_markers(items: &mut [Value]) {
     }
 }
 
-fn normalize_response_item(payload: &Value, line_number: usize) -> Option<Value> {
+pub(super) fn normalize_response_item(payload: &Value, line_number: usize) -> Option<Value> {
     let kind = payload.get("type").and_then(Value::as_str)?;
     let id = string_field(payload, &["id", "call_id"])
         .unwrap_or_else(|| format!("response-item-{line_number}"));
@@ -662,6 +613,45 @@ fn normalize_response_item(payload: &Value, line_number: usize) -> Option<Value>
         })),
         _ => None,
     }
+}
+
+pub(super) fn normalize_user_message_event(payload: &Value, line_number: usize) -> Option<Value> {
+    if payload.get("type").and_then(Value::as_str) != Some("user_message") {
+        return None;
+    }
+    let mut content = Vec::new();
+    let text = payload
+        .get("message")
+        .and_then(text_value)
+        .or_else(|| payload.get("text").and_then(text_value))
+        .filter(|text| !text.is_empty());
+    if let Some(text) = text {
+        content.push(json!({ "type": "text", "text": text }));
+    }
+    for image in payload
+        .get("images")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let url = image.as_str().or_else(|| {
+            image
+                .get("url")
+                .or_else(|| image.get("image_url"))
+                .and_then(Value::as_str)
+        });
+        if let Some(url) = url.filter(|url| url.starts_with("data:image/")) {
+            content.push(json!({ "type": "image", "url": url }));
+        }
+    }
+    (!content.is_empty()).then(|| {
+        json!({
+            "id": format!("event-user-{line_number}"),
+            "type": "userMessage",
+            "content": content,
+            "canonicalUserMessage": true
+        })
+    })
 }
 
 fn normalized_content(value: &Value) -> Value {
@@ -859,40 +849,23 @@ mod tests {
     }
 
     #[test]
-    fn reads_one_mcp_image_block_from_rollout_event() {
-        let path = std::env::temp_dir().join(format!(
-            "monet-codex-mcp-image-{}-{}.jsonl",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::write(
-            &path,
-            json!({
-                "type": "event_msg",
-                "payload": {
-                    "type": "mcp_tool_call_end",
-                    "call_id": "exec-image-1",
-                    "result": {
-                        "Ok": {
-                            "content": [
-                                { "type": "text", "text": "done" },
-                                { "type": "image", "mimeType": "image/png", "data": "aW1hZ2U=" }
-                            ]
-                        }
-                    }
-                }
-            })
-            .to_string(),
+    fn user_message_events_preserve_embedded_images() {
+        let item = normalize_user_message_event(
+            &json!({
+                "type": "user_message",
+                "message": "inspect",
+                "images": [
+                    "data:image/png;base64,aW1hZ2U=",
+                    { "image_url": "data:image/jpeg;base64,bW9yZQ==" }
+                ]
+            }),
+            7,
         )
         .unwrap();
-
-        let image = read_mcp_result_content_item_from_path(&path, "exec-image-1", 1).unwrap();
-        assert_eq!(image["mimeType"], "image/png");
-        assert_eq!(image["data"], "aW1hZ2U=");
-        let _ = fs::remove_file(path);
+        assert_eq!(item["id"], "event-user-7");
+        assert_eq!(item["content"].as_array().unwrap().len(), 3);
+        assert_eq!(item["content"][1]["type"], "image");
+        assert_eq!(item["content"][2]["url"], "data:image/jpeg;base64,bW9yZQ==");
     }
 
     #[test]

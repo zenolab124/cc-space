@@ -64,6 +64,12 @@ impl CodexRuntime {
                 runtime.handle_protocol_message(message);
             }
         }));
+        let weak = Arc::downgrade(&runtime);
+        supervisor.subscribe_connection_closed(Arc::new(move |epoch| {
+            if let Some(runtime) = Weak::upgrade(&weak) {
+                runtime.handle_connection_closed(epoch);
+            }
+        }));
         Ok(runtime)
     }
 
@@ -360,6 +366,41 @@ impl CodexRuntime {
                 self.handle_server_request(id, &method, params)
             }
             IncomingMessage::Response { .. } | IncomingMessage::ErrorResponse { .. } => {}
+        }
+    }
+
+    fn handle_connection_closed(&self, epoch: u64) {
+        let interrupted: Vec<_> = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            sessions
+                .iter_mut()
+                .filter_map(|(thread_id, state)| {
+                    if state.connection_epoch != Some(epoch) {
+                        return None;
+                    }
+                    state
+                        .active_turn_id
+                        .take()
+                        .map(|turn_id| (thread_id.clone(), turn_id))
+                })
+                .collect()
+        };
+        for (thread_id, turn_id) in interrupted {
+            self.clear_session_transients(&thread_id);
+            self.emit(
+                &thread_id,
+                NormalizedRuntimeEvent::TurnCompleted {
+                    turn_id,
+                    status: TurnStatus::Failed,
+                    error: Some(
+                        "Codex App Server connection closed before the turn completed; retry the request"
+                            .into(),
+                    ),
+                },
+            );
         }
     }
 
@@ -1318,6 +1359,48 @@ mod tests {
         assert!(should_resume_session(Some(4), None, false));
         assert!(should_resume_session(None, Some(4), false));
         assert!(should_resume_session(Some(4), Some(4), true));
+    }
+
+    #[test]
+    fn closing_the_bound_connection_fails_an_active_turn() {
+        let runtime = CodexRuntime::new(CodexSupervisor::new()).unwrap();
+        let (event_tx, event_rx) = mpsc::channel();
+        runtime
+            .subscribe_events(Arc::new(move |event| {
+                let _ = event_tx.send(event);
+            }))
+            .unwrap();
+        runtime.runtime_session("thread", false).unwrap();
+        runtime.bind_session_epoch("thread", 42);
+        runtime.emit(
+            "thread",
+            NormalizedRuntimeEvent::TurnStarted {
+                turn_id: "turn".into(),
+            },
+        );
+        let _ = event_rx.recv().unwrap();
+
+        runtime.handle_connection_closed(41);
+        assert!(event_rx.try_recv().is_err());
+        runtime.handle_connection_closed(42);
+
+        let event = event_rx.recv().unwrap();
+        assert!(matches!(
+            event.event,
+            NormalizedRuntimeEvent::TurnCompleted {
+                turn_id,
+                status: TurnStatus::Failed,
+                error: Some(_),
+            } if turn_id == "turn"
+        ));
+        assert!(runtime
+            .sessions
+            .lock()
+            .unwrap()
+            .get("thread")
+            .unwrap()
+            .active_turn_id
+            .is_none());
     }
 
     #[test]
