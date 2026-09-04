@@ -491,12 +491,9 @@ fn actor_loop(
                 }
                 Ok(message) => {
                     if let IncomingMessage::Notification { method, .. } = &message {
-                        match method.as_str() {
-                            "turn/completed" => {
-                                active_turn = false;
-                                decrement_active_turns(&active_turns);
-                            }
-                            _ => {}
+                        if method == "turn/completed" {
+                            active_turn = false;
+                            decrement_active_turns(&active_turns);
                         }
                     }
                     let callbacks = sinks
